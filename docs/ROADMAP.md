@@ -1,6 +1,6 @@
-# Code Snapshots Roadmap - Simple Snapshot Management
+# CodeLapse Roadmap - Simple Snapshot Management
 
-This document outlines the future plans for the Code Snapshots extension, emphasizing **dead simple snapshot creation and management** that complements Git.
+This document outlines the future plans for the CodeLapse extension, emphasizing **dead simple snapshot creation and management** that complements Git.
 
 ## Core Principles: Keeping it Simple
 
@@ -12,7 +12,7 @@ This document outlines the future plans for the Code Snapshots extension, emphas
 
 ## Current Status (v0.9.0 Features) - Feature Checklist
 
-Code Snapshots already offers a robust set of features, categorized as follows:
+CodeLapse already offers a robust set of features, categorized as follows:
 
 #### Snapshot Basics:
 
@@ -150,7 +150,7 @@ We're planning improvements across three phases:
 
 ## What We Won't Build: Staying Focused on Simplicity
 
-To keep Code Snapshots simple and Git-friendly, we will **not** build features like:
+To keep CodeLapse simple and Git-friendly, we will **not** build features like:
 
 1.  **Complex Branching/Merging**: No Git-style branching or merge conflict resolution.
 2.  **Full Team Collaboration**: No push/pull, locking, or real-time sync. Sharing is limited to export/import.
@@ -184,9 +184,9 @@ Your input is valuable! Let us know what you think:
 
 - **Bug Reports & Feature Requests:** GitHub Issues
 - **General Feedback, Ideas, Questions:** GitHub Discussions (if enabled)
-- **Help Others Discover Code Snapshots:** VS Code Marketplace Reviews & Ratings
+- **Help Others Discover CodeLapse:** VS Code Marketplace Reviews & Ratings
 
-We're dedicated to making Code Snapshots the perfect, simple companion to Git. Your suggestions that align with this vision are highly welcome!
+We're dedicated to making CodeLapse the perfect, simple companion to Git. Your suggestions that align with this vision are highly welcome!
 
 ---
 

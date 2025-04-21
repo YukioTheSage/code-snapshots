@@ -1,8 +1,8 @@
 {
   "name": "vscode-snapshots",
-  "displayName": "Code Snapshots",
+  "displayName": "CodeLapse",
   "description": "Simple Git-like code snapshots with easy navigation and improved user experience",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "publisher": "YukioTheSage",
   "icon": "images/snapshot.png",
   "license": "MIT",
@@ -157,7 +157,7 @@
       }
     ],
     "configuration": {
-      "title": "Code Snapshots",
+      "title": "CodeLapse",
       "properties": {
         "vscode-snapshots.snapshotLocation": {
           "type": "string",
@@ -473,15 +473,15 @@
       "commandPalette": [
         {
           "command": "vscode-snapshots.gettingStarted",
-          "group": "Code Snapshots"
+          "group": "CodeLapse"
         },
         {
           "command": "vscode-snapshots.focusManualSnapshotView",
-          "group": "Code Snapshots"
+          "group": "CodeLapse"
         },
         {
           "command": "vscode-snapshots.focusAutoSnapshotView",
-          "group": "Code Snapshots"
+          "group": "CodeLapse"
         }
       ]
     }

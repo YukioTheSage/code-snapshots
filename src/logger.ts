@@ -7,7 +7,7 @@ let verboseLogging = false;
 export function initializeLogger(context: vscode.ExtensionContext) {
   // Create output channel if it doesn't exist
   if (!outputChannel) {
-    outputChannel = vscode.window.createOutputChannel('Code Snapshots');
+    outputChannel = vscode.window.createOutputChannel('CodeLapse');
     context.subscriptions.push(outputChannel); // Ensure it's disposed with the extension
   }
 
@@ -38,7 +38,7 @@ function updateLoggingConfig() {
 
 export function log(message: string, ...args: unknown[]): void {
   if (loggingEnabled) {
-    const logMessage = `[Code Snapshots] ${message}`;
+    const logMessage = `[CodeLapse] ${message}`;
     console.log(logMessage, ...args);
     if (outputChannel) {
       outputChannel.appendLine(

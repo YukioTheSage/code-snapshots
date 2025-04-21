@@ -1,10 +1,10 @@
-# Code Snapshots Extension
+# CodeLapse Extension
 
 A dead-simple snapshot system for VS Code that works alongside Git. Take code snapshots with a single keystroke and navigate between them without any complexity.
 
-## Why Code Snapshots?
+## Why CodeLapse?
 
-**Not a Git replacement, but a perfect companion**. Git excels at formal version control and team collaboration, while Code Snapshots excels at personal development workflow:
+**Not a Git replacement, but a perfect companion**. Git excels at formal version control and team collaboration, while CodeLapse excels at personal development workflow:
 
 - **One-Key Snapshots**: Create instant point-in-time backups with a single key press
 - **Zero Mental Overhead**: No staging, no commit messages, no branches to manage
@@ -12,18 +12,18 @@ A dead-simple snapshot system for VS Code that works alongside Git. Take code sn
 - **Development Safety Net**: Create snapshots between Git commits for personal checkpoints
 - **Instant Restoration**: Jump back to any snapshot instantly - no stashing, no cherry-picking
 
-Code Snapshots is the missing tool between the autosave feature of your IDE and the formal commits of Git.
+CodeLapse is the missing tool between the autosave feature of your IDE and the formal commits of Git.
 
 ## Documentation
 
 - **[User Guide](docs/USER_GUIDE.md)** - How to use the extension, settings, and troubleshooting.
-- **[Git Companion Guide](docs/GIT_COMPANION.md)** - How to use Code Snapshots alongside Git.
+- **[Git Companion Guide](docs/GIT_COMPANION.md)** - How to use CodeLapse alongside Git.
 - **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Technical details, architecture, and contribution guidelines.
 - **[Roadmap](docs/ROADMAP.md)** - Planned features and improvements.
 
 ## Features
 
-Code Snapshots offers a robust set of features, categorized as follows:
+CodeLapse offers a robust set of features, categorized as follows:
 
 #### Snapshot Basics:
 
@@ -68,7 +68,7 @@ Code Snapshots offers a robust set of features, categorized as follows:
 
 ## Configuration
 
-Code Snapshots offers several settings to customize its behavior:
+CodeLapse offers several settings to customize its behavior:
 
 - `vscode-snapshots.snapshotLocation`: Where to store snapshot data (default: `.snapshots`).
 - `vscode-snapshots.maxSnapshots`: Maximum number of snapshots to keep (default: `50`).
@@ -80,9 +80,9 @@ Code Snapshots offers several settings to customize its behavior:
 
 See the **[User Guide](docs/USER_GUIDE.md)** for more details on configuration.
 
-## When to Use Code Snapshots vs. Git
+## When to Use CodeLapse vs. Git
 
-| If you want to...                           | Use Code Snapshots                     | Use Git                                                     |
+| If you want to...                           | Use CodeLapse                     | Use Git                                                     |
 | ------------------------------------------- | -------------------------------------- | ----------------------------------------------------------- |
 | Try an experimental approach quickly        | ✅ Perfect for rapid iteration         | ❌ Too formal for experiments                               |
 | Save work-in-progress state                 | ✅ One keystroke, no commit message    | ❌ Requires WIP commits or stashing                         |
@@ -94,7 +94,7 @@ See the **[User Guide](docs/USER_GUIDE.md)** for more details on configuration.
 | Maintain a formal version control record    | ❌ Not designed for this               | ✅ Exactly what Git is for                                  |
 | Protect against accidental changes          | ✅ Quick protection with no overhead   | ✅ More formal protection                                   |
 
-**Both tools together provide the best experience**: Use Git for formal version control and team collaboration, and use Code Snapshots for your personal development workflow.
+**Both tools together provide the best experience**: Use Git for formal version control and team collaboration, and use CodeLapse for your personal development workflow.
 
 ## Quick Start
 
