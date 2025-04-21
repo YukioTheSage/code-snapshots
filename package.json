@@ -1,0 +1,515 @@
+{
+  "name": "vscode-snapshots",
+  "displayName": "Code Snapshots",
+  "description": "Simple Git-like code snapshots with easy navigation and improved user experience",
+  "version": "0.9.1",
+  "publisher": "YukioTheSage",
+  "icon": "images/snapshot.png",
+  "license": "MIT",
+  "author": "YukioTheSage",
+  "keywords": [
+    "git",
+    "snapshot",
+    "version-control",
+    "backup",
+    "history",
+    "navigation",
+    "transition"
+  ],
+  "homepage": "https://github.com/YukioTheSage/code-snapshots",
+  "bugs": {
+    "url": "https://github.com/YukioTheSage/code-snapshots/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YukioTheSage/code-snapshots.git"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscode-snapshots.takeSnapshot",
+        "title": "Snapshots: Take Snapshot"
+      },
+      {
+        "command": "vscode-snapshots.diagnostics",
+        "title": "Snapshots: Run Diagnostics"
+      },
+      {
+        "command": "vscode-snapshots.viewSnapshots",
+        "title": "Snapshots: View Snapshots"
+      },
+      {
+        "command": "vscode-snapshots.jumpToSnapshot",
+        "title": "Snapshots: Jump to Snapshot"
+      },
+      {
+        "command": "vscode-snapshots.previousSnapshot",
+        "title": "Snapshots: Go to Previous Snapshot"
+      },
+      {
+        "command": "vscode-snapshots.nextSnapshot",
+        "title": "Snapshots: Go to Next Snapshot"
+      },
+      {
+        "command": "vscode-snapshots.restoreFromTree",
+        "title": "Snapshots: Restore",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "vscode-snapshots.compareWithCurrentFromTree",
+        "title": "Snapshots: Compare with Current",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "vscode-snapshots.deleteFromTree",
+        "title": "Snapshots: Delete",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "vscode-snapshots.compareFileWithWorkspace",
+        "title": "Snapshots: Compare File with Workspace",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "vscode-snapshots.restoreFileFromSnapshot",
+        "title": "Snapshots: Restore This File",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "vscode-snapshots.showChangedFilesInSnapshot",
+        "title": "Snapshots: Show Changed Files",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "vscode-snapshots.filterSnapshotsByDate",
+        "title": "Snapshots: Filter by Date",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "vscode-snapshots.createGitCommitFromSnapshot",
+        "title": "Snapshots: Create Git Commit from Snapshot",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "vscode-snapshots.toggleFavoriteStatus",
+        "title": "Snapshots: Toggle Favorite Status"
+      },
+      {
+        "command": "vscode-snapshots.editSnapshotTags",
+        "title": "Snapshots: Edit Tags"
+      },
+      {
+        "command": "vscode-snapshots.editSnapshotNotes",
+        "title": "Snapshots: Edit Notes"
+      },
+      {
+        "command": "vscode-snapshots.editTaskReference",
+        "title": "Snapshots: Edit Task Reference"
+      },
+      {
+        "command": "vscode-snapshots.filterByFile",
+        "title": "Snapshots: Filter Snapshots by File",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "vscode-snapshots.filterByTags",
+        "title": "Snapshots: Filter by Tags",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "vscode-snapshots.filterByFavorites",
+        "title": "Snapshots: Filter by Favorites",
+        "icon": "$(star)"
+      },
+      {
+        "command": "vscode-snapshots.clearAllFilters",
+        "title": "Snapshots: Clear All Filters",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "vscode-snapshots.manageAutoSnapshotRules",
+        "title": "Snapshots: Manage Auto-Snapshot Rules",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "vscode-snapshots.gettingStarted",
+        "title": "Snapshots: Getting Started",
+        "icon": "$(info)"
+      },
+      {
+        "command": "vscode-snapshots.focusManualSnapshotView",
+        "title": "Snapshots: Focus My Snapshots View",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "vscode-snapshots.focusAutoSnapshotView",
+        "title": "Snapshots: Focus Auto Snapshots View",
+        "icon": "$(pin)"
+      }
+    ],
+    "configuration": {
+      "title": "Code Snapshots",
+      "properties": {
+        "vscode-snapshots.snapshotLocation": {
+          "type": "string",
+          "default": ".snapshots",
+          "description": "Location to store snapshots (relative to workspace root)"
+        },
+        "vscode-snapshots.maxSnapshots": {
+          "type": "number",
+          "default": 50,
+          "description": "Maximum number of snapshots to keep"
+        },
+        "vscode-snapshots.autoSnapshotInterval": {
+          "type": "number",
+          "default": 0,
+          "description": "Auto-snapshot interval in minutes (0 to disable)"
+        },
+        "vscode-snapshots.loggingEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable detailed logging for troubleshooting"
+        },
+        "vscode-snapshots.verboseLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable more detailed verbose logging (for debugging)"
+        },
+        "vscode-snapshots.git.addCommitInfo": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Store Git branch and commit hash with each snapshot."
+        },
+        "vscode-snapshots.git.commitFromSnapshotEnabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Enable the 'Create Git Commit from Snapshot' command."
+        },
+        "vscode-snapshots.git.autoSnapshotBeforeOperation": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Automatically take a snapshot before Git operations like pull, merge, and rebase."
+        },
+        "vscode-snapshots.autoSnapshot.rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "File pattern to match (glob syntax)"
+              },
+              "intervalMinutes": {
+                "type": "number",
+                "description": "Minutes between auto-snapshots when matching files change",
+                "minimum": 1
+              }
+            }
+          },
+          "default": [],
+          "description": "Rules for file-specific auto-snapshots"
+        },
+        "vscode-snapshots.showOnlyChangedFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show only changed files in snapshot view"
+        },
+        "vscode-snapshots.ux.showWelcomeOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show welcome message for first-time users"
+        },
+        "vscode-snapshots.ux.showKeyboardShortcutHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show keyboard shortcut hints and tips"
+        },
+        "vscode-snapshots.ux.useAnimations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use animations for smoother transitions"
+        },
+        "vscode-snapshots.ux.confirmRestoreOperations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Confirm before restoring snapshots"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "vscode-snapshots.takeSnapshot",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s"
+      },
+      {
+        "command": "vscode-snapshots.previousSnapshot",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b"
+      },
+      {
+        "command": "vscode-snapshots.nextSnapshot",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n"
+      },
+      {
+        "command": "vscode-snapshots.viewSnapshots",
+        "key": "ctrl+alt+v",
+        "mac": "cmd+alt+v"
+      },
+      {
+        "command": "vscode-snapshots.diagnostics",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "snapshot-explorer",
+          "title": "Snapshots",
+          "icon": "$(history)"
+        }
+      ]
+    },
+    "views": {
+      "snapshot-explorer": [
+        {
+          "id": "manualSnapshotHistoryView",
+          "name": "My Snapshots",
+          "icon": "$(bookmark)",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "autoSnapshotHistoryView",
+          "name": "Auto Snapshots",
+          "icon": "$(clock)",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "vscode-snapshots.restoreFromTree",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vscode-snapshots.compareWithCurrentFromTree",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vscode-snapshots.deleteFromTree",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "modification@1"
+        },
+        {
+          "command": "vscode-snapshots.compareFileWithWorkspace",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotFile",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vscode-snapshots.restoreFileFromSnapshot",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotFile",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vscode-snapshots.createGitCommitFromSnapshot",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem && config.vscode-snapshots.git.commitFromSnapshotEnabled",
+          "group": "modification@2"
+        },
+        {
+          "command": "vscode-snapshots.toggleFavoriteStatus",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@1"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotTags",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@2"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotNotes",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@3"
+        },
+        {
+          "command": "vscode-snapshots.editTaskReference",
+          "when": "view == manualSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@4"
+        },
+        {
+          "command": "vscode-snapshots.restoreFromTree",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vscode-snapshots.compareWithCurrentFromTree",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vscode-snapshots.deleteFromTree",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "modification@1"
+        },
+        {
+          "command": "vscode-snapshots.compareFileWithWorkspace",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotFile",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vscode-snapshots.restoreFileFromSnapshot",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotFile",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vscode-snapshots.createGitCommitFromSnapshot",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem && config.vscode-snapshots.git.commitFromSnapshotEnabled",
+          "group": "modification@2"
+        },
+        {
+          "command": "vscode-snapshots.toggleFavoriteStatus",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@1"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotTags",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@2"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotNotes",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@3"
+        },
+        {
+          "command": "vscode-snapshots.editTaskReference",
+          "when": "view == autoSnapshotHistoryView && viewItem == snapshotItem",
+          "group": "2_context@4"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "vscode-snapshots.filterSnapshotsByDate",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vscode-snapshots.filterByTags",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vscode-snapshots.filterByFavorites",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "vscode-snapshots.filterByFile",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "vscode-snapshots.clearAllFilters",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "navigation@5"
+        },
+        {
+          "command": "vscode-snapshots.takeSnapshot",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-snapshots.filterSnapshotsByDate",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vscode-snapshots.filterByTags",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vscode-snapshots.filterByFavorites",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "vscode-snapshots.filterByFile",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "vscode-snapshots.clearAllFilters",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "navigation@5"
+        },
+        {
+          "command": "vscode-snapshots.manageAutoSnapshotRules",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-snapshots.gettingStarted",
+          "when": "view == manualSnapshotHistoryView || view == autoSnapshotHistoryView",
+          "group": "help@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vscode-snapshots.gettingStarted",
+          "group": "Code Snapshots"
+        },
+        {
+          "command": "vscode-snapshots.focusManualSnapshotView",
+          "group": "Code Snapshots"
+        },
+        {
+          "command": "vscode-snapshots.focusAutoSnapshotView",
+          "group": "Code Snapshots"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "14.x",
+    "@types/vscode": "^1.60.0",
+    "typescript": "^4.3.2",
+    "vsce": "^2.15.0",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/parser": "^5.0.0",
+    "@typescript-eslint/eslint-plugin": "^5.0.0",
+    "eslint-config-prettier": "^8.0.0",
+    "eslint-plugin-prettier": "^4.0.0",
+    "prettier": "^2.8.0"
+  },
+  "dependencies": {
+    "diff": "^5.0.0",
+    "minimatch": "^10.0.1"
+  }
+}
