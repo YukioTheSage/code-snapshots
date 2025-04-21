@@ -1,12 +1,12 @@
-# Code Snapshots - User Guide
+# CodeLapse - User Guide
 
-Code Snapshots is a lightweight companion to Git that focuses on your personal development workflow. This extension allows you to take point-in-time snapshots of your code and easily navigate between them, providing a frictionless safety net alongside traditional version control systems.
+CodeLapse is a lightweight companion to Git that focuses on your personal development workflow. This extension allows you to take point-in-time snapshots of your code and easily navigate between them, providing a frictionless safety net alongside traditional version control systems.
 
 ## Getting Started
 
 ### Installation
 
-1. Install the "Code Snapshots" extension from the VS Code Marketplace.
+1. Install the "CodeLapse" extension from the VS Code Marketplace.
 2. Reload VS Code when prompted.
 3. Open a workspace folder you want to take snapshots in. The extension primarily works at the workspace level.
 4. The extension activates automatically. You should see a history icon (`$(history)`) and snapshot status in the bottom-left status bar.
@@ -186,7 +186,7 @@ The main status bar item (bottom-left) shows: `$(history) <Time Ago> | <Current/
 
 #### Diagnostics
 
-Run "Snapshots: Run Diagnostics" (`Ctrl+Alt+D`) to check extension status and log details to the Output panel (select "Code Snapshots" in the dropdown).
+Run "Snapshots: Run Diagnostics" (`Ctrl+Alt+D`) to check extension status and log details to the Output panel (select "CodeLapse" in the dropdown).
 
 ## Automatic Snapshots
 
@@ -196,7 +196,7 @@ Configure snapshots to be taken automatically at regular intervals:
 
 1. Go to Settings (`Ctrl+,`).
 2. Search for `snapshot interval`.
-3. Set `Code Snapshots: Auto Snapshot Interval` to a number of minutes (e.g., `30`).
+3. Set `CodeLapse: Auto Snapshot Interval` to a number of minutes (e.g., `30`).
 4. Set to `0` to disable.
 5. These appear in the "Auto Snapshots" view.
 
@@ -222,12 +222,12 @@ As a safety net, you can enable automatic snapshots before certain Git operation
 
 1. Go to Settings (`Ctrl+,`).
 2. Search for `snapshot git operation`.
-3. Enable `Code Snapshots › Git: Auto Snapshot Before Operation`.
+3. Enable `CodeLapse › Git: Auto Snapshot Before Operation`.
 4. When enabled, a snapshot is automatically taken before `git pull`, `git merge`, or `git rebase` executed via VS Code. These appear in the "Auto Snapshots" view.
 
 ## Integration with Git
 
-Code Snapshots is designed to complement Git.
+CodeLapse is designed to complement Git.
 
 - **Use Snapshots for:** Frequent local checkpoints, experiments, pre-refactoring saves, debugging states.
 - **Use Git for:** Meaningful logical commits, team collaboration, branching, releases, backup.
@@ -261,7 +261,7 @@ See the [Git Companion Guide](GIT_COMPANION.md) for detailed workflows.
 
 ### File Exclusion
 
-Code Snapshots automatically excludes:
+CodeLapse automatically excludes:
 
 - The `.snapshots/` directory itself.
 - Binary files (images, executables, archives, etc., based on common extensions).
@@ -290,7 +290,7 @@ Configure via VS Code Settings (`Ctrl+,`):
 
 ## Troubleshooting
 
-- **Snapshots Not Created/Restored**: Check Output panel ("Code Snapshots" channel), run Diagnostics (`Ctrl+Alt+D`), check file permissions, check ignore files.
+- **Snapshots Not Created/Restored**: Check Output panel ("CodeLapse" channel), run Diagnostics (`Ctrl+Alt+D`), check file permissions, check ignore files.
 - **Performance Issues**: Reduce `maxSnapshots`, check ignore files, ensure large binary directories (`node_modules`) are ignored. Report issues if problems persist.
 - **Filtering Issues**: Ensure correct filter selection (Date, Tags, Favorites, File). Check filter status bar. Use "Clear All Filters". Tags are case-sensitive.
 - **Rule-based Auto-Snapshots Not Triggering**: Verify rule patterns and intervals in settings. Check Output panel for rule processing logs (enable verbose logging if needed). Ensure files are being saved if expecting save-triggered rules.
@@ -310,7 +310,7 @@ Configure via VS Code Settings (`Ctrl+,`):
 ## Getting Help
 
 1. Run "Snapshots: Run Diagnostics".
-2. Check the Output panel ("Code Snapshots" channel).
+2. Check the Output panel ("CodeLapse" channel).
 3. Review this User Guide and the [Git Companion Guide](GIT_COMPANION.md).
 4. Check the extension's GitHub repository for known issues.
 5. Report bugs or request features via GitHub Issues.

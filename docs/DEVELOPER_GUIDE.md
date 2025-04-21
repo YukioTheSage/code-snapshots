@@ -1,10 +1,10 @@
-# Code Snapshots - Developer Guide
+# CodeLapse - Developer Guide
 
-This document provides technical details, architecture information, and contribution guidelines for the Code Snapshots VS Code extension. It's intended for developers who want to understand, modify, or extend the extension.
+This document provides technical details, architecture information, and contribution guidelines for the CodeLapse VS Code extension. It's intended for developers who want to understand, modify, or extend the extension.
 
 ## Architecture Overview
 
-Code Snapshots follows a modular architecture with several key components designed for separation of concerns (core logic vs. UI vs. storage) and asynchronous operation:
+CodeLapse follows a modular architecture with several key components designed for separation of concerns (core logic vs. UI vs. storage) and asynchronous operation:
 
 <!-- TODO: Add a high-level architecture diagram here (e.g., using Mermaid) -->
 ![Architecture Diagram](images/architecture-diagram.png)
@@ -383,7 +383,7 @@ The code is designed to be extensible in these key areas:
     - Deeper Git integration (e.g., comparing snapshots directly with Git commits).
     - Integration with task management extensions based on `taskReference`.
 
-## Contributing to Code Snapshots
+## Contributing to CodeLapse
 
 Thank you for your interest in contributing!
 

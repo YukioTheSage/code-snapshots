@@ -22,7 +22,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Make activate async
   // Initialize logger first
   initializeLogger(context);
-  log('Code Snapshots extension is activating...'); // Use logger
+  log('CodeLapse extension is activating...'); // Use logger
 
   try {
     // --- Get Git API ---
@@ -51,8 +51,8 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.StatusBarAlignment.Left,
       100,
     );
-    statusBarItem.text = '$(loading~spin) Code Snapshots activating...';
-    statusBarItem.tooltip = 'Code Snapshots extension is activating';
+    statusBarItem.text = '$(loading~spin) CodeLapse activating...';
+    statusBarItem.tooltip = 'CodeLapse extension is activating';
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
@@ -298,26 +298,26 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Enhance status bar with more help
     statusBarItem.tooltip =
-      'Code Snapshots extension is active\nClick to view snapshots\nCtrl+Alt+S to take a snapshot';
+      'CodeLapse extension is active\nClick to view snapshots\nCtrl+Alt+S to take a snapshot';
 
     // Log successful activation
-    log('Code Snapshots extension activated successfully'); // Use logger
-    statusBarItem.text = '$(check) Code Snapshots';
-    statusBarItem.tooltip = 'Code Snapshots extension is active';
+    log('CodeLapse extension activated successfully'); // Use logger
+    statusBarItem.text = '$(check) CodeLapse';
+    statusBarItem.tooltip = 'CodeLapse extension is active';
 
     // Add the diagnostics command to the status bar
     statusBarItem.command = 'vscode-snapshots.diagnostics';
 
     // Don't show message on every activation, maybe only first time?
     // vscode.window.showInformationMessage(
-    //   "Code Snapshots extension is ready. Click on the status bar icon for diagnostics."
+    //   "CodeLapse extension is ready. Click on the status bar icon for diagnostics."
     // );
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     log(`ACTIVATION ERROR: ${errMsg}`); // Use logger
     log((error as Error).stack || 'No stack trace available'); // Use logger
     vscode.window.showErrorMessage(
-      `Failed to activate Code Snapshots extension: ${errMsg}`,
+      `Failed to activate CodeLapse extension: ${errMsg}`,
     );
   }
 }

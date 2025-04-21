@@ -1,10 +1,10 @@
-# Code Snapshots and Git: Perfect Companions
+# CodeLapse and Git: Perfect Companions
 
-This guide explains how to effectively use Code Snapshots alongside Git for an optimal development workflow.
+This guide explains how to effectively use CodeLapse alongside Git for an optimal development workflow.
 
 ## Two Tools, Different Purposes
 
-Code Snapshots and Git serve different but complementary purposes in your development workflow:
+CodeLapse and Git serve different but complementary purposes in your development workflow:
 
 **Git** is designed for:
 
@@ -15,7 +15,7 @@ Code Snapshots and Git serve different but complementary purposes in your develo
 - Branching and merging features
 - Remote backups and synchronization
 
-**Code Snapshots** is designed for:
+**CodeLapse** is designed for:
 
 - Personal development workflow
 - Rapid experimentation & quick reverts
@@ -27,7 +27,7 @@ Code Snapshots and Git serve different but complementary purposes in your develo
 
 ## When to Use Each Tool
 
-### Use Code Snapshots When:
+### Use CodeLapse When:
 
 - **Experimenting with code** - Take quick snapshots as you try different approaches (`Ctrl+Alt+S`).
 - **Between Git commits** - Create frequent checkpoints as you work toward your next commit.
@@ -127,11 +127,11 @@ Sometimes, a snapshot represents a stable state you want to formally add to your
 
 3. **Use Rule-Based Auto-Snapshots**: Configure rules (via `vscode-snapshots.autoSnapshot.rules` setting or the "Manage Auto-Snapshot Rules" command) to automatically snapshot important files (e.g., configuration files, core modules) at specific intervals when they change.
 4. **Clean up old snapshots** periodically after related changes are safely committed to Git to save space (Right-click -> Delete in Tree View).
-5. **Use Git for team communication** (commits, PRs) and Code Snapshots for your personal development safety net and exploration.
+5. **Use Git for team communication** (commits, PRs) and CodeLapse for your personal development safety net and exploration.
 6. **Leverage Snapshot Context**: Use tags (e.g., `#refactor`, `#bugfix`), task references, and notes in your snapshots alongside your Git commit messages for different levels of detail.
 
 ## Conclusion
 
-Git and Code Snapshots are not competitors but companions that serve different purposes in your development workflow. Git provides the formal version control and collaboration capabilities, while Code Snapshots offers a frictionless, personal safety net for your day-to-day coding, experimentation, and navigation through recent states.
+Git and CodeLapse are not competitors but companions that serve different purposes in your development workflow. Git provides the formal version control and collaboration capabilities, while CodeLapse offers a frictionless, personal safety net for your day-to-day coding, experimentation, and navigation through recent states.
 
-By using both tools appropriately, you get the best of both worlds: the robust version control and collaboration capabilities of Git, combined with the lightweight, instant save points and rapid navigation of Code Snapshots.
+By using both tools appropriately, you get the best of both worlds: the robust version control and collaboration capabilities of Git, combined with the lightweight, instant save points and rapid navigation of CodeLapse.

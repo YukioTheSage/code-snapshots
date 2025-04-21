@@ -2011,7 +2011,7 @@ function registerDiagnosticCommand({ context }: CommandDependencies): void {
       });
 
       vscode.window.showInformationMessage(
-        'Code Snapshots diagnostics logged to output channel',
+        'CodeLapse diagnostics logged to output channel',
       );
     },
   );

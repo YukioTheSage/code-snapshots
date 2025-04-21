@@ -2,11 +2,11 @@ import * as vscode from 'vscode';
 import { log } from './logger';
 
 /**
- * Activate the simple Code Snapshots extension.
+ * Activate the simple CodeLapse extension.
  * @param context Extension context for subscriptions.
  */
 export function activate(context: vscode.ExtensionContext) {
-  log('Code Snapshots simple extension is now active');
+  log('CodeLapse simple extension is now active');
 
   // Register commands with inline handlers for simplicity
   const takeSnapshotCmd = vscode.commands.registerCommand(
@@ -48,12 +48,12 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.StatusBarAlignment.Left,
     100,
   );
-  statusBarItem.text = '$(history) Code Snapshots';
-  statusBarItem.tooltip = 'Code Snapshots extension is active';
+  statusBarItem.text = '$(history) CodeLapse';
+  statusBarItem.tooltip = 'CodeLapse extension is active';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  vscode.window.showInformationMessage('Code Snapshots extension is ready!');
+  vscode.window.showInformationMessage('CodeLapse extension is ready!');
 }
 
 /**

@@ -23,7 +23,7 @@ export class WelcomeView {
 
     // Show welcome message with actions
     const selection = await vscode.window.showInformationMessage(
-      'Welcome to Code Snapshots! Take snapshots of your code as you work to easily track your progress.',
+      'Welcome to CodeLapse! Take snapshots of your code as you work to easily track your progress.',
       'Take a Tour',
       'Show Commands',
       'Learn More',
@@ -38,7 +38,7 @@ export class WelcomeView {
     } else if (selection === 'Show Commands') {
       vscode.commands.executeCommand(
         'workbench.action.quickOpen',
-        '>Code Snapshots',
+        '>CodeLapse',
       );
     } else if (selection === 'Learn More') {
       vscode.env.openExternal(
@@ -66,7 +66,7 @@ export class WelcomeView {
 
     // Show second step
     const step2 = await vscode.window.showInformationMessage(
-      'Step 2: View your snapshots in the Code Snapshots sidebar. Click the history icon in the Activity Bar.',
+      'Step 2: View your snapshots in the CodeLapse sidebar. Click the history icon in the Activity Bar.',
       'Next',
       'Skip Tour',
     );
@@ -88,7 +88,7 @@ export class WelcomeView {
 
     // Show final step
     await vscode.window.showInformationMessage(
-      "Tour complete! You're ready to use Code Snapshots. For more help, check the extension documentation.",
+      "Tour complete! You're ready to use CodeLapse. For more help, check the extension documentation.",
       'Start Using Snapshots',
     );
 
