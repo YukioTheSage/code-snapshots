@@ -42,7 +42,7 @@ export class WelcomeView {
       );
     } else if (selection === 'Learn More') {
       vscode.env.openExternal(
-        vscode.Uri.parse('https://github.com/your-username/vscode-snapshots'),
+        vscode.Uri.parse('https://github.com/YukioTheSage/vscode-snapshots'),
       );
     }
 
