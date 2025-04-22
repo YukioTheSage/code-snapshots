@@ -1,10 +1,10 @@
-// FILE: C:\Konectify\PersonalProject\vscode-snapshots\src\ui\treeView.ts
 import * as vscode from 'vscode';
-import { SnapshotManager, Snapshot } from '../snapshotManager'; // Adjust path
 import * as path from 'path';
-import { pathMatchesPattern } from '../utils/pathMatching';
+
+import { SnapshotManager, Snapshot } from '../snapshotManager';
 import { getShowOnlyChangedFiles } from '../config';
-import { log, logVerbose } from '../logger'; // Import logger
+import { log, logVerbose } from '../logger';
+import { pathMatchesPattern } from '../utils';
 
 // --- Helper Functions for Grouping ---
 

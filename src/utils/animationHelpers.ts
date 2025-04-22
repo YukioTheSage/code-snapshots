@@ -7,6 +7,8 @@ import { log } from '../logger';
 export class AnimationHelpers {
   /**
    * Controls the decorative animation indicators during snapshot transitions
+   * @param direction 'forward' to show →, 'backward' to show ←
+   * @returns Disposable to clean up the decorations
    */
   public static showTransitionIndicators(
     direction: 'forward' | 'backward',
@@ -55,6 +57,7 @@ export class AnimationHelpers {
 
   /**
    * Preserves editor state during navigation/transitions
+   * @returns Map of URI string to EditorState
    */
   public static async preserveEditorViewStates(): Promise<
     Map<string, EditorState>
@@ -79,6 +82,7 @@ export class AnimationHelpers {
 
   /**
    * Restores editor state after navigation/transitions
+   * @param states Map of URI string to EditorState
    */
   public static async restoreEditorViewStates(
     states: Map<string, EditorState>,
@@ -121,8 +125,11 @@ export class AnimationHelpers {
 
   /**
    * Adds a subtle highlight effect to changed files in the explorer
+   * @param _filePaths Array of file paths to highlight (unused placeholder)
+   * @returns Disposable placeholder for highlight feature
    */
   public static highlightChangedFiles(_filePaths: string[]): vscode.Disposable {
+    void _filePaths; // mark unused parameter as used to satisfy lint
     // This would be implemented with the FileDecorationsProvider API
     // For now, we're returning a no-op disposable as this would require
     // registering a new decoration provider in the extension

@@ -1,6 +1,13 @@
 import { minimatch } from 'minimatch';
 
-// utils/pathMatching.ts
+/**
+ * Tests whether a file path matches a glob or simple string pattern.
+ * @param filePath OS-specific path to a file
+ * @param pattern Glob or literal path pattern
+ * @param options.allowSubstring If true, allows substring matching (default: false)
+ * @param options.minimatchOptions Options passed to minimatch (default: { dot: true })
+ * @returns True if the path matches the pattern
+ */
 export function pathMatchesPattern(
   filePath: string,
   pattern: string,
