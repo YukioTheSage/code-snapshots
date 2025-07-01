@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
-// No longer need sync fs
-import { promises as fsPromises } from 'fs'; // Import promises API
+import { promises as fsPromises } from 'fs';
 import * as path from 'path';
-import { Snapshot } from './snapshotManager'; // Keep Snapshot interface accessible
 import { log, logVerbose } from './logger';
+import { Snapshot } from './snapshotManager';
+import { applyDiff } from './snapshotDiff';
+import { SnapshotContentProvider } from './snapshotContentProvider';
 import { getSnapshotLocation } from './config';
-import { applyDiff } from './snapshotDiff'; // Needed for resolving content during load/get
 
 // Interface for the snapshot index file structure
 interface SnapshotIndex {
@@ -710,19 +710,36 @@ export class SnapshotStorage {
    * Retrieves the content of a specific file within a given snapshot asynchronously,
    * resolving diffs by walking back through the snapshot chain if necessary.
    * Implements caching.
+   * @param snapshotId The ID of the snapshot
+   * @param relativePath The relative path of the file
+   * @param allSnapshots List of all snapshots for resolving diffs
+   * @param forIndexing If true, indicates this content is being retrieved for indexing purposes
    */
   public async getSnapshotFileContent(
     snapshotId: string,
     relativePath: string,
     allSnapshots: Snapshot[],
+    forIndexing = false,
   ): Promise<string | null> {
-    const cacheKey = `${snapshotId}::${relativePath}`;
+    // Use a special cache key if this is for indexing to avoid interfering with the regular workflow
+    const cacheKey = `${snapshotId}::${relativePath}${
+      forIndexing ? '::indexing' : ''
+    }`;
+
     if (this.contentCache.has(cacheKey)) {
-      logVerbose(`Cache hit for ${relativePath} in ${snapshotId}`);
+      logVerbose(
+        `Cache hit for ${relativePath} in ${snapshotId}${
+          forIndexing ? ' (indexing)' : ''
+        }`,
+      );
       return this.contentCache.get(cacheKey) ?? null;
     }
 
-    logVerbose(`Cache miss for ${relativePath} in ${snapshotId}. Resolving...`);
+    logVerbose(
+      `Cache miss for ${relativePath} in ${snapshotId}${
+        forIndexing ? ' (indexing)' : ''
+      }. Resolving...`,
+    );
 
     const snapshot = allSnapshots.find((s) => s.id === snapshotId);
     if (!snapshot) {
@@ -762,10 +779,12 @@ export class SnapshotStorage {
     }
 
     if (fileData.baseSnapshotId) {
+      // Pass the forIndexing flag when resolving base content
       const baseContent = await this.getSnapshotFileContent(
         fileData.baseSnapshotId,
         relativePath,
         allSnapshots,
+        forIndexing, // Pass the forIndexing flag to prevent creating editor tabs
       );
 
       if (baseContent === null) {
@@ -813,17 +832,41 @@ export class SnapshotStorage {
 
   // --- Cache Helper Methods ---
 
-  private updateCache(key: string, value: string | null): void {
+  private updateCache(key: string, value: string | null) {
+    // Update the cache and trim it if needed
     this.contentCache.set(key, value);
-    // Basic LRU-like eviction if cache exceeds max size
     if (this.contentCache.size > this.MAX_CACHE_SIZE) {
-      const oldestKey = this.contentCache.keys().next().value;
-      // Ensure oldestKey is valid before deleting
-      if (typeof oldestKey === 'string') {
-        this.contentCache.delete(oldestKey);
-        logVerbose(`Cache evicted oldest entry: ${oldestKey}`);
+      logVerbose(
+        `Cache size (${this.contentCache.size}) exceeds limit. Trimming...`,
+      );
+      const keysToRemove = [...this.contentCache.keys()].slice(
+        0,
+        Math.ceil(this.contentCache.size * 0.3),
+      );
+      for (const k of keysToRemove) {
+        this.contentCache.delete(k);
       }
+      logVerbose(`Removed ${keysToRemove.length} items from cache.`);
     }
+  }
+
+  /**
+   * Creates an appropriate document URI for a snapshot file.
+   * @param snapshotId The snapshot ID
+   * @param relativePath The file path
+   * @param forIndexing When true, marks URI as for indexing purposes only
+   */
+  private createSnapshotUri(
+    snapshotId: string,
+    relativePath: string,
+    forIndexing = false,
+  ): vscode.Uri {
+    // Use the SnapshotContentProvider's method to create the URI with the correct forIndexing flag
+    return SnapshotContentProvider.getUri(
+      snapshotId,
+      relativePath,
+      forIndexing,
+    );
   }
 
   private clearCacheForSnapshot(snapshotId: string): void {

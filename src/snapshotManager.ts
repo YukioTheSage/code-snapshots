@@ -60,6 +60,13 @@ export class SnapshotManager {
   }
 
   /**
+   * Get workspace root - needed for semantic search
+   */
+  public getWorkspaceRoot(): string | null {
+    return this.storage.getWorkspaceRoot();
+  }
+
+  /**
    * Load existing snapshots using the SnapshotStorage module.
    */
   private async loadSnapshots() {
@@ -80,14 +87,6 @@ export class SnapshotManager {
     }
     // No need to sort here, assuming storage returns them sorted
     this._onDidChangeSnapshots.fire(); // Notify listeners about the loaded state
-  }
-
-  /**
-   * Public getter for the workspace root path.
-   * @returns The workspace root path or null if not available.
-   */
-  public getWorkspaceRoot(): string | null {
-    return this.storage.getWorkspaceRoot();
   }
 
   /**
@@ -404,6 +403,21 @@ export class SnapshotManager {
 
       if (deletedFilesCount > 0) {
         log(`Added ${deletedFilesCount} deleted files to the snapshot`);
+      }
+    }
+
+    // If this is an auto snapshot and no files have changed, skip creating it.
+    const isAutoSnapshot = contextOptions.tags?.includes('auto');
+    if (isAutoSnapshot) {
+      const hasChange = Object.values(snapshot.files).some(
+        (f) =>
+          f.deleted ||
+          f.diff !== undefined ||
+          (f.content !== undefined && f.baseSnapshotId === undefined),
+      );
+      if (!hasChange) {
+        log('Skipping auto snapshot: no changes detected since last snapshot');
+        return this.snapshots[this.currentSnapshotIndex];
       }
     }
 
@@ -982,6 +996,16 @@ export class SnapshotManager {
     }
     // If index > currentSnapshotIndex, no adjustment needed
 
+    // Delete semantic search data
+    const semanticSearchService = (this as any).semanticSearchService;
+    if (semanticSearchService) {
+      try {
+        await semanticSearchService.deleteSnapshotIndexing(snapshotToDelete.id);
+      } catch (error) {
+        log(`Error deleting semantic search data: ${error}`);
+      }
+    }
+
     // Save the updated index
     await this.saveSnapshotIndex();
     log(`Snapshot index saved after deleting ${snapshotId}.`);
@@ -998,10 +1022,15 @@ export class SnapshotManager {
 
   /**
    * Public wrapper to get the content of a file from a snapshot using storage.
+   * @param snapshotId The ID of the snapshot
+   * @param relativePath The relative path of the file
+   * @param forIndexing If true, indicates this content is being retrieved for indexing purposes
+   * and shouldn't be displayed in the editor
    */
   public async getSnapshotFileContentPublic(
     snapshotId: string,
     relativePath: string,
+    forIndexing = false,
   ): Promise<string | null> {
     // Use the storage method, passing the current list of all snapshots
     // for diff resolution if needed.
@@ -1010,6 +1039,7 @@ export class SnapshotManager {
       snapshotId,
       relativePath,
       this.snapshots,
+      forIndexing,
     );
   }
 
@@ -1272,4 +1302,5 @@ export class SnapshotManager {
 
   // Removed deleteDirectory - handled by SnapshotStorage
   // Removed log - handled by logger module
+  // Removed temp-method
 }

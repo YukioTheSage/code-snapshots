@@ -6,10 +6,12 @@ import { SnapshotQuickPick } from './ui/quickPick';
 import { SnapshotTreeDataProvider, SnapshotTreeItem } from './ui/treeView';
 import { SnapshotContentProvider } from './snapshotContentProvider';
 import { SnapshotContextInput } from './ui/snapshotContextInput';
-import { log, logVerbose } from './logger';
+import { log, logVerbose, showOutputChannel } from './logger';
 import { ChangeNotifier } from './changeNotifier';
 import { API as GitAPI } from './types/git.d';
 import { AutoSnapshotRulesUI } from './ui/autoSnapshotRulesUI';
+import { SemanticSearchService } from './services/semanticSearchService';
+import { SemanticSearchWebview } from './ui/semanticSearchWebview';
 
 // Structure to hold dependencies passed from activate
 export interface CommandDependencies {
@@ -20,7 +22,9 @@ export interface CommandDependencies {
   snapshotTreeDataProvider: SnapshotTreeDataProvider;
   autoSnapshotTreeDataProvider: SnapshotTreeDataProvider;
   changeNotifier: ChangeNotifier; // Add changeNotifier type
+  semanticSearchService: SemanticSearchService;
   gitApi: GitAPI | null; // Add Git API
+  semanticSearchWebview: SemanticSearchWebview;
 }
 
 /**
@@ -41,6 +45,9 @@ export function registerCommands(deps: CommandDependencies): void {
   registerDiagnosticCommand(deps);
   registerManageAutoSnapshotRulesCommand(deps);
   registerToggleChangedFilesCommand(deps);
+  registerSemanticIndexCommand(deps);
+  registerSemanticSearchCommand(deps);
+  registerShowLogsCommand(deps);
 
   log('All commands registered.');
 }
@@ -1974,6 +1981,7 @@ function registerDiagnosticCommand({ context }: CommandDependencies): void {
   const diagnosticCommand = vscode.commands.registerCommand(
     'vscode-snapshots.diagnostics',
     () => {
+      showOutputChannel();
       log('\n--- DIAGNOSTICS ---');
       log(`Timestamp: ${new Date().toISOString()}`);
       log(`Extension path: ${context.extensionPath}`);
@@ -2017,6 +2025,101 @@ function registerDiagnosticCommand({ context }: CommandDependencies): void {
   );
   context.subscriptions.push(diagnosticCommand);
   log('Registered diagnostic command');
+}
+
+function registerSemanticIndexCommand({
+  context,
+  semanticSearchService,
+}: CommandDependencies): void {
+  log('Registering semanticIndex command...');
+  const indexCmd = vscode.commands.registerCommand(
+    'vscode-snapshots.indexForSemanticSearch',
+    async () => {
+      log('indexForSemanticSearch command executed');
+
+      // Check if semantic search is enabled
+      const config = vscode.workspace.getConfiguration('vscode-snapshots');
+      const semanticSearchEnabled = config.get<boolean>(
+        'semanticSearch.enabled',
+        true,
+      );
+
+      if (!semanticSearchEnabled) {
+        const enable = await vscode.window.showInformationMessage(
+          'Semantic search is disabled in settings. Would you like to enable it?',
+          'Enable',
+          'Cancel',
+        );
+
+        if (enable === 'Enable') {
+          config.update(
+            'semanticSearch.enabled',
+            true,
+            vscode.ConfigurationTarget.Global,
+          );
+        } else {
+          return;
+        }
+      }
+
+      try {
+        await semanticSearchService.indexAllSnapshots();
+      } catch (error) {
+        vscode.window.showErrorMessage(`Indexing failed: ${error}`);
+      }
+    },
+  );
+
+  context.subscriptions.push(indexCmd);
+  log('semanticIndex command registered successfully');
+}
+
+function registerSemanticSearchCommand({
+  context,
+  semanticSearchWebview,
+}: CommandDependencies): void {
+  log('Registering semanticSearch command...');
+  const searchCmd = vscode.commands.registerCommand(
+    'vscode-snapshots.searchSnapshots',
+    async () => {
+      log('searchSnapshots command executed');
+
+      // Check if semantic search is enabled
+      const config = vscode.workspace.getConfiguration('vscode-snapshots');
+      const semanticSearchEnabled = config.get<boolean>(
+        'semanticSearch.enabled',
+        true,
+      );
+
+      if (!semanticSearchEnabled) {
+        vscode.window
+          .showInformationMessage(
+            'Semantic search is disabled in settings. Would you like to enable it?',
+            'Enable',
+            'Cancel',
+          )
+          .then((selection) => {
+            if (selection === 'Enable') {
+              config.update(
+                'semanticSearch.enabled',
+                true,
+                vscode.ConfigurationTarget.Global,
+              );
+              vscode.window.showInformationMessage(
+                'Semantic search enabled. Please run the search command again.',
+              );
+            }
+          });
+        return;
+      }
+
+      // Show the search UI
+      semanticSearchWebview.show();
+    },
+  );
+
+  context.subscriptions.push(searchCmd);
+  log('semanticSearch command registered successfully');
 }
 
 // --- Git Integration Command ---
@@ -2271,6 +2374,22 @@ async function restoreEditorViewStates(
       log(`Error restoring editor state: ${error}`);
     }
   }
+}
+
+/**
+ * Registers a command to show the extension logs in the output channel
+ */
+function registerShowLogsCommand({ context }: CommandDependencies): void {
+  log('Registering showLogs command...');
+  const showLogsCmd = vscode.commands.registerCommand(
+    'vscode-snapshots.showLogs',
+    () => {
+      log('showLogs command executed');
+      showOutputChannel();
+    },
+  );
+  context.subscriptions.push(showLogsCmd);
+  log('showLogs command registered successfully');
 }
 
 // Type for storing editor state

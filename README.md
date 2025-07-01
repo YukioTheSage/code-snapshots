@@ -1,6 +1,8 @@
 # CodeLapse Extension
 
-A dead-simple snapshot system for VS Code that works alongside Git. Take code snapshots with a single keystroke and navigate between them without any complexity.
+A dead-simple snapshot system for VS Code that works alongside Git. Take code snapshots with a single keystroke and navigate between them without any complexity. Now with powerful semantic search capabilities to find your code across all snapshots.
+
+> ⚠️ **EXPERIMENTAL FEATURE**: Semantic search is currently an experimental feature. Use it at your own risk. The functionality may change or have limitations in future releases.
 
 ## Why CodeLapse?
 
@@ -11,6 +13,7 @@ A dead-simple snapshot system for VS Code that works alongside Git. Take code sn
 - **Frictionless Exploration**: Try ideas without worrying about "messing up" your Git history
 - **Development Safety Net**: Create snapshots between Git commits for personal checkpoints
 - **Instant Restoration**: Jump back to any snapshot instantly - no stashing, no cherry-picking
+- **Semantic Search**: Find your code across all snapshots using natural language queries ⚠️ **(Experimental - use at your own risk)**
 
 CodeLapse is the missing tool between the autosave feature of your IDE and the formal commits of Git.
 
@@ -20,6 +23,7 @@ CodeLapse is the missing tool between the autosave feature of your IDE and the f
 - **[Git Companion Guide](docs/GIT_COMPANION.md)** - How to use CodeLapse alongside Git.
 - **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Technical details, architecture, and contribution guidelines.
 - **[Roadmap](docs/ROADMAP.md)** - Planned features and improvements.
+- **[Semantic Roadmap](docs/SEMANTIC_ROADMAP.md)** - Detailed plan for semantic search implementation.
 
 ## Features
 
@@ -31,6 +35,7 @@ CodeLapse offers a robust set of features, categorized as follows:
 - [x] Snapshot navigation (forward/backward: `Ctrl+Alt+N`/`Ctrl+Alt+B`)
 - [x] Time-based grouping in "My Snapshots" & "Auto Snapshots" Explorer views
 - [x] Status bar indicator (time since last snapshot, current index)
+- [x] Semantic search across snapshots (`Ctrl+Alt+Shift+F`) ⚠️ **(Experimental)**
 
 #### Working with Snapshots:
 
@@ -55,6 +60,7 @@ CodeLapse offers a robust set of features, categorized as follows:
 - [x] Filtering by Date, Tags, Favorites, File Path (View Title icons)
 - [x] Filter Status Bar indicator
 - [x] `.gitignore` / `.snapshotignore` support for file exclusion
+- [x] Natural language search through code across all snapshots ⚠️ **(Experimental)**
 
 #### Git Integration:
 
@@ -77,6 +83,24 @@ CodeLapse offers several settings to customize its behavior:
 - `vscode-snapshots.git.addCommitInfo`: Store Git branch/commit with snapshots (default: `true`).
 - `vscode-snapshots.git.commitFromSnapshotEnabled`: Enable the "Create Git Commit from Snapshot" command (default: `true`).
 - `vscode-snapshots.git.autoSnapshotBeforeOperation`: Automatically snapshot before Git pull/merge/rebase (default: `false`).
+
+### Semantic Search Configuration
+
+> ⚠️ **EXPERIMENTAL FEATURE**: Semantic search is currently an experimental feature. Use it at your own risk. The functionality may change or have limitations in future releases.
+
+- `vscode-snapshots.semanticSearch.enabled`: Enable semantic code search across snapshots (default: `true`).
+- `vscode-snapshots.semanticSearch.chunkSize`: Maximum token size for each code chunk (default: `200`).
+- `vscode-snapshots.semanticSearch.chunkOverlap`: Overlap between adjacent chunks in tokens (default: `50`).
+- `vscode-snapshots.semanticSearch.autoIndex`: Automatically index snapshots in the background (default: `false`).
+
+**API Key Management**
+
+CodeLapse allows you to manage your API keys directly from the Configuration tree view:
+
+- **Pinecone API Key**: Required for semantic search vector storage
+- **Gemini API Key**: Required for semantic code analysis
+
+You can update these keys at any time through the Configuration tree view in the Explorer panel without needing to restart the extension.
 
 See the **[User Guide](docs/USER_GUIDE.md)** for more details on configuration.
 
@@ -107,7 +131,8 @@ See the **[User Guide](docs/USER_GUIDE.md)** for more details on configuration.
 7. Use the **Snapshots** view in the Activity Bar to browse, compare, restore, or delete snapshots.
 8. Right-click on snapshots to edit tags, notes, or toggle favorite status.
 9. Use filtering commands to find snapshots by date, tags, or favorite status.
-10. Run diagnostics (`Ctrl+Alt+D`) if needed.
+10. Use semantic search (`Ctrl+Alt+Shift+F`) to find code across all snapshots. ⚠️ **(Experimental - use at your own risk)**
+11. Run diagnostics (`Ctrl+Alt+D`) if needed.
 
 For detailed usage, settings, and troubleshooting, see the **[User Guide](docs/USER_GUIDE.md)**.
 

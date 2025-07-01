@@ -312,7 +312,3 @@ export class AutoSnapshotRulesUI {
 }
 
 // Register the command in your extension activation function
-// test 1 min
-// test 2
-// sss
-// ssssss

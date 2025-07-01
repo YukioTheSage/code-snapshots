@@ -7,6 +7,7 @@ This document provides technical details, architecture information, and contribu
 CodeLapse follows a modular architecture with several key components designed for separation of concerns (core logic vs. UI vs. storage) and asynchronous operation:
 
 <!-- TODO: Add a high-level architecture diagram here (e.g., using Mermaid) -->
+
 ![Architecture Diagram](images/architecture-diagram.png)
 
 ### Key Components
@@ -16,8 +17,10 @@ CodeLapse follows a modular architecture with several key components designed fo
     - Handles extension activation/deactivation.
     - Attempts to activate and retrieve the built-in Git extension API.
     - Initializes core components (`SnapshotManager`, `SnapshotStorage`, `ChangeNotifier`, UI elements, `EditorDecorator`, etc.).
+    - Initializes the `CredentialsManager` with the extension context to enable secure storage of sensitive data like API keys.
     - Coordinates the registration of commands by calling `registerCommands`, passing dependencies including the Git API.
     - Sets up Git command interception for auto-snapshots (if configured).
+    - Initializes semantic search services if enabled.
     - Manages global disposables and initial welcome experience.
 
 2.  **Command Registration & UI Flow** (`commands.ts`)
@@ -131,9 +134,35 @@ CodeLapse follows a modular architecture with several key components designed fo
     - Provides helper functions to access extension settings from `vscode.workspace.getConfiguration`.
 
 16. **Utilities** (`snapshotDiff.ts`, `utils/pathMatching.ts`, `logger.ts`)
+
     - `snapshotDiff`: Uses the `diff` library to create and apply patches.
     - `pathMatching`: Helper function using `minimatch` for flexible path/pattern comparison.
     - `logger`: Centralized logging utility with verbosity levels controlled by configuration.
+
+17. **Security** (`services/credentialsManager.ts`)
+
+    - **CredentialsManager**: Manages secure storage of sensitive information like API keys using VS Code's SecretStorage API.
+    - Provides methods to securely store and retrieve API keys for external services (e.g., Pinecone, Gemini).
+    - Handles prompting users for credentials when needed.
+    - Ensures sensitive data is never stored in plaintext or version control.
+    - Methods include:
+      - `getPineconeApiKey()`: Retrieves the stored Pinecone API key.
+      - `setFPineconeApiKey(apiKey)`: Securely stores the Pinecone API key.
+      - `getGeminiApiKey()`: Retrieves the stored Gemini API key.
+      - `setGeminiApiKey(apiKey)`: Securely stores the Gemini API key.
+      - `hasCredentials()`: Checks if all required credentials are set.
+      - `promptForCredentials()`: Interactive method to collect and store credentials from the user.
+
+18. **Semantic Search Services**
+
+    > ⚠️ **EXPERIMENTAL FEATURE**: Semantic search services are currently experimental features. Use them at your own risk. The functionality may change or have limitations in future releases.
+
+    - **Credentials Manager** (`services/credentialsManager.ts`): Securely stores and retrieves API keys using VS Code's SecretStorage.
+    - **Code Chunker** (`services/codeChunker.ts`): Intelligently splits code files into semantic chunks based on language structure.
+    - **Vector Database Service** (`services/vectorDatabaseService.ts`): Manages interactions with Pinecone for vector storage and retrieval.
+    - **Embedding Service** (`services/embeddingService.ts`): Handles the creation of embeddings using Gemini API.
+    - **Semantic Search Service** (`services/semanticSearchService.ts`): Orchestrates the search process, from query to results.
+    - **Semantic Search Webview** (`ui/semanticSearchWebview.ts`): Provides a rich interface for semantic search and results visualization.
 
 ## Data Storage
 
@@ -152,6 +181,7 @@ Snapshots are stored in the `.snapshots` directory (configurable via `vscode-sna
 ```
 
 <!-- TODO: Add a diagram illustrating the storage structure here -->
+
 ![Storage Structure Diagram](images/storage-structure-diagram.png)
 
 The `index.json` file contains a summary for quick loading:
@@ -358,7 +388,7 @@ The extension implements several error handling strategies:
 3.  **UI Responsiveness**:
     - **Async Operations**: Ensures UI remains responsive during snapshot creation, restoration, and loading.
     - **Progress Notifications**: `vscode.window.withProgress` provides feedback during long operations (take, restore).
-    - **Debouncing**: UI updates like editor decorations (`EditorDecorator.triggerUpdateDecorations`) are debounced to prevent excessive updates during rapid typing.
+    - *    *Debouncing**: UI updates like editor decorations (`EditorDecorator.triggerUpdateDecorations`) are debounced to prevent excessive updates during rapid typing.
     - **Event-Driven Updates**: Components listen for `onDidChangeSnapshots` or `onDidChangeTreeData` events instead of polling.
 
 ## Extension Points & Future Enhancements
@@ -373,6 +403,7 @@ The code is designed to be extensible in these key areas:
 
     - The Tree View (`ui/treeView.ts`) could be enhanced with different grouping or visualization methods.
     - A dedicated timeline view could be added.
+    - The Semantic Search Webview could be enhanced with additional filtering and visualization options.
 
 3.  **Snapshot Operations**:
 
@@ -382,6 +413,11 @@ The code is designed to be extensible in these key areas:
 4.  **Integration Points**:
     - Deeper Git integration (e.g., comparing snapshots directly with Git commits).
     - Integration with task management extensions based on `taskReference`.
+5.  **Semantic Search**:
+    - Alternative embedding models beyond Gemini.
+    - Support for additional vector databases beyond Pinecone.
+    - Enhanced code understanding with more sophisticated chunking strategies.
+    - AI-powered query expansion and code explanation.
 
 ## Contributing to CodeLapse
 
@@ -715,7 +751,7 @@ class SnapshotStorage {
   /** Saves the snapshot index file (list of snapshot summaries). */
   public async saveSnapshotIndex(
     snapshots: Snapshot[],
-    currentIndex: number
+    currentIndex: number,
   ): Promise<void>;
 
   /** Saves the full snapshot data (snapshot.json). */
@@ -732,13 +768,13 @@ class SnapshotStorage {
 
   /** Performs async content check for potentially binary files. */
   public async checkSuspiciousFilesForBinaryContent(
-    filePaths: string[]
+    filePaths: string[],
   ): Promise<Set<string>>;
 
   /** Writes content to a workspace file (async, creates dirs). */
   public async writeFileContent(
     absolutePath: string,
-    content: string
+    content: string,
   ): Promise<void>;
 
   /** Deletes a workspace file (async, ignores ENOENT). */
@@ -748,7 +784,7 @@ class SnapshotStorage {
   public async getSnapshotFileContent(
     snapshotId: string,
     relativePath: string,
-    allSnapshots: Snapshot[]
+    allSnapshots: Snapshot[],
   ): Promise<string | null>;
 }
 ```

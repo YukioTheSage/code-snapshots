@@ -46,10 +46,15 @@ export class SnapshotContentProvider
     );
 
     try {
+      // Check if the query parameter 'forIndexing' is present
+      const queryParams = new URLSearchParams(uri.query);
+      const forIndexing = queryParams.has('forIndexing');
+
       // Use the public method from SnapshotManager to get the file content
       const content = await this.snapshotManager.getSnapshotFileContentPublic(
         snapshotId,
         relativePath,
+        forIndexing, // Pass the forIndexing flag
       );
 
       if (content === null) {
@@ -77,15 +82,29 @@ export class SnapshotContentProvider
   /**
    * Utility method to create a URI for the content provider.
    * Includes a nonce to ensure VS Code treats it as unique content each time.
+   * @param snapshotId The snapshot ID
+   * @param relativePath The relative path within the snapshot
+   * @param forIndexing If true, indicates this URI is for indexing purposes and shouldn't be
+   * displayed in the editor tabs
    */
-  static getUri(snapshotId: string, relativePath: string): vscode.Uri {
+  static getUri(
+    snapshotId: string,
+    relativePath: string,
+    forIndexing = false,
+  ): vscode.Uri {
     const nonce = Date.now(); // Simple nonce
     // Ensure the path doesn't start with / after authority
     const pathPart = relativePath.startsWith('/')
       ? relativePath
       : `/${relativePath}`;
+
+    // Add forIndexing parameter to URI query if needed
+    const queryParams = `nonce=${nonce}${
+      forIndexing ? '&forIndexing=true' : ''
+    }`;
+
     return vscode.Uri.parse(
-      `snapshot-diff://${snapshotId}${pathPart}?nonce=${nonce}`,
+      `snapshot-diff://${snapshotId}${pathPart}?${queryParams}`,
     );
   }
 }

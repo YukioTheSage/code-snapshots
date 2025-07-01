@@ -637,6 +637,24 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       if (filterInfo) {
         groupTooltip.appendMarkdown(`\n**Filters Active:** ${filterInfo}\n`);
       }
+      // Summarize total changes across all snapshots in this group
+      const totalSummary = groupSnapshots.reduce(
+        (acc, snap) => {
+          const s = snapshotManager.getSnapshotChangeSummary(snap.id);
+          acc.added += s.added;
+          acc.modified += s.modified;
+          acc.deleted += s.deleted;
+          return acc;
+        },
+        {
+          added: 0,
+          modified: 0,
+          deleted: 0,
+        },
+      );
+      groupTooltip.appendMarkdown(
+        `\n**Total Changes:** $(diff-added) ${totalSummary.added} $(diff-modified) ${totalSummary.modified} $(diff-removed) ${totalSummary.deleted}\n\n`,
+      );
       tooltip = groupTooltip;
       command = undefined;
       resourceUri = undefined;
@@ -695,6 +713,19 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       fileTooltip.appendMarkdown(
         `*(Taken: ${new Date(snapshot.timestamp).toLocaleString()})*\n\n`,
       );
+      // Add diff summary if available
+      const diffText = snapshot.files[relativePath]?.diff;
+      if (diffText) {
+        const plusCount = diffText
+          .split('\n')
+          .filter((l) => /^\+[^+]/.test(l)).length;
+        const minusCount = diffText
+          .split('\n')
+          .filter((l) => /^-[^-]/.test(l)).length;
+        fileTooltip.appendMarkdown(
+          `**Diff:** +${plusCount}/-${minusCount} lines\n\n`,
+        );
+      }
       // Display change status clearly
       if (changeType === 'added')
         fileTooltip.appendMarkdown(
@@ -798,15 +829,13 @@ export class SnapshotTreeItem extends vscode.TreeItem {
         );
       }
       // Display notes
-      if (snapshot.notes)
-        snapshotTooltip.appendMarkdown(`**Notes:**\n\n${snapshot.notes}\n\n`);
-      // Indicate if selective
-      if (snapshot.isSelective)
-        snapshotTooltip.appendMarkdown(
-          `**Selective:** Includes ${
-            snapshot.selectedFiles?.length ?? 0
-          } specific file(s).\n\n`,
-        );
+      if (snapshot.notes) {
+        // Truncate notes preview to first two lines
+        const lines = snapshot.notes.split('\n');
+        const preview =
+          lines.slice(0, 2).join('\n') + (lines.length > 2 ? '\n...' : '');
+        snapshotTooltip.appendMarkdown(`**Notes:**\n\n${preview}\n\n`);
+      }
       // Show change summary
       const summary = snapshotManager.getSnapshotChangeSummary(snapshot.id); // Calculate summary once
       if (summary.added > 0 || summary.modified > 0 || summary.deleted > 0) {

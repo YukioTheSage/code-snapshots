@@ -4,6 +4,7 @@ import { SnapshotQuickPick } from './ui/quickPick'; // Import new QuickPick UI
 import { SnapshotTreeDataProvider, SnapshotType } from './ui/treeView';
 import { FilterStatusBar } from './ui/filterStatusBar';
 import { WelcomeView } from './ui/welcomeView';
+import { ConfigTreeDataProvider } from './ui/configTreeView';
 
 import { StatusBarController } from './statusBarController';
 import { EditorDecorator } from './editorDecorator'; // Import the new decorator
@@ -13,6 +14,9 @@ import { registerCommands, CommandDependencies } from './commands'; // Import th
 import { ChangeNotifier } from './changeNotifier'; // Import the new notifier class
 import { GitExtension, API as GitAPI } from './types/git.d'; // Import Git API types
 import { getGitAutoSnapshotEnabled } from './config'; // Import config helper
+import { CredentialsManager } from './services/credentialsManager';
+import { SemanticSearchService } from './services/semanticSearchService';
+import { SemanticSearchWebview } from './ui/semanticSearchWebview';
 
 // --- Snapshot Content Provider Removed ---
 // The class definition previously here has been moved to src/snapshotContentProvider.ts
@@ -142,6 +146,29 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     log('SnapshotContentProvider for diffs registered successfully');
 
+    const credentialsManager = new CredentialsManager(context);
+    const semanticSearchService = new SemanticSearchService(
+      snapshotManager,
+      credentialsManager,
+      context,
+    );
+    const semanticSearchWebview = new SemanticSearchWebview(
+      context,
+      semanticSearchService,
+    );
+    (snapshotManager as any).semanticSearchService = semanticSearchService;
+    context.subscriptions.push(semanticSearchService);
+
+    const config = vscode.workspace.getConfiguration('vscode-snapshots');
+    const autoIndex = config.get<boolean>('semanticSearch.autoIndex', false);
+    if (autoIndex) {
+      // Use setTimeout to not block extension activation
+      setTimeout(() => {
+        semanticSearchService.indexAllSnapshots().catch((error) => {
+          log(`Auto-indexing error: ${error}`);
+        });
+      }, 10000); // Wait 10 seconds after extension activation
+    }
     // --- Notification logic moved to src/changeNotifier.ts ---
 
     // Create dependencies object - Explicitly type it
@@ -153,6 +180,8 @@ export async function activate(context: vscode.ExtensionContext) {
       autoSnapshotTreeDataProvider, // Add the auto provider
       changeNotifier,
       gitApi,
+      semanticSearchService,
+      semanticSearchWebview,
     };
 
     // Register all commands using the new function
@@ -164,6 +193,15 @@ export async function activate(context: vscode.ExtensionContext) {
         statusBarController.dispose();
       },
     });
+
+    // Register Config Tree View for settings
+    const configTreeDataProvider = new ConfigTreeDataProvider(context);
+    context.subscriptions.push(
+      vscode.window.registerTreeDataProvider(
+        'configSettingsView',
+        configTreeDataProvider,
+      ),
+    );
 
     // --- Setup Git Command Interception ---
     setupGitCommandInterception(context, snapshotManager);
@@ -196,13 +234,28 @@ export async function activate(context: vscode.ExtensionContext) {
         autoSnapshotTimer = setInterval(async () => {
           try {
             log('Auto-snapshot triggered by timer');
-
-            // Create a descriptive timestamp
+            const lastIdx = snapshotManager.getCurrentSnapshotIndex();
+            if (lastIdx >= 0) {
+              const lastSnapshot = snapshotManager.getSnapshots()[lastIdx];
+              const workspaceRoot = snapshotManager.getWorkspaceRoot();
+              if (workspaceRoot) {
+                const changes = await snapshotManager.calculateRestoreChanges(
+                  lastSnapshot,
+                  workspaceRoot,
+                );
+                if (changes.length === 0) {
+                  log(
+                    'Skipping timer-based auto snapshot: no changes detected since last snapshot',
+                  );
+                  return;
+                }
+              }
+            }
+            // Take snapshot with enhanced context information
             const now = new Date();
             const formattedTime = now.toLocaleTimeString();
             const formattedDate = now.toLocaleDateString();
 
-            // Take snapshot with enhanced context information
             await snapshotManager.takeSnapshot(
               `Auto snapshot at ${formattedTime}`,
               {
@@ -344,19 +397,38 @@ function setupGitCommandInterception(
         const autoSnapshotEnabled = getGitAutoSnapshotEnabled(); // Use config helper
 
         if (autoSnapshotEnabled) {
-          log(`Intercepted Git command: ${commandId}. Taking auto-snapshot...`);
-          try {
-            // Take snapshot silently with a descriptive message
-            const description = `Auto-snapshot before ${commandId}`;
-            await snapshotManager.takeSnapshot(description); // Pass only description
-            log(`Auto-snapshot taken successfully before ${commandId}.`);
-          } catch (error: unknown) {
-            const errMsg =
-              error instanceof Error ? error.message : String(error);
-            log(`Failed to take auto-snapshot before ${commandId}: ${errMsg}`);
-            vscode.window.showWarningMessage(
-              `Failed to take automatic snapshot before ${commandId}. Proceeding with Git operation.`,
-            );
+          log(`Intercepted Git command: ${commandId}.`);
+          const lastIdx = snapshotManager.getCurrentSnapshotIndex();
+          let shouldSnapshot = true;
+          if (lastIdx >= 0) {
+            const lastSnapshot = snapshotManager.getSnapshots()[lastIdx];
+            const { added, modified, deleted } =
+              snapshotManager.getSnapshotChangeSummary(lastSnapshot.id);
+            if (added + modified + deleted === 0) {
+              shouldSnapshot = false;
+              log(
+                'Skipping git-based auto snapshot: no changes detected since last snapshot',
+              );
+            }
+          }
+          if (shouldSnapshot) {
+            try {
+              // Take snapshot silently with a descriptive message
+              const description = `Auto-snapshot before ${commandId}`;
+              await snapshotManager.takeSnapshot(description, {
+                tags: ['auto', 'git', commandId],
+              }); // Mark as auto for skip logic
+              log(`Auto-snapshot taken successfully before ${commandId}.`);
+            } catch (error: unknown) {
+              const errMsg =
+                error instanceof Error ? error.message : String(error);
+              log(
+                `Failed to take auto-snapshot before ${commandId}: ${errMsg}`,
+              );
+              vscode.window.showWarningMessage(
+                `Failed to take automatic snapshot before ${commandId}. Proceeding with Git operation.`,
+              );
+            }
           }
         } else {
           log(
@@ -384,5 +456,3 @@ function setupGitCommandInterception(
 }
 
 // --- End Helper Function ---
-////
-// sdsd

@@ -31,7 +31,7 @@
     "Other",
     "SCM Providers"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "activationEvents": [],
   "contributes": {
     "commands": [
@@ -154,6 +154,26 @@
         "command": "vscode-snapshots.focusAutoSnapshotView",
         "title": "Snapshots: Focus Auto Snapshots View",
         "icon": "$(pin)"
+      },
+      {
+        "command": "vscode-snapshots.indexForSemanticSearch",
+        "title": "Snapshots: Index All Snapshots for Search",
+        "icon": "$(database)"
+      },
+      {
+        "command": "vscode-snapshots.searchSnapshots",
+        "title": "Snapshots: Semantic Search",
+        "icon": "$(search)"
+      },
+      {
+        "command": "vscode-snapshots.showLogs",
+        "title": "Snapshots: Show Extension Logs",
+        "icon": "$(output)"
+      },
+      {
+        "command": "vscode-snapshots.editConfig",
+        "title": "Snapshots: Edit Setting",
+        "icon": "$(settings-gear)"
       }
     ],
     "configuration": {
@@ -245,6 +265,26 @@
           "type": "boolean",
           "default": true,
           "description": "Confirm before restoring snapshots"
+        },
+        "vscode-snapshots.semanticSearch.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable semantic code search across snapshots"
+        },
+        "vscode-snapshots.semanticSearch.chunkSize": {
+          "type": "number",
+          "default": 200,
+          "description": "Maximum token size for each code chunk"
+        },
+        "vscode-snapshots.semanticSearch.chunkOverlap": {
+          "type": "number",
+          "default": 50,
+          "description": "Overlap between adjacent chunks in tokens"
+        },
+        "vscode-snapshots.semanticSearch.autoIndex": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically index snapshots in the background"
         }
       }
     },
@@ -273,6 +313,11 @@
         "command": "vscode-snapshots.diagnostics",
         "key": "ctrl+alt+d",
         "mac": "cmd+alt+d"
+      },
+      {
+        "command": "vscode-snapshots.searchSnapshots",
+        "key": "ctrl+alt+shift+f",
+        "mac": "cmd+alt+shift+f"
       }
     ],
     "viewsContainers": {
@@ -296,6 +341,12 @@
           "id": "autoSnapshotHistoryView",
           "name": "Auto Snapshots",
           "icon": "$(clock)",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "configSettingsView",
+          "name": "Settings",
+          "icon": "$(settings-gear)",
           "when": "workspaceFolderCount > 0"
         }
       ]
@@ -468,6 +519,11 @@
           "command": "vscode-snapshots.gettingStarted",
           "when": "view == manualSnapshotHistoryView || view == autoSnapshotHistoryView",
           "group": "help@1"
+        },
+        {
+          "command": "vscode-snapshots.searchSnapshots",
+          "when": "view == manualSnapshotHistoryView || view == autoSnapshotHistoryView",
+          "group": "navigation@6"
         }
       ],
       "commandPalette": [
@@ -487,10 +543,14 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "vsce package",
+    "vscode:prepublish": "npm run esbuild-prod",
+    "compile": "npm run check-types && node esbuild.js",
+    "check-types": "tsc --noEmit",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "esbuild-prod": "npm run check-types && node esbuild.js --production",
+    "package": "npm run esbuild-prod && vsce package",
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\""
@@ -499,17 +559,24 @@
     "@types/diff": "^7.0.2",
     "@types/node": "14.x",
     "@types/vscode": "^1.60.0",
-    "typescript": "^4.3.2",
-    "vsce": "^2.15.0",
-    "eslint": "^8.0.0",
-    "@typescript-eslint/parser": "^5.0.0",
     "@typescript-eslint/eslint-plugin": "^5.0.0",
+    "@typescript-eslint/parser": "^5.0.0",
+    "esbuild": "^0.25.3",
+    "eslint": "^8.0.0",
     "eslint-config-prettier": "^8.0.0",
     "eslint-plugin-prettier": "^4.0.0",
-    "prettier": "^2.8.0"
+    "npm-run-all": "^4.1.5",
+    "prettier": "^2.8.0",
+    "typescript": "^4.3.2",
+    "vsce": "^2.15.0"
   },
   "dependencies": {
+    "@google/genai": "^0.10.0",
+    "@google/generative-ai": "^0.24.0",
+    "@pinecone-database/pinecone": "^5.1.2",
     "diff": "^5.0.0",
-    "minimatch": "^10.0.1"
+    "java-parser": "^2.3.3",
+    "minimatch": "^10.0.1",
+    "web-tree-sitter": "^0.25.3"
   }
 }

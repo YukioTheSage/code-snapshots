@@ -93,6 +93,62 @@ You can filter the snapshots shown in _each view independently_ using the icons 
 
 When filters are active, a **Filter Status Bar** item appears on the right side of the main status bar, indicating the number of active filters for that view (e.g., `$(filter) My Snapshots: 2 filters`). Clicking it runs the "Clear All Filters" command for that view.
 
+#### Semantic Search
+
+> ⚠️ **EXPERIMENTAL FEATURE**: Semantic search is currently an experimental feature. Use it at your own risk. The functionality may change or have limitations in future releases.
+
+CodeLapse offers powerful semantic search capabilities to find code across all your snapshots using natural language queries:
+
+1. Press `Ctrl+Alt+Shift+F` (or `Cmd+Alt+Shift+F` on Mac), or run the "Snapshots: Semantic Search" command from the Command Palette.
+2. A search interface will open in the editor area.
+3. Enter your natural language query (e.g., "find the login function that uses JWT" or "where is the database connection code").
+4. Optionally, use the filters to narrow your search:
+   - Date range
+   - Programming languages
+   - Specific snapshots
+   - Relevance threshold
+5. Click "Search" or press Enter.
+6. Results will display with:
+   - Highlighted code snippets with syntax highlighting
+   - Source file path and location
+
+##### Managing API Keys for Semantic Search
+
+> ⚠️ **EXPERIMENTAL FEATURE**: This API key management is part of the experimental semantic search feature. Use it at your own risk.
+
+Semantic search requires two API keys to function:
+
+- **Pinecone API Key**: Used for vector storage and retrieval
+- **Gemini API Key**: Used for semantic code analysis
+
+You can manage these keys directly from the Configuration tree view:
+
+1. Navigate to the Snapshot Explorer in the Activity Bar.
+2. Find the "Configuration" tree view (typically shown below the Snapshot views).
+3. Expand the "API Keys" section.
+4. Click on either "Pinecone API Key" or "Gemini API Key" to update it.
+5. Enter your API key in the secure input dialog that appears.
+6. The key will be securely stored and masked in the UI.
+
+Benefits of the new tree view interface for API key management:
+
+- Update keys at any time without needing to restart the extension
+- No need to wait for authentication errors to update keys
+- Clearly see which keys are set and which need to be configured
+- API keys are securely stored using VS Code's Secret Storage
+   - Snapshot details (timestamp, description)
+   - Relevance score
+   - Actions to open the file, compare with current version, or jump to the snapshot
+
+**First-time Setup**: On first use, you'll be prompted to provide API keys for the semantic search services:
+- Pinecone API Key (for vector database)
+- Gemini API Key (for embeddings)
+
+These keys are stored securely using VS Code's built-in SecretStorage. You can update them later using the "Snapshots: Configure Semantic Search" command.
+
+<!-- TODO: Add screenshot of the semantic search interface here -->
+![Semantic Search Interface Screenshot](images/semantic-search-interface.png)
+
 #### Navigating Between Snapshots
 
 You can restore your workspace to a previous state (snapshot):
@@ -287,6 +343,10 @@ Configure via VS Code Settings (`Ctrl+,`):
 | `vscode-snapshots.git.addCommitInfo`               | Store Git branch/commit hash with snapshots                      | `true`       |
 | `vscode-snapshots.git.commitFromSnapshotEnabled`   | Enable "Create Git Commit from Snapshot" command                 | `true`       |
 | `vscode-snapshots.git.autoSnapshotBeforeOperation` | Automatically snapshot before Git pull/merge/rebase (via VSCode) | `false`      |
+| `vscode-snapshots.semanticSearch.enabled`          | Enable semantic code search across snapshots                     | `true`       |
+| `vscode-snapshots.semanticSearch.chunkSize`        | Maximum token size for each code chunk                           | 200          |
+| `vscode-snapshots.semanticSearch.chunkOverlap`     | Overlap between adjacent chunks in tokens                        | 50           |
+| `vscode-snapshots.semanticSearch.autoIndex`        | Automatically index snapshots in the background                  | `false`      |
 
 ## Troubleshooting
 
@@ -295,6 +355,7 @@ Configure via VS Code Settings (`Ctrl+,`):
 - **Filtering Issues**: Ensure correct filter selection (Date, Tags, Favorites, File). Check filter status bar. Use "Clear All Filters". Tags are case-sensitive.
 - **Rule-based Auto-Snapshots Not Triggering**: Verify rule patterns and intervals in settings. Check Output panel for rule processing logs (enable verbose logging if needed). Ensure files are being saved if expecting save-triggered rules.
 - **Editor Decorators Not Showing**: Ensure you've taken at least one snapshot. Decorators show changes _since the last snapshot_. Check Output panel for errors.
+- **Semantic Search Not Working**: Verify API keys were entered correctly. Run the "Snapshots: Configure Semantic Search" command to update keys. Check the Output panel for any API error messages. Ensure snapshots are indexed by running "Snapshots: Index All Snapshots for Search" command. Make sure you have a stable internet connection for API calls.
 
 ## Tips and Best Practices
 

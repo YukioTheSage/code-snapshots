@@ -63,9 +63,6 @@ export class EditorDecorator implements vscode.Disposable {
             this.activeEditor &&
             event.document === this.activeEditor.document
           ) {
-            logVerbose(
-              'Decorator: Document changed, triggering debounced update.',
-            );
             this.triggerUpdateDecorations(true); // Use debounce
           }
         },
@@ -113,7 +110,6 @@ export class EditorDecorator implements vscode.Disposable {
     const workspaceRoot = this.snapshotManager.getWorkspaceRoot(); // Use public getter
 
     if (!workspaceRoot || document.uri.scheme !== 'file') {
-      logVerbose('Decorator: Not a file in workspace, clearing decorations.');
       this.clearDecorations(editor); // Clear decorations for non-workspace files
       return;
     }

@@ -1,10 +1,12 @@
 .vscode/**
 .vscode-test/**
-out/test/**
+out/**
 src/**
 .gitignore
 .gitattributes
 .yarnrc
+.eslintignore
+esbuild.js
 **/tsconfig.json
 **/.eslintrc.json
 **/*.map
@@ -15,3 +17,6 @@ combine_*
 combined_*
 gg.py
 scripts/**
+.github/**
+node_modules/**
+dist/**/*.map

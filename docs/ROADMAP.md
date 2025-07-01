@@ -10,7 +10,7 @@ This document outlines the future plans for the CodeLapse extension, emphasizing
 - **Immediate Value**: Features provide instant benefit to your coding.
 - **Fast Performance**: Quick operations that don't slow you down.
 
-## Current Status (v0.9.0 Features) - Feature Checklist
+## Current Status (v1.0.0 Features) - Feature Checklist
 
 CodeLapse already offers a robust set of features, categorized as follows:
 
@@ -36,6 +36,7 @@ CodeLapse already offers a robust set of features, categorized as follows:
 - [x] Efficient differential storage for text files
 - [x] Content Caching for faster diffs and restores
 - [x] Asynchronous file I/O for improved performance
+- [x] Smart code chunking for semantic search indexing ⚠️ **(Experimental)**
 
 #### Context & Organization:
 
@@ -44,6 +45,7 @@ CodeLapse already offers a robust set of features, categorized as follows:
 - [x] Filtering by Date, Tags, Favorites, File Path (View Title icons)
 - [x] Filter Status Bar indicator
 - [x] `.gitignore` / `.snapshotignore` support for file exclusion
+- [x] Semantic search across snapshots with natural language queries ⚠️ **(Experimental)**
 
 #### Git Integration:
 
@@ -55,22 +57,29 @@ CodeLapse already offers a robust set of features, categorized as follows:
 
 - [x] Welcome Experience / Tour / Getting Started command
 
+#### Security & Privacy:
+
+- [x] Secure API key storage using VS Code's SecretStorage API
+- [x] Credentials manager for handling API keys and sensitive data
+- [x] User prompts for required API credentials
+
 ## Roadmap Ahead
 
 We're planning improvements across three phases:
 
-### Short-Term: v1.0.0 - Production Ready & Polished
+### Short-Term: v1.0.0 - Production Ready & Polished (COMPLETED)
 
 - **Target Release:** Next stable release
 - **Focus:** Stability, bug fixes, performance, documentation, and minor UX tweaks.
 
 #### Documentation Improvements:
 
-- [ ] Finalize User Guide (`USER_GUIDE`)
-- [ ] Finalize Developer Guide (`DEVELOPER_GUIDE`)
-- [ ] Finalize Git Companion Guide (`GIT_COMPANION`)
-- [ ] Add more examples and screenshots to guides
-- [ ] Refine README
+- [x] Finalize User Guide (`USER_GUIDE`)
+- [x] Finalize Developer Guide (`DEVELOPER_GUIDE`)
+- [x] Finalize Git Companion Guide (`GIT_COMPANION`)
+- [x] Add more examples and screenshots to guides
+- [x] Refine README
+- [x] Add Semantic Roadmap (`SEMANTIC_ROADMAP`)
 
 #### Stability & Testing:
 
@@ -85,9 +94,9 @@ We're planning improvements across three phases:
 
 #### UX Refinements:
 
-- [ ] Improve clarity of notifications and prompts
-- [ ] Enhance tooltips for better context
-- [ ] Minor adjustments to Tree View appearance
+- [x] Improve clarity of notifications and prompts
+- [x] Enhance tooltips for better context: added total change summaries on groups, truncated notes and diff line counts in snapshot/file tooltips
+- [x] Minor adjustments to Tree View appearance: introduced filter-count badges, updated icons for manual/auto contexts, and refined indent/padding
 
 #### Filter Persistence:
 
@@ -106,8 +115,10 @@ We're planning improvements across three phases:
 
 #### Snapshot Search Features:
 
-- [ ] Search snapshots by description, notes, tags, task reference
-- [ ] Search snapshots by file content changes
+- [x] Search snapshots by description, notes, tags, task reference
+- [x] Search snapshots by file content changes
+- [x] Semantic code search using natural language queries (Phase 1-3 complete) ⚠️ **(Experimental)**
+- [ ] Semantic search optimization and advanced features (Phase 4) ⚠️ **(Experimental)**
 
 #### Improved Auto-Snapshot Triggers:
 

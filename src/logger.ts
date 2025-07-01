@@ -57,3 +57,9 @@ export function logVerbose(message: string, ...args: unknown[]): void {
 export function getOutputChannel(): vscode.OutputChannel | undefined {
   return outputChannel;
 }
+
+export function showOutputChannel(): void {
+  if (outputChannel) {
+    outputChannel.show();
+  }
+}
