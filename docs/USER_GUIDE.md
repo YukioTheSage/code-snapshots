@@ -11,10 +11,18 @@ CodeLapse is a lightweight companion to Git that focuses on your personal develo
 3. Open a workspace folder you want to take snapshots in. The extension primarily works at the workspace level.
 4. The extension activates automatically. You should see a history icon (`$(history)`) and snapshot status in the bottom-left status bar.
 
-<!-- TODO: Add screenshot of the status bar indicator here -->
-![Status Bar Indicator Screenshot](images/status-bar-indicator.png)
 
 No complex setup or initialization (`git init`-like command) is required.
+
+### First-Time Setup
+
+When you first open a workspace with CodeLapse, you may see a welcome message offering to take a tour of the extension. This guided tour will walk you through:
+
+1. Taking your first snapshot (`Ctrl+Alt+S` or `Cmd+Alt+S` on Mac)
+2. Viewing snapshots in the CodeLapse sidebar (Activity Bar)
+3. Navigating between snapshots
+
+You can always access this tour later using the "Snapshots: Getting Started" command from the Command Palette.
 
 ### Basic Usage
 
@@ -24,8 +32,6 @@ No complex setup or initialization (`git init`-like command) is required.
 2. Press `Ctrl+Alt+S` (or `Cmd+Alt+S` on Mac), or run the "Snapshots: Take Snapshot" command from the Command Palette (`Ctrl+Shift+P`).
 3. You'll be prompted to select the type of snapshot:
 
-<!-- TODO: Add screenshot of the snapshot type Quick Pick here -->
-![Snapshot Type Quick Pick Screenshot](images/snapshot-type-quick-pick.png)
 
 - **Quick Snapshot**: Fastest option. Only asks for a brief description. Includes all non-ignored files.
 - **Detailed Snapshot**: Lets you add tags, notes, task references, and mark it as a favorite, in addition to the description. Includes all non-ignored files.
@@ -36,8 +42,6 @@ No complex setup or initialization (`git init`-like command) is required.
 - **Description**: (All types) Enter a brief summary (e.g., "Implemented login feature"). Press Enter.
 - **Select Files**: (Selective only) A multi-select list appears. Check the files/folders you want to include. Press Enter.
 
-<!-- TODO: Add screenshot of the selective snapshot file selection Quick Pick here -->
-![Selective Snapshot File Selection Screenshot](images/selective-snapshot-file-selection.png)
 - **Tags**: (Detailed/Selective) Enter comma-separated tags (e.g., `feature, login, wip`). Press Enter.
 - **Task Reference**: (Detailed/Selective) Enter an issue ID (e.g., `JIRA-123`, `GH-45`). Press Enter.
 - **Notes**: (Detailed/Selective) Enter longer notes about the snapshot. Press Enter.
@@ -48,17 +52,16 @@ No complex setup or initialization (`git init`-like command) is required.
 
 #### Viewing Snapshots (Snapshot Explorer)
 
-The main way to interact with your snapshots is through the **Snapshot Explorer** view in the Activity Bar (usually on the left, look for the history icon `$(history)`)).
+The main way to interact with your snapshots is through the **Snapshot Explorer** view in the Activity Bar (usually on the left, look for the history icon `$(history)`).
 
-<!-- TODO: Add screenshot of the Snapshot Explorer view here -->
-![Snapshot Explorer View Screenshot](images/snapshot-explorer-view.png)
 
-The Explorer has two main sections (tree views):
+The Explorer has three main sections (tree views):
 
 1. **My Snapshots**: Shows snapshots you created manually (Quick, Detailed, Selective).
 2. **Auto Snapshots**: Shows snapshots created automatically (Time-based, Rule-based, Git pre-operation).
+3. **Settings**: Provides quick access to configuration options and extension settings.
 
-Within each view:
+Within the snapshot views:
 
 - **Grouping**: Snapshots are grouped by relative time (Today, Yesterday, This Week, etc.). Groups are collapsible.
 - **Snapshot Items**:
@@ -70,20 +73,42 @@ Within each view:
 - Other snapshot icons (`$(history)`) are color-coded based on the number of changes relative to the previous snapshot (Subtle -> Blue -> Yellow -> Red).
 - **Expanding Snapshots**: Click the arrow next to a snapshot's time to see the files included in it.
 
-<!-- TODO: Add screenshot of an expanded snapshot showing files here -->
-![Expanded Snapshot Screenshot](images/expanded-snapshot.png)
 
 - **File Items**:
 - Show the filename and relative directory.
 - Icons indicate if the file was **added** (`$(diff-added)`), **modified** (`$(diff-modified)`), or **deleted** (`$(diff-removed)`) _in that specific snapshot_ compared to the previous one. Unchanged files have a standard file icon.
 - (You can toggle between showing _only changed_ files or _all_ files via the `vscode-snapshots.showOnlyChangedFiles` setting or the "Toggle Changed Files View" command).
 
+#### Settings View
+
+The **Settings** view in the Snapshot Explorer provides quick access to all CodeLapse configuration options, organized by category:
+
+**General Settings:**
+- **Snapshot Location**: Configure where snapshots are stored
+- **Max Snapshots**: Set the maximum number of snapshots to keep
+- **Auto Snapshot Interval**: Configure time-based auto-snapshots (in minutes)
+- **Enable Logging**: Toggle extension logging for troubleshooting
+- **Enable Verbose Logging**: Toggle detailed debug logging
+- **Auto Snapshot Before Git Operations**: Automatically snapshot before Git operations
+- **Auto Snapshot Rules**: Configure file-pattern-based auto-snapshot rules
+- **Show Only Changed Files**: Toggle between showing all files or only changed files in snapshots
+
+**UX Settings:**
+- **Show Welcome On Startup**: Control whether the welcome message appears for new users
+- **Show Keyboard Shortcut Hints**: Toggle display of keyboard shortcut hints and tips
+- **Use Animations**: Enable/disable smooth animations for transitions
+- **Confirm Restore Operations**: Control whether confirmation is required before restoring snapshots
+
+**API Keys:** (for Semantic Search)
+- **Pinecone API Key**: Configure API key for vector database storage
+- **Gemini API Key**: Configure API key for semantic code analysis
+
+To modify any setting, simply click on it in the Settings view. The extension will prompt you with the appropriate input method (text input, boolean selection, etc.) and save your changes automatically.
+
 #### Filtering Snapshots
 
 You can filter the snapshots shown in _each view independently_ using the icons in the view's title bar:
 
-<!-- TODO: Add screenshot of the filter icons in the view title bar here -->
-![Filter Icons Screenshot](images/filter-icons.png)
 
 - **Filter by Date** (`$(calendar)`): Choose a time range (Last 24 Hours, Last 7 Days, etc.).
 - **Filter by Tags** (`$(tag)`): Select one or more tags from a list of tags used in your snapshots.
@@ -111,6 +136,9 @@ CodeLapse offers powerful semantic search capabilities to find code across all y
 6. Results will display with:
    - Highlighted code snippets with syntax highlighting
    - Source file path and location
+   - Snapshot details (timestamp, description)
+   - Relevance score
+   - Actions to open the file, compare with current version, or jump to the snapshot
 
 ##### Managing API Keys for Semantic Search
 
@@ -121,33 +149,26 @@ Semantic search requires two API keys to function:
 - **Pinecone API Key**: Used for vector storage and retrieval
 - **Gemini API Key**: Used for semantic code analysis
 
-You can manage these keys directly from the Configuration tree view:
+You can manage these keys directly from the Settings view in the Snapshot Explorer:
 
 1. Navigate to the Snapshot Explorer in the Activity Bar.
-2. Find the "Configuration" tree view (typically shown below the Snapshot views).
+2. Expand the "Settings" view.
 3. Expand the "API Keys" section.
 4. Click on either "Pinecone API Key" or "Gemini API Key" to update it.
 5. Enter your API key in the secure input dialog that appears.
 6. The key will be securely stored and masked in the UI.
 
-Benefits of the new tree view interface for API key management:
+Benefits of the Settings view interface for API key management:
 
 - Update keys at any time without needing to restart the extension
 - No need to wait for authentication errors to update keys
 - Clearly see which keys are set and which need to be configured
 - API keys are securely stored using VS Code's Secret Storage
-   - Snapshot details (timestamp, description)
-   - Relevance score
-   - Actions to open the file, compare with current version, or jump to the snapshot
 
-**First-time Setup**: On first use, you'll be prompted to provide API keys for the semantic search services:
-- Pinecone API Key (for vector database)
-- Gemini API Key (for embeddings)
+**First-time Setup**: On first use, you'll be prompted to provide API keys for the semantic search services. These keys are stored securely using VS Code's built-in SecretStorage.
 
-These keys are stored securely using VS Code's built-in SecretStorage. You can update them later using the "Snapshots: Configure Semantic Search" command.
+**Indexing**: Before using semantic search, you need to index your snapshots. Use the "Snapshots: Index All Snapshots for Search" command to build the search index. This process analyzes your code and creates searchable embeddings.
 
-<!-- TODO: Add screenshot of the semantic search interface here -->
-![Semantic Search Interface Screenshot](images/semantic-search-interface.png)
 
 #### Navigating Between Snapshots
 
@@ -163,18 +184,13 @@ You can restore your workspace to a previous state (snapshot):
 - Select a snapshot from the list. It will be restored.
 
 **Restore Process**:
-**Restore Process**:
 
 1. **Preview**: Before restoring, a Quick Pick shows a summary of files to be Added (`+`), Modified (`~`), or Deleted (`-`). Files with unsaved changes are marked (`*`).
 
-<!-- TODO: Add screenshot of the Snapshot Preview Quick Pick here -->
-![Snapshot Preview Quick Pick Screenshot](images/snapshot-preview-quick-pick.png)
 
 2. **Confirm**: Select "Restore Snapshot" to proceed or "Cancel".
 3. **Conflict Check**: If restoring would overwrite unsaved changes, you'll get a final prompt:
 
-<!-- TODO: Add screenshot of the Conflict Resolution dialog here -->
-![Conflict Resolution Dialog Screenshot](images/conflict-resolution-dialog.png)
 
 - "Restore (Overwrite Unsaved)": Discards unsaved changes in conflicting files.
 - "Take Snapshot & Restore": Saves current state (including unsaved changes) first, then restores.
@@ -189,8 +205,6 @@ You can restore your workspace to a previous state (snapshot):
 - Right-click a file item -> **Compare File with Workspace**.
 - Opens a diff view showing changes between the snapshot version and your current file.
 
-<!-- TODO: Add screenshot of a diff view here -->
-![Diff View Screenshot](images/diff-view.png)
 
 - **Clicking Snapshot Node**: Clicking the main snapshot item (the time entry) in the Tree View opens a Quick Pick showing only the files _changed_ in that snapshot. Selecting a file from this list directly opens the diff view.
 
@@ -220,9 +234,6 @@ You can modify the tags, notes, task reference, or favorite status after a snaps
 
 As you modify files after taking a snapshot, colored bars appear in the editor's gutter (left of line numbers):
 
-<!-- TODO: Add screenshot of editor gutter change indicators here -->
-![Editor Gutter Indicators Screenshot](images/editor-gutter-indicators.png)
-
 - **Green Bar**: Line added since the _last_ snapshot.
 - **Blue Bar**: Line modified since the _last_ snapshot.
 
@@ -240,9 +251,11 @@ The main status bar item (bottom-left) shows: `$(history) <Time Ago> | <Current/
 - `<Current/Total>`: Index of the currently restored snapshot and total count (e.g., `3/10`), or just the total count if viewing the latest workspace state (e.g., `10 Snapshots`).
 - Clicking it opens the "View Snapshots" Quick Pick. Hovering shows more details.
 
-#### Diagnostics
+#### Diagnostics and Logging
 
 Run "Snapshots: Run Diagnostics" (`Ctrl+Alt+D`) to check extension status and log details to the Output panel (select "CodeLapse" in the dropdown).
+
+For more detailed troubleshooting, use "Snapshots: Show Extension Logs" to view comprehensive log information directly.
 
 ## Automatic Snapshots
 
@@ -250,8 +263,8 @@ Run "Snapshots: Run Diagnostics" (`Ctrl+Alt+D`) to check extension status and lo
 
 Configure snapshots to be taken automatically at regular intervals:
 
-1. Go to Settings (`Ctrl+,`).
-2. Search for `snapshot interval`.
+1. Go to Settings (`Ctrl+,`) or use the Settings view in the Snapshot Explorer.
+2. Search for `snapshot interval` or find "Auto Snapshot Interval (min)" in the Settings view.
 3. Set `CodeLapse: Auto Snapshot Interval` to a number of minutes (e.g., `30`).
 4. Set to `0` to disable.
 5. These appear in the "Auto Snapshots" view.
@@ -260,24 +273,42 @@ Configure snapshots to be taken automatically at regular intervals:
 
 Define rules to automatically snapshot specific files or patterns when they change:
 
-1. Run the command "Snapshots: Manage Auto-Snapshot Rules".
-2. Choose "Add New Rule".
-3. Enter a **file pattern** (glob syntax, e.g., `src/**/*.ts`, `config/*.json`).
-4. Enter the minimum **interval in minutes** between snapshots for this pattern (e.g., `15`).
+#### Using the Auto-Snapshot Rules UI
 
-**How it works:**
+1. Run the command "Snapshots: Manage Auto-Snapshot Rules" or click the gear icon in the Auto Snapshots view title bar.
+2. Choose from the following options:
+
+**Add New Rule:**
+- Select "Add New Rule"
+- Enter a **file pattern** (glob syntax, e.g., `src/**/*.ts`, `config/*.json`)
+- Enter the minimum **interval in minutes** between snapshots for this pattern (e.g., `15`)
+
+**Edit Rules:**
+- Select "Edit Rules"
+- Choose an existing rule from the list
+- Modify the file pattern or interval as needed
+
+**Delete Rules:**
+- Select "Delete Rules"  
+- Choose rules to remove from the list
+
+**View All Rules:**
+- Select "View All Rules"
+- See all configured auto-snapshot rules with their patterns and intervals
+
+#### How Rule-Based Auto-Snapshots Work
 
 - **On Save:** When you save a file matching a rule's pattern, if the specified interval has passed since the _last auto-snapshot for that specific rule_, a new selective snapshot (including all files matching the pattern) is taken.
 - **Periodic Check:** The extension also checks rules periodically (approx. every minute). If the interval has passed for a rule, it takes a selective snapshot for that pattern.
 - These snapshots appear in the "Auto Snapshots" view and are tagged `auto`, `rule-based`, etc.
-- Use the "Manage Auto-Snapshot Rules" command to view, edit, or delete existing rules. Rules are stored in your workspace settings (`settings.json`).
+- Rules are stored in your workspace settings (`settings.json`).
 
 ### Auto-Snapshot Before Git Operations
 
 As a safety net, you can enable automatic snapshots before certain Git operations:
 
-1. Go to Settings (`Ctrl+,`).
-2. Search for `snapshot git operation`.
+1. Go to Settings (`Ctrl+,`) or use the Settings view in the Snapshot Explorer.
+2. Search for `snapshot git operation` or find "Auto Snapshot Before Git Operations" in the Settings view.
 3. Enable `CodeLapse › Git: Auto Snapshot Before Operation`.
 4. When enabled, a snapshot is automatically taken before `git pull`, `git merge`, or `git rebase` executed via VS Code. These appear in the "Auto Snapshots" view.
 
@@ -327,9 +358,23 @@ CodeLapse automatically excludes:
 
 Use `.snapshotignore` (same format as `.gitignore`) in your workspace root for snapshot-specific exclusions.
 
+## Additional Commands
+
+### Navigation Commands
+
+- **Focus My Snapshots View**: Brings the My Snapshots view into focus in the sidebar
+- **Focus Auto Snapshots View**: Brings the Auto Snapshots view into focus in the sidebar
+- **Jump to Snapshot**: Quickly jump to a specific snapshot by selection
+
+### Help and Information
+
+- **Getting Started**: Access the guided tour of CodeLapse features anytime
+- **Show Extension Logs**: View detailed extension logs for troubleshooting
+- **Run Diagnostics**: Comprehensive system check and diagnostic information
+
 ## Settings Reference
 
-Configure via VS Code Settings (`Ctrl+,`):
+Configure via VS Code Settings (`Ctrl+,`) or through the Settings view in the Snapshot Explorer:
 
 | Setting                                            | Description                                                      | Default      |
 | :------------------------------------------------- | :--------------------------------------------------------------- | :----------- |
@@ -343,6 +388,10 @@ Configure via VS Code Settings (`Ctrl+,`):
 | `vscode-snapshots.git.addCommitInfo`               | Store Git branch/commit hash with snapshots                      | `true`       |
 | `vscode-snapshots.git.commitFromSnapshotEnabled`   | Enable "Create Git Commit from Snapshot" command                 | `true`       |
 | `vscode-snapshots.git.autoSnapshotBeforeOperation` | Automatically snapshot before Git pull/merge/rebase (via VSCode) | `false`      |
+| `vscode-snapshots.ux.showWelcomeOnStartup`         | Show welcome message for first-time users                        | `true`       |
+| `vscode-snapshots.ux.showKeyboardShortcutHints`    | Show keyboard shortcut hints and tips                           | `true`       |
+| `vscode-snapshots.ux.useAnimations`                | Use animations for smoother transitions                         | `true`       |
+| `vscode-snapshots.ux.confirmRestoreOperations`     | Confirm before restoring snapshots                              | `true`       |
 | `vscode-snapshots.semanticSearch.enabled`          | Enable semantic code search across snapshots                     | `true`       |
 | `vscode-snapshots.semanticSearch.chunkSize`        | Maximum token size for each code chunk                           | 200          |
 | `vscode-snapshots.semanticSearch.chunkOverlap`     | Overlap between adjacent chunks in tokens                        | 50           |
@@ -355,7 +404,8 @@ Configure via VS Code Settings (`Ctrl+,`):
 - **Filtering Issues**: Ensure correct filter selection (Date, Tags, Favorites, File). Check filter status bar. Use "Clear All Filters". Tags are case-sensitive.
 - **Rule-based Auto-Snapshots Not Triggering**: Verify rule patterns and intervals in settings. Check Output panel for rule processing logs (enable verbose logging if needed). Ensure files are being saved if expecting save-triggered rules.
 - **Editor Decorators Not Showing**: Ensure you've taken at least one snapshot. Decorators show changes _since the last snapshot_. Check Output panel for errors.
-- **Semantic Search Not Working**: Verify API keys were entered correctly. Run the "Snapshots: Configure Semantic Search" command to update keys. Check the Output panel for any API error messages. Ensure snapshots are indexed by running "Snapshots: Index All Snapshots for Search" command. Make sure you have a stable internet connection for API calls.
+- **Semantic Search Not Working**: Verify API keys were entered correctly using the Settings view. Check the Output panel for any API error messages. Ensure snapshots are indexed by running "Snapshots: Index All Snapshots for Search" command. Make sure you have a stable internet connection for API calls.
+- **Settings View Not Loading**: Restart VS Code if the Settings view appears empty or doesn't respond to clicks. Check the Output panel for configuration errors.
 
 ## Tips and Best Practices
 
@@ -367,14 +417,17 @@ Configure via VS Code Settings (`Ctrl+,`):
 - Use selective snapshots for focused changes.
 - Clean up old/unneeded snapshots periodically.
 - Combine Snapshots with Git for a robust workflow (see [Git Companion Guide](GIT_COMPANION.md)).
+- Take advantage of the Settings view for quick configuration changes.
+- Use the Getting Started tour to familiarize new team members with CodeLapse.
 
 ## Getting Help
 
-1. Run "Snapshots: Run Diagnostics".
-2. Check the Output panel ("CodeLapse" channel).
+1. Run "Snapshots: Run Diagnostics" (`Ctrl+Alt+D`).
+2. Check the Output panel ("CodeLapse" channel) or use "Snapshots: Show Extension Logs".
 3. Review this User Guide and the [Git Companion Guide](GIT_COMPANION.md).
-4. Check the extension's GitHub repository for known issues.
-5. Report bugs or request features via GitHub Issues.
+4. Use the "Snapshots: Getting Started" command for a guided tour.
+5. Check the extension's GitHub repository for known issues.
+6. Report bugs or request features via GitHub Issues.
 
 ## Future Updates
 

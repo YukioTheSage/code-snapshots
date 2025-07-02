@@ -6,9 +6,6 @@ This document provides technical details, architecture information, and contribu
 
 CodeLapse follows a modular architecture with several key components designed for separation of concerns (core logic vs. UI vs. storage) and asynchronous operation:
 
-<!-- TODO: Add a high-level architecture diagram here (e.g., using Mermaid) -->
-
-![Architecture Diagram](images/architecture-diagram.png)
 
 ### Key Components
 
@@ -180,9 +177,6 @@ Snapshots are stored in the `.snapshots` directory (configurable via `vscode-sna
   └── ...
 ```
 
-<!-- TODO: Add a diagram illustrating the storage structure here -->
-
-![Storage Structure Diagram](images/storage-structure-diagram.png)
 
 The `index.json` file contains a summary for quick loading:
 
@@ -288,7 +282,6 @@ The extension uses several techniques to manage storage and performance:
 17. Emit `onDidChangeSnapshots` event.
 18. Return the created `Snapshot` object.
 
-<!-- TODO: Add a diagram or more detailed explanation of the Snapshot Creation Algorithm here -->
 
 ### Snapshot Restoration Algorithm (`commands.ts` / `SnapshotManager.applySnapshotRestore`)
 
@@ -315,7 +308,6 @@ The extension uses several techniques to manage storage and performance:
 10. **Restore Editor State:** Command handler calls `restoreEditorViewStates`.
 11. **Show Progress/Completion UI:** Command handler manages `vscode.window.withProgress` and shows final success/error messages.
 
-<!-- TODO: Add a diagram or more detailed explanation of the Snapshot Restoration Algorithm here -->
 
 ### File Content Resolution (`SnapshotStorage.getSnapshotFileContent`)
 
@@ -331,7 +323,6 @@ The extension uses several techniques to manage storage and performance:
 6.  If none of the above conditions match (e.g., `content` is explicitly `null` with no `baseSnapshotId`), cache and return `null`.
 7.  Update cache before returning. Implement cache eviction if size limit exceeded.
 
-<!-- TODO: Add a diagram or more detailed explanation of the File Content Resolution Algorithm here -->
 
 ### File Exclusion Logic (`GitignoreParser`, `SnapshotManager.takeSnapshot`)
 
