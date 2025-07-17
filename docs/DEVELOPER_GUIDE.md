@@ -1,165 +1,224 @@
 # CodeLapse - Developer Guide
 
-This document provides technical details, architecture information, and contribution guidelines for the CodeLapse VS Code extension. It's intended for developers who want to understand, modify, or extend the extension.
+Welcome to the CodeLapse developer documentation! This comprehensive guide will help you understand, contribute to, and extend the CodeLapse VS Code extension.
+
+## Quick Start for Contributors
+
+### Prerequisites
+
+- **Node.js**: Version 16.x or higher (check `engines` in `package.json`)
+- **npm**: Version 8.x or higher
+- **VS Code**: Version 1.75.0 or higher
+- **Git**: For version control and contribution workflow
+
+### Development Setup
+
+1. **Clone and Install**
+   ```bash
+   git clone https://github.com/YukioTheSage/code-snapshots.git
+   cd code-snapshots
+   npm install
+   ```
+
+2. **Open in VS Code**
+   ```bash
+   code .
+   ```
+
+3. **Start Development**
+   - Press `F5` to launch Extension Development Host
+   - Make changes in `src/` directory
+   - Use `Ctrl+R` in Extension Development Host to reload changes
+   - Use `Ctrl+Shift+I` to open Developer Tools for debugging
+
+### Build and Test
+
+```bash
+# Type checking
+npm run check-types
+
+# Build for development
+npm run compile
+
+# Build for production
+npm run esbuild-prod
+
+# Watch mode (recommended for development)
+npm run watch
+
+# Linting
+npm run lint
+npm run lint:fix
+
+# Formatting
+npm run format
+
+# Package extension
+npm run package
+```
 
 ## Architecture Overview
 
-CodeLapse follows a modular architecture with several key components designed for separation of concerns (core logic vs. UI vs. storage) and asynchronous operation:
+CodeLapse follows a **layered, event-driven architecture** with clear separation of concerns:
 
+```mermaid
+graph TB
+    subgraph "UI Layer"
+        A[Commands & Menus] --> B[Tree Views]
+        A --> C[Quick Pick]
+        A --> D[Status Bar]
+        A --> E[Webviews]
+    end
+    
+    subgraph "Business Logic Layer"
+        F[Snapshot Manager] --> G[Change Notifier]
+        F --> H[Editor Decorator]
+    end
+    
+    subgraph "Service Layer"
+        I[Snapshot Storage] --> J[Gitignore Parser]
+        I --> K[Diff Engine]
+        L[Semantic Search] --> M[Vector Database]
+        L --> N[Embedding Service]
+    end
+    
+    subgraph "Infrastructure Layer"
+        O[Configuration] --> P[Logger]
+        O --> Q[Credentials Manager]
+        R[File System] --> S[VS Code API]
+    end
+    
+    A --> F
+    F --> I
+    I --> R
+    L --> Q
+```
 
-### Key Components
+### Core Design Principles
 
-1.  **Extension Entrypoint** (`extension.ts`)
+1. **Separation of Concerns**: UI, business logic, and data access are clearly separated
+2. **Event-Driven**: Components communicate through events to maintain loose coupling
+3. **Asynchronous Operations**: All I/O operations are non-blocking
+4. **Extensibility**: Plugin architecture allows for easy feature additions
+5. **Security First**: Sensitive data is handled through secure storage mechanisms
 
-    - Handles extension activation/deactivation.
-    - Attempts to activate and retrieve the built-in Git extension API.
-    - Initializes core components (`SnapshotManager`, `SnapshotStorage`, `ChangeNotifier`, UI elements, `EditorDecorator`, etc.).
-    - Initializes the `CredentialsManager` with the extension context to enable secure storage of sensitive data like API keys.
-    - Coordinates the registration of commands by calling `registerCommands`, passing dependencies including the Git API.
-    - Sets up Git command interception for auto-snapshots (if configured).
-    - Initializes semantic search services if enabled.
-    - Manages global disposables and initial welcome experience.
+## Detailed Architecture
 
-2.  **Command Registration & UI Flow** (`commands.ts`)
+### Core Components
 
-    - Centralized location for registering all VS Code commands exposed by the extension.
-    - Orchestrates UI interactions associated with commands (Quick Picks, Input Boxes, Progress Notifications, Confirmation Dialogs, Conflict Resolution).
-    - Calls appropriate methods on `SnapshotManager` or other services to execute actions (e.g., `takeSnapshot`, `applySnapshotRestore`).
-    - Handles Git API interactions for commands like "Create Git Commit from Snapshot".
-    - Manages editor state preservation/restoration during navigation.
+#### 1. Extension Entry Point (`extension.ts`)
+**Responsibility**: Bootstrap and lifecycle management
 
-3.  **Snapshot Manager** (`snapshotManager.ts`)
+```typescript
+// Key initialization pattern
+export async function activate(context: vscode.ExtensionContext) {
+    // 1. Initialize core services
+    const snapshotStorage = new SnapshotStorage(context);
+    const snapshotManager = new SnapshotManager(snapshotStorage, gitApi);
+    
+    // 2. Register UI components
+    const treeView = new SnapshotTreeView(snapshotManager);
+    
+    // 3. Register commands
+    registerCommands(context, snapshotManager, treeView);
+    
+    // 4. Setup event listeners
+    setupEventHandlers(snapshotManager, treeView);
+}
+```
 
-    - Core component responsible for snapshot state and logic (no direct UI interaction or file I/O).
-    - Accepts the Git API instance in its constructor.
-    - Manages the _in-memory_ list of snapshot metadata (`Snapshot[]`).
-    - Handles snapshot creation logic (ID/timestamp generation, calling `SnapshotStorage` for file filtering/reading/saving, fetching Git info).
-    - Handles snapshot restoration logic (`applySnapshotRestore`), delegating file operations to `SnapshotStorage`.
-    - Provides methods for navigation (`navigateToPreviousSnapshot`, `navigateToNextSnapshot`).
-    - Provides methods for calculating changes (`calculateRestoreChanges`).
-    - Provides snapshot data retrieval (`getSnapshots`, `getSnapshotById`). Delegates file content retrieval to `SnapshotStorage`.
-    - Handles snapshot deletion logic (delegating file deletion to `SnapshotStorage`).
-    - Enforces snapshot limits (delegating file deletion to `SnapshotStorage`).
-    - Handles snapshot context updates (delegating saving to `SnapshotStorage`).
-    - Emits events (`onDidChangeSnapshots`) when snapshots change.
+#### 2. Snapshot Manager (`snapshotManager.ts`)
+**Responsibility**: Core business logic for snapshot operations
 
-4.  **Snapshot Storage** (`snapshotStorage.ts`)
+**Key Methods**:
+- `takeSnapshot(options?)`: Creates new snapshots with optional context
+- `applySnapshotRestore(snapshotId)`: Restores workspace to snapshot state
+- `calculateRestoreChanges(snapshotId)`: Previews changes before restore
+- `deleteSnapshot(snapshotId)`: Removes snapshots and cleanup
 
-    - **Handles all direct asynchronous file system interactions** (using `fs.promises`).
-    - Manages reading/writing/deleting snapshot data (`snapshot.json`) and index files (`index.json`).
-    - Manages the physical storage structure in the `.snapshots` directory (configurable).
-    - Provides methods for reading workspace files (`readFileContent`) and writing them during restore (`writeFileContent`), handling directory creation.
-    - Implements the core logic for retrieving snapshot file content (`getSnapshotFileContent`), recursively applying diffs by calling itself.
-    - Implements content caching (`contentCache`) for `getSnapshotFileContent`.
-    - Detects binary files (by extension and content sampling) and handles them appropriately.
-    - Provides snapshot recovery mechanisms (`recoverSnapshotsFromFileSystem`) if the index is missing/corrupt.
+**Event System**:
+```typescript
+// Emits events for UI updates
+onDidChangeSnapshots: vscode.Event<void>
+```
 
-5.  **Snapshot Tree View** (`ui/treeView.ts`)
+#### 3. Snapshot Storage (`snapshotStorage.ts`)
+**Responsibility**: Data persistence and file system operations
 
-    - Implements the `TreeDataProvider` interface for the sidebar views ("My Snapshots", "Auto Snapshots").
-    - Displays the list of snapshots (filtered by type: MANUAL or AUTO) and changed files within them.
-    - Handles user interactions within the tree view (e.g., context menu actions, click actions).
-    - Manages its _own_ filter state (by date, tags, favorites, file patterns) per view instance.
-    - Groups snapshots by time periods (Today, Yesterday, This Week, etc.).
-    - Determines display labels, icons, tooltips, and context values for tree items.
+**Storage Strategy**:
+- **Differential Storage**: Only changes are stored after first version
+- **Content Caching**: In-memory cache for resolved file content
+- **Binary Detection**: Automatic detection and handling of binary files
+- **Recovery Mechanisms**: Automatic recovery from corrupted indexes
 
-6.  **Snapshot Quick Pick** (`ui/quickPick.ts`)
+#### 4. UI Components
 
-    - Renders the quick pick UI (`vscode.window.showQuickPick`) for selecting snapshots via the "View Snapshots" command.
-    - Handles the selection process and triggers the `jumpToSnapshot` command internally upon selection.
-    - Displays enhanced metadata including change summaries and Git information.
+**Tree View** (`ui/treeView.ts`):
+- Implements `vscode.TreeDataProvider`
+- Supports filtering by date, tags, favorites, and files
+- Provides context menus and inline actions
 
-7.  **Status Bar Controller** (`statusBarController.ts`)
+**Quick Pick** (`ui/quickPick.ts`):
+- Snapshot selection interface
+- Enhanced metadata display
+- Keyboard navigation support
 
-    - Manages the main status bar indicator (left side).
-    - Updates UI based on current snapshot state (last snapshot time, current index/total).
-    - Handles status bar click interactions (e.g., running view snapshots command).
-    - Shows time elapsed since last snapshot and position information.
+**Status Bar** (`statusBarController.ts`):
+- Real-time snapshot status
+- Click-to-action functionality
+- Progress indicators
 
-8.  **Gitignore Parser** (`gitignoreParser.ts`)
+### Service Layer
 
-    - Handles file exclusion logic based on `.gitignore` and `.snapshotignore` (latter takes precedence).
-    - Parses ignore files and converts patterns to glob format.
-    - Generates `exclude` and negated glob patterns suitable for `vscode.workspace.findFiles`.
+#### Semantic Search Services (Experimental)
+> ⚠️ **EXPERIMENTAL**: These services are under active development
 
-9.  **Change Notifier** (`changeNotifier.ts`)
+- **Code Chunker** (`services/codeChunker.ts`): Language-aware code splitting
+- **Vector Database** (`services/vectorDatabaseService.ts`): Pinecone integration
+- **Embedding Service** (`services/embeddingService.ts`): Gemini API integration
+- **Search Orchestration** (`services/semanticSearchService.ts`): Query processing
 
-    - Monitors file saves and snapshot creation times.
-    - Prompts the user (via timed notification) to take a snapshot if significant changes have occurred since the last one.
-    - Handles **Rule-based Auto-Snapshots**:
-      - Periodically checks configured rules (`vscode-snapshots.autoSnapshot.rules`).
-      - Triggers time-based auto-snapshots for matching patterns if the interval has passed.
-      - Triggers save-based auto-snapshots for matching patterns if the interval has passed.
-      - Manages its own state and timers for rules and notifications.
+#### Security Services
+- **Credentials Manager** (`services/credentialsManager.ts`): Secure API key storage
+- Uses VS Code's `SecretStorage` API
+- Never stores sensitive data in plaintext
 
-10. **Snapshot Content Provider** (`snapshotContentProvider.ts`)
+### Data Models
 
-    - Implements `TextDocumentContentProvider`.
-    - Provides content for custom `snapshot-diff:` URIs used in diff views.
-    - Enables VS Code's diff view to show snapshot file content by resolving content via `SnapshotStorage.getSnapshotFileContent`.
+#### Snapshot Structure
+```typescript
+interface Snapshot {
+    id: string;                    // Unique identifier
+    timestamp: number;             // Creation time
+    description?: string;          // User description
+    gitBranch?: string;           // Git context
+    gitCommitHash?: string;       // Git context
+    tags?: string[];              // User tags
+    notes?: string;               // Extended notes
+    taskReference?: string;       // External task reference
+    isFavorite?: boolean;         // User favorite flag
+    isSelective?: boolean;        // Partial snapshot flag
+    selectedFiles?: string[];     // Files in selective snapshot
+    files: { [path: string]: FileData };
+}
 
-11. **Editor Decorator** (`editorDecorator.ts`)
+interface FileData {
+    content?: string;             // Full content (first occurrence)
+    diff?: string;               // Diff from base
+    baseSnapshotId?: string;     // Reference to base snapshot
+    deleted?: boolean;           // Deletion marker
+    isBinary?: boolean;          // Binary file marker
+}
+```
 
-    - Adds visual indicators (colored bars) in the editor gutter for lines changed since the _last_ snapshot.
-    - Uses different theme colors to indicate added vs. modified lines.
-    - Updates dynamically (debounced) as changes are made to files.
-    - Listens for snapshot changes to update decorations.
-
-12. **Snapshot Context Input** (`ui/snapshotContextInput.ts`)
-
-    - Handles the multi-step input process (`showQuickPick`, `showInputBox`) for collecting enhanced snapshot context when taking a snapshot.
-    - Provides UI flow for Quick, Detailed, and Selective snapshot creation.
-    - Collects metadata like description, tags, notes, task references, and favorite status.
-    - Manages file selection UI (multi-select Quick Pick) for Selective Snapshots.
-
-13. **Filter Status Bar** (`ui/filterStatusBar.ts`)
-
-    - Manages the status bar indicator showing active filters (right side).
-    - Displays count of active filters and filter descriptions for a specific Tree View instance.
-    - Provides quick access (click action) to the `clearAllFilters` command.
-    - Updates dynamically when the associated TreeDataProvider's filters change.
-
-14. **Auto Snapshot Rules UI** (`ui/autoSnapshotRulesUI.ts`)
-
-    - Provides command-driven UI (`showQuickPick`, `showInputBox`) for managing file-specific auto-snapshot rules stored in configuration.
-    - Allows adding, editing, viewing, and deleting rules.
-    - Validates rule inputs (patterns and intervals).
-    - Handles saving rules to VS Code configuration (`workspace.getConfiguration().update`).
-
-15. **Configuration** (`config.ts`)
-
-    - Provides helper functions to access extension settings from `vscode.workspace.getConfiguration`.
-
-16. **Utilities** (`snapshotDiff.ts`, `utils/pathMatching.ts`, `logger.ts`)
-
-    - `snapshotDiff`: Uses the `diff` library to create and apply patches.
-    - `pathMatching`: Helper function using `minimatch` for flexible path/pattern comparison.
-    - `logger`: Centralized logging utility with verbosity levels controlled by configuration.
-
-17. **Security** (`services/credentialsManager.ts`)
-
-    - **CredentialsManager**: Manages secure storage of sensitive information like API keys using VS Code's SecretStorage API.
-    - Provides methods to securely store and retrieve API keys for external services (e.g., Pinecone, Gemini).
-    - Handles prompting users for credentials when needed.
-    - Ensures sensitive data is never stored in plaintext or version control.
-    - Methods include:
-      - `getPineconeApiKey()`: Retrieves the stored Pinecone API key.
-      - `setFPineconeApiKey(apiKey)`: Securely stores the Pinecone API key.
-      - `getGeminiApiKey()`: Retrieves the stored Gemini API key.
-      - `setGeminiApiKey(apiKey)`: Securely stores the Gemini API key.
-      - `hasCredentials()`: Checks if all required credentials are set.
-      - `promptForCredentials()`: Interactive method to collect and store credentials from the user.
-
-18. **Semantic Search Services**
-
-    > ⚠️ **EXPERIMENTAL FEATURE**: Semantic search services are currently experimental features. Use them at your own risk. The functionality may change or have limitations in future releases.
-
-    - **Credentials Manager** (`services/credentialsManager.ts`): Securely stores and retrieves API keys using VS Code's SecretStorage.
-    - **Code Chunker** (`services/codeChunker.ts`): Intelligently splits code files into semantic chunks based on language structure.
-    - **Vector Database Service** (`services/vectorDatabaseService.ts`): Manages interactions with Pinecone for vector storage and retrieval.
-    - **Embedding Service** (`services/embeddingService.ts`): Handles the creation of embeddings using Gemini API.
-    - **Semantic Search Service** (`services/semanticSearchService.ts`): Orchestrates the search process, from query to results.
-    - **Semantic Search Webview** (`ui/semanticSearchWebview.ts`): Provides a rich interface for semantic search and results visualization.
+#### Storage Format
+```
+.snapshots/
+├── index.json              # Master index
+├── snapshot-{timestamp}-{hash}/
+│   └── snapshot.json       # Full snapshot data
+└── ...
+```
 
 ## Data Storage
 
@@ -851,3 +910,649 @@ The snapshot filtering system allows users to narrow down the displayed snapshot
 10. The `FilterStatusBar` associated with the affected provider(s) also receives the `onDidChangeTreeData` event and updates its display based on the provider's new filter state.
 
 This design ensures that each view (Manual/Auto) can have independent filters, while providing a unified command interface and clear status indication.
+
+## Coding Guidelines and Best Practices
+
+### TypeScript Standards
+
+#### Type Safety
+```typescript
+// ✅ Good - Use specific types
+interface SnapshotOptions {
+    description?: string;
+    tags?: string[];
+    isSelective?: boolean;
+    selectedFiles?: string[];
+}
+
+// ❌ Avoid - Generic types
+function takeSnapshot(options: any): Promise<any>
+
+// ✅ Good - Specific return types
+function takeSnapshot(options: SnapshotOptions): Promise<Snapshot>
+```
+
+#### Error Handling
+```typescript
+// ✅ Good - Comprehensive error handling
+async function saveSnapshot(snapshot: Snapshot): Promise<void> {
+    try {
+        await this.storage.saveSnapshotData(snapshot);
+        this.logger.info(`Snapshot ${snapshot.id} saved successfully`);
+    } catch (error) {
+        this.logger.error(`Failed to save snapshot: ${error.message}`);
+        throw new Error(`Snapshot save failed: ${error.message}`);
+    }
+}
+
+// ❌ Avoid - Silent failures
+async function saveSnapshot(snapshot: Snapshot): Promise<void> {
+    this.storage.saveSnapshotData(snapshot).catch(() => {});
+}
+```
+
+#### Async/Await Patterns
+```typescript
+// ✅ Good - Proper async handling
+async function processFiles(files: vscode.Uri[]): Promise<ProcessedFile[]> {
+    const results = await Promise.all(
+        files.map(async (file) => {
+            const content = await vscode.workspace.fs.readFile(file);
+            return { uri: file, content: content.toString() };
+        })
+    );
+    return results;
+}
+
+// ❌ Avoid - Mixed promise patterns
+function processFiles(files: vscode.Uri[]): Promise<ProcessedFile[]> {
+    return new Promise((resolve) => {
+        files.forEach(async (file) => {
+            const content = await vscode.workspace.fs.readFile(file);
+            // This won't work as expected
+        });
+    });
+}
+```
+
+### Architecture Patterns
+
+#### Dependency Injection
+```typescript
+// ✅ Good - Constructor injection
+export class SnapshotManager {
+    constructor(
+        private storage: SnapshotStorage,
+        private gitApi?: GitAPI,
+        private logger: Logger = new Logger()
+    ) {}
+}
+
+// ❌ Avoid - Hard dependencies
+export class SnapshotManager {
+    private storage = new SnapshotStorage();
+    private gitApi = vscode.extensions.getExtension('vscode.git')?.exports;
+}
+```
+
+#### Event-Driven Communication
+```typescript
+// ✅ Good - Use VS Code's event system
+export class SnapshotManager {
+    private _onDidChangeSnapshots = new vscode.EventEmitter<void>();
+    readonly onDidChangeSnapshots = this._onDidChangeSnapshots.event;
+
+    private notifySnapshotsChanged(): void {
+        this._onDidChangeSnapshots.fire();
+    }
+}
+```
+
+#### Separation of Concerns
+```typescript
+// ✅ Good - Clear responsibilities
+class SnapshotManager {
+    // Only business logic
+    async takeSnapshot(options: SnapshotOptions): Promise<Snapshot> {
+        const snapshot = this.createSnapshotMetadata(options);
+        await this.storage.saveSnapshot(snapshot);
+        return snapshot;
+    }
+}
+
+class SnapshotStorage {
+    // Only data persistence
+    async saveSnapshot(snapshot: Snapshot): Promise<void> {
+        await fs.writeFile(this.getSnapshotPath(snapshot.id), JSON.stringify(snapshot));
+    }
+}
+```
+
+### Performance Best Practices
+
+#### Efficient File Operations
+```typescript
+// ✅ Good - Batch operations
+async function readMultipleFiles(uris: vscode.Uri[]): Promise<Map<string, string>> {
+    const results = new Map<string, string>();
+    const operations = uris.map(async (uri) => {
+        try {
+            const content = await vscode.workspace.fs.readFile(uri);
+            results.set(uri.fsPath, content.toString());
+        } catch (error) {
+            // Handle individual file errors
+        }
+    });
+    
+    await Promise.all(operations);
+    return results;
+}
+
+// ❌ Avoid - Sequential operations
+async function readMultipleFiles(uris: vscode.Uri[]): Promise<Map<string, string>> {
+    const results = new Map<string, string>();
+    for (const uri of uris) {
+        const content = await vscode.workspace.fs.readFile(uri);
+        results.set(uri.fsPath, content.toString());
+    }
+    return results;
+}
+```
+
+#### Memory Management
+```typescript
+// ✅ Good - Implement caching with limits
+class ContentCache {
+    private cache = new Map<string, string>();
+    private readonly maxSize = 100;
+
+    set(key: string, value: string): void {
+        if (this.cache.size >= this.maxSize) {
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+        this.cache.set(key, value);
+    }
+}
+```
+
+### Security Guidelines
+
+#### Secure Credential Storage
+```typescript
+// ✅ Good - Use VS Code's SecretStorage
+export class CredentialsManager {
+    constructor(private context: vscode.ExtensionContext) {}
+
+    async storeApiKey(service: string, apiKey: string): Promise<void> {
+        await this.context.secrets.store(`${service}.apiKey`, apiKey);
+    }
+
+    async getApiKey(service: string): Promise<string | undefined> {
+        return await this.context.secrets.get(`${service}.apiKey`);
+    }
+}
+
+// ❌ Avoid - Plain text storage
+const config = vscode.workspace.getConfiguration();
+config.update('apiKey', 'secret-key'); // Never do this!
+```
+
+#### Input Validation
+```typescript
+// ✅ Good - Validate all inputs
+function validateSnapshotId(id: string): boolean {
+    const pattern = /^snapshot-\d+-[a-f0-9]+$/;
+    return pattern.test(id) && id.length < 100;
+}
+
+async function getSnapshot(id: string): Promise<Snapshot | null> {
+    if (!validateSnapshotId(id)) {
+        throw new Error('Invalid snapshot ID format');
+    }
+    // Proceed with retrieval
+}
+```
+
+## Contribution Workflow
+
+### Getting Started
+
+1. **Fork the Repository**
+   ```bash
+   # Fork on GitHub, then clone your fork
+   git clone https://github.com/YOUR_USERNAME/code-snapshots.git
+   cd code-snapshots
+   ```
+
+2. **Set Up Development Environment**
+   ```bash
+   npm install
+   npm run watch  # Start development build
+   ```
+
+3. **Create Feature Branch**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+### Development Process
+
+#### Before Making Changes
+1. **Check existing issues** - Look for related issues or discussions
+2. **Create an issue** - For new features or significant changes
+3. **Discuss approach** - Get feedback on your planned implementation
+
+#### Making Changes
+1. **Follow coding standards** - Use ESLint and Prettier configurations
+2. **Write tests** - Add unit tests for new functionality
+3. **Update documentation** - Keep docs in sync with code changes
+4. **Test thoroughly** - Test in Extension Development Host
+
+#### Code Review Checklist
+- [ ] Code follows TypeScript best practices
+- [ ] All new code has appropriate tests
+- [ ] Documentation is updated
+- [ ] No breaking changes (or properly documented)
+- [ ] Performance impact considered
+- [ ] Security implications reviewed
+- [ ] Accessibility requirements met
+
+### Submitting Changes
+
+#### Pull Request Guidelines
+1. **Clear title and description**
+   - Use conventional commit format: `feat:`, `fix:`, `docs:`, etc.
+   - Explain what changes and why
+   - Reference related issues
+
+2. **Small, focused PRs**
+   - One feature or fix per PR
+   - Keep changes reviewable (< 500 lines when possible)
+
+3. **Complete PR template**
+   ```markdown
+   ## Description
+   Brief description of changes
+
+   ## Type of Change
+   - [ ] Bug fix
+   - [ ] New feature
+   - [ ] Breaking change
+   - [ ] Documentation update
+
+   ## Testing
+   - [ ] Unit tests added/updated
+   - [ ] Manual testing completed
+   - [ ] Extension tested in development host
+
+   ## Checklist
+   - [ ] Code follows style guidelines
+   - [ ] Self-review completed
+   - [ ] Documentation updated
+   ```
+
+#### Review Process
+1. **Automated checks** - CI/CD pipeline runs tests and linting
+2. **Maintainer review** - Core team reviews code and approach
+3. **Community feedback** - Other contributors may provide input
+4. **Iteration** - Address feedback and update PR
+5. **Merge** - Approved PRs are merged by maintainers
+
+### Release Process
+
+#### Version Management
+- Follow [Semantic Versioning](https://semver.org/)
+- `MAJOR.MINOR.PATCH` format
+- Breaking changes increment MAJOR
+- New features increment MINOR
+- Bug fixes increment PATCH
+
+#### Release Checklist
+1. **Update version** in `package.json`
+2. **Update CHANGELOG.md** with release notes
+3. **Create release tag** with version number
+4. **Publish to VS Code Marketplace**
+5. **Create GitHub release** with release notes
+
+## Extension Points and API
+
+### Public Extension API
+
+CodeLapse exposes a public API for other extensions to integrate with:
+
+```typescript
+// Get the CodeLapse API
+const codeLapseExtension = vscode.extensions.getExtension('YukioTheSage.vscode-snapshots');
+const codeLapseApi = await codeLapseExtension?.activate();
+
+// Available API methods
+interface CodeLapseAPI {
+    // Snapshot operations
+    takeSnapshot(options?: SnapshotOptions): Promise<Snapshot>;
+    getSnapshots(): Promise<Snapshot[]>;
+    getSnapshot(id: string): Promise<Snapshot | null>;
+    deleteSnapshot(id: string): Promise<boolean>;
+    
+    // Navigation
+    navigateToSnapshot(id: string): Promise<boolean>;
+    navigateToPrevious(): Promise<boolean>;
+    navigateToNext(): Promise<boolean>;
+    
+    // Events
+    onDidChangeSnapshots: vscode.Event<void>;
+    onDidNavigateSnapshot: vscode.Event<string>;
+}
+```
+
+### Extension Integration Examples
+
+#### Task Management Integration
+```typescript
+// Example: Automatically take snapshots when tasks are completed
+const taskExtension = vscode.extensions.getExtension('task-manager');
+const codeLapseApi = await getCodeLapseApi();
+
+taskExtension?.onTaskCompleted(async (task) => {
+    await codeLapseApi.takeSnapshot({
+        description: `Completed task: ${task.title}`,
+        tags: ['task-completion'],
+        taskReference: task.id
+    });
+});
+```
+
+#### Git Integration Enhancement
+```typescript
+// Example: Enhanced Git workflow with snapshots
+const gitExtension = vscode.extensions.getExtension('vscode.git');
+const codeLapseApi = await getCodeLapseApi();
+
+// Take snapshot before risky Git operations
+gitExtension?.onWillExecuteGitCommand(async (command) => {
+    if (['rebase', 'merge', 'reset'].includes(command.command)) {
+        await codeLapseApi.takeSnapshot({
+            description: `Before ${command.command}`,
+            tags: ['git-safety']
+        });
+    }
+});
+```
+
+### Custom Storage Backends
+
+Implement custom storage backends by extending the base storage interface:
+
+```typescript
+interface ISnapshotStorage {
+    saveSnapshot(snapshot: Snapshot): Promise<void>;
+    loadSnapshot(id: string): Promise<Snapshot | null>;
+    deleteSnapshot(id: string): Promise<boolean>;
+    listSnapshots(): Promise<SnapshotMetadata[]>;
+}
+
+// Example: Cloud storage backend
+class CloudSnapshotStorage implements ISnapshotStorage {
+    constructor(private cloudProvider: CloudProvider) {}
+    
+    async saveSnapshot(snapshot: Snapshot): Promise<void> {
+        await this.cloudProvider.upload(
+            `snapshots/${snapshot.id}.json`,
+            JSON.stringify(snapshot)
+        );
+    }
+    
+    // Implement other methods...
+}
+```
+
+### Custom UI Components
+
+Extend the UI with custom tree view providers:
+
+```typescript
+class CustomSnapshotTreeProvider implements vscode.TreeDataProvider<SnapshotTreeItem> {
+    constructor(private snapshotManager: SnapshotManager) {}
+    
+    getTreeItem(element: SnapshotTreeItem): vscode.TreeItem {
+        // Custom tree item rendering
+        return {
+            label: this.formatCustomLabel(element.snapshot),
+            iconPath: this.getCustomIcon(element.snapshot),
+            contextValue: 'customSnapshotItem'
+        };
+    }
+    
+    getChildren(element?: SnapshotTreeItem): Thenable<SnapshotTreeItem[]> {
+        // Custom grouping and filtering logic
+        return this.getCustomGroupedSnapshots();
+    }
+}
+```
+
+## Advanced Topics
+
+### Performance Optimization
+
+#### Large Repository Handling
+```typescript
+// Implement streaming for large files
+class StreamingSnapshotStorage extends SnapshotStorage {
+    async saveSnapshotStreaming(snapshot: Snapshot): Promise<void> {
+        const writeStream = fs.createWriteStream(this.getSnapshotPath(snapshot.id));
+        
+        // Stream large snapshot data
+        for (const [filePath, fileData] of Object.entries(snapshot.files)) {
+            if (this.isLargeFile(fileData)) {
+                await this.streamFileData(writeStream, filePath, fileData);
+            } else {
+                writeStream.write(JSON.stringify({ [filePath]: fileData }));
+            }
+        }
+        
+        writeStream.end();
+    }
+}
+```
+
+#### Memory-Efficient Diff Processing
+```typescript
+// Process diffs in chunks for large files
+class ChunkedDiffProcessor {
+    async createChunkedDiff(oldContent: string, newContent: string): Promise<string[]> {
+        const chunkSize = 10000; // Process in 10KB chunks
+        const chunks: string[] = [];
+        
+        for (let i = 0; i < Math.max(oldContent.length, newContent.length); i += chunkSize) {
+            const oldChunk = oldContent.slice(i, i + chunkSize);
+            const newChunk = newContent.slice(i, i + chunkSize);
+            const chunkDiff = createDiff(oldChunk, newChunk);
+            chunks.push(chunkDiff);
+        }
+        
+        return chunks;
+    }
+}
+```
+
+### Security Considerations
+
+#### Sensitive Data Protection
+```typescript
+// Implement content filtering for sensitive data
+class SecureSnapshotManager extends SnapshotManager {
+    private sensitivePatterns = [
+        /api[_-]?key[s]?\s*[:=]\s*['"][^'"]+['"]/gi,
+        /password[s]?\s*[:=]\s*['"][^'"]+['"]/gi,
+        /token[s]?\s*[:=]\s*['"][^'"]+['"]/gi
+    ];
+    
+    private sanitizeContent(content: string): string {
+        let sanitized = content;
+        for (const pattern of this.sensitivePatterns) {
+            sanitized = sanitized.replace(pattern, (match) => {
+                const [key, value] = match.split(/[:=]/);
+                return `${key}="[REDACTED]"`;
+            });
+        }
+        return sanitized;
+    }
+    
+    async takeSnapshot(options: SnapshotOptions): Promise<Snapshot> {
+        const snapshot = await super.takeSnapshot(options);
+        
+        // Sanitize all file content
+        for (const [filePath, fileData] of Object.entries(snapshot.files)) {
+            if (fileData.content) {
+                fileData.content = this.sanitizeContent(fileData.content);
+            }
+        }
+        
+        return snapshot;
+    }
+}
+```
+
+### Internationalization (i18n)
+
+#### Message Localization
+```typescript
+// Implement localized messages
+class LocalizedMessages {
+    private messages: { [key: string]: { [locale: string]: string } } = {
+        'snapshot.created': {
+            'en': 'Snapshot created successfully',
+            'es': 'Instantánea creada exitosamente',
+            'fr': 'Instantané créé avec succès'
+        }
+    };
+    
+    getMessage(key: string, locale: string = 'en'): string {
+        return this.messages[key]?.[locale] || this.messages[key]?.['en'] || key;
+    }
+}
+```
+
+## Troubleshooting Development Issues
+
+### Common Development Problems
+
+#### Extension Not Loading
+```bash
+# Check extension host logs
+# In VS Code: Help > Toggle Developer Tools > Console
+
+# Common issues:
+# 1. TypeScript compilation errors
+npm run check-types
+
+# 2. Missing dependencies
+npm install
+
+# 3. Activation event not triggered
+# Check package.json activationEvents
+```
+
+#### Performance Issues
+```typescript
+// Profile extension performance
+console.time('snapshot-creation');
+await snapshotManager.takeSnapshot();
+console.timeEnd('snapshot-creation');
+
+// Monitor memory usage
+const memUsage = process.memoryUsage();
+console.log('Memory usage:', memUsage);
+```
+
+#### Debugging Tips
+```typescript
+// Use VS Code's built-in debugging
+// 1. Set breakpoints in TypeScript source
+// 2. Press F5 to start debugging
+// 3. Use Debug Console for evaluation
+
+// Add comprehensive logging
+this.logger.debug('Taking snapshot with options:', options);
+this.logger.info(`Snapshot ${snapshot.id} created`);
+this.logger.error('Failed to create snapshot:', error);
+```
+
+### Testing Strategies
+
+#### Unit Testing Setup
+```typescript
+// Example test structure
+import * as assert from 'assert';
+import { SnapshotManager } from '../snapshotManager';
+import { MockSnapshotStorage } from './mocks/mockSnapshotStorage';
+
+suite('SnapshotManager Tests', () => {
+    let snapshotManager: SnapshotManager;
+    let mockStorage: MockSnapshotStorage;
+    
+    setup(() => {
+        mockStorage = new MockSnapshotStorage();
+        snapshotManager = new SnapshotManager(mockStorage);
+    });
+    
+    test('should create snapshot with correct metadata', async () => {
+        const options = { description: 'Test snapshot' };
+        const snapshot = await snapshotManager.takeSnapshot(options);
+        
+        assert.strictEqual(snapshot.description, 'Test snapshot');
+        assert.ok(snapshot.id.startsWith('snapshot-'));
+        assert.ok(snapshot.timestamp > 0);
+    });
+});
+```
+
+#### Integration Testing
+```typescript
+// Test with VS Code API
+import * as vscode from 'vscode';
+
+suite('Integration Tests', () => {
+    test('should register all commands', async () => {
+        const commands = await vscode.commands.getCommands();
+        const snapshotCommands = commands.filter(cmd => 
+            cmd.startsWith('vscode-snapshots.')
+        );
+        
+        assert.ok(snapshotCommands.length > 0);
+        assert.ok(snapshotCommands.includes('vscode-snapshots.takeSnapshot'));
+    });
+});
+```
+
+## Resources and References
+
+### Documentation
+- [VS Code Extension API](https://code.visualstudio.com/api)
+- [TypeScript Handbook](https://www.typescriptlang.org/docs/)
+- [Node.js Documentation](https://nodejs.org/docs/)
+
+### Tools and Libraries
+- [ESLint](https://eslint.org/) - Code linting
+- [Prettier](https://prettier.io/) - Code formatting
+- [Jest](https://jestjs.io/) - Testing framework
+- [esbuild](https://esbuild.github.io/) - Fast bundling
+
+### Community
+- [VS Code Extension Development Discord](https://discord.gg/vscode-dev)
+- [GitHub Discussions](https://github.com/YukioTheSage/code-snapshots/discussions)
+- [Stack Overflow](https://stackoverflow.com/questions/tagged/vscode-extensions)
+
+---
+
+## Getting Help
+
+If you encounter issues or have questions:
+
+1. **Check existing documentation** - Review this guide and user documentation
+2. **Search existing issues** - Look for similar problems on GitHub
+3. **Create detailed issue** - Provide reproduction steps and environment details
+4. **Join community discussions** - Engage with other contributors
+5. **Contact maintainers** - Reach out for complex architectural questions
+
+Thank you for contributing to CodeLapse! Your efforts help make development more fearless and productive for developers worldwide.

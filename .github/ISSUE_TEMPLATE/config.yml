@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-issue-config.json
+
+blank_issues_enabled: false
+contact_links:
+  - name: "📚 Documentation"
+    url: "https://github.com/YukioTheSage/code-snapshots/blob/main/README.md"
+    about: "Check our comprehensive documentation first"
+  - name: "💬 Discussions"
+    url: "https://github.com/YukioTheSage/code-snapshots/discussions"
+    about: "Ask questions and discuss ideas with the community"
+  - name: "🔍 Troubleshooting Guide"
+    url: "https://github.com/YukioTheSage/code-snapshots/blob/main/docs/TROUBLESHOOTING.md"
+    about: "Common issues and solutions"

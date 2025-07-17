@@ -17,6 +17,8 @@ import { getGitAutoSnapshotEnabled } from './config'; // Import config helper
 import { CredentialsManager } from './services/credentialsManager';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
+import { TerminalApiService } from './services/terminalApiService';
+import { CliConnectorService } from './services/cliConnectorService';
 
 // --- Snapshot Content Provider Removed ---
 // The class definition previously here has been moved to src/snapshotContentProvider.ts
@@ -159,6 +161,23 @@ export async function activate(context: vscode.ExtensionContext) {
     (snapshotManager as any).semanticSearchService = semanticSearchService;
     context.subscriptions.push(semanticSearchService);
 
+    // Initialize Terminal API Service
+    log('Initializing TerminalApiService...');
+    const terminalApiService = new TerminalApiService(
+      snapshotManager,
+      semanticSearchService,
+    );
+    log('TerminalApiService initialized successfully');
+
+    // Initialize CLI Connector Service
+    log('Initializing CliConnectorService...');
+    const cliConnectorService = new CliConnectorService(
+      terminalApiService,
+      context,
+    );
+    context.subscriptions.push(cliConnectorService);
+    log('CliConnectorService initialized successfully');
+
     const config = vscode.workspace.getConfiguration('vscode-snapshots');
     const autoIndex = config.get<boolean>('semanticSearch.autoIndex', false);
     if (autoIndex) {
@@ -186,6 +205,25 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Register all commands using the new function
     registerCommands(dependencies);
+
+    // Expose the API for external use
+    const api = {
+      snapshotManager,
+      terminalApi: terminalApiService,
+      // Legacy compatibility
+      getSnapshots: () => terminalApiService.getSnapshots(),
+      takeSnapshot: (options: any) => terminalApiService.takeSnapshot(options),
+      restoreSnapshot: (id: string, options?: any) =>
+        terminalApiService.restoreSnapshot(id, options),
+      deleteSnapshot: (id: string) => terminalApiService.deleteSnapshot(id),
+      searchSnapshots: (query: string, options?: any) =>
+        terminalApiService.searchSnapshots(query, options),
+    };
+
+    // Register the API command
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vscode-snapshots.getApi', () => api),
+    );
 
     // Register status bar controller for disposal
     context.subscriptions.push({

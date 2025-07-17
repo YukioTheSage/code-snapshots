@@ -10,9 +10,9 @@ This document outlines the future plans for the CodeLapse extension, emphasizing
 - **Immediate Value**: Features provide instant benefit to your coding.
 - **Fast Performance**: Quick operations that don't slow you down.
 
-## Current Status (v1.0.0 Features) - Feature Checklist
+## Current Status (v0.9.4 Features) - Feature Checklist
 
-CodeLapse already offers a robust set of features, categorized as follows:
+CodeLapse has evolved into a comprehensive snapshot management system with the following capabilities:
 
 #### Snapshot Basics:
 
@@ -63,11 +63,30 @@ CodeLapse already offers a robust set of features, categorized as follows:
 - [x] Credentials manager for handling API keys and sensitive data
 - [x] User prompts for required API credentials
 
+#### CLI & Automation:
+
+- [x] Comprehensive CLI tool (`codelapse-cli`) for terminal access
+- [x] JSON output mode for automation and AI agents
+- [x] Batch operations support
+- [x] Real-time event streaming (`codelapse watch`)
+- [x] Direct API access for maximum flexibility
+- [x] Safety protocols and error handling for AI agents
+- [x] CI/CD integration examples and templates
+
+#### Developer Experience:
+
+- [x] Comprehensive documentation suite (User Guide, Developer Guide, Git Companion)
+- [x] AI agent integration guide with safety protocols
+- [x] Troubleshooting guide with common scenarios
+- [x] Style guide for consistent documentation
+- [x] API reference documentation
+- [x] Multiple integration examples (GitHub Actions, Jenkins, etc.)
+
 ## Roadmap Ahead
 
-We're planning improvements across three phases:
+We're planning improvements across four phases:
 
-### Short-Term: v1.0.0 - Production Ready & Polished (COMPLETED)
+### Immediate: v1.0.0 - Production Ready & Polished (IN PROGRESS)
 
 - **Target Release:** Next stable release
 - **Focus:** Stability, bug fixes, performance, documentation, and minor UX tweaks.
@@ -84,13 +103,19 @@ We're planning improvements across three phases:
 #### Stability & Testing:
 
 - [ ] Address known bugs from issue tracker
+- [ ] Fix semantic search webview "Compare with Current" functionality
+- [ ] Resolve TODO items in codebase (file filtering logic extraction, editor refresh optimization)
+- [ ] Fix BUGFIX items in snapshot deletion detection logic
 - [ ] Increase test coverage (storage, manager logic)
 - [ ] Thoroughly test with large workspaces and diverse file types
+- [ ] Add comprehensive CLI testing suite
 
 #### Performance Tuning:
 
 - [ ] Profile snapshot creation and restoration
 - [ ] Optimize file filtering and diff application
+- [ ] Improve semantic search indexing performance
+- [ ] Optimize memory usage during large workspace operations
 
 #### UX Refinements:
 
@@ -135,6 +160,36 @@ We're planning improvements across three phases:
 - [ ] More granular control over ignored files/directories beyond gitignore
 - [ ] Workspace-level configuration overrides
 
+### Near-Term: v1.1 - CLI & Integration Maturity
+
+- **Target Release:** 1-2 months post-v1.0
+- **Focus:** Mature the CLI ecosystem and improve integrations.
+
+#### CLI Enhancements:
+
+- [ ] Add comprehensive test suite for CLI
+- [ ] Improve error handling and recovery mechanisms
+- [ ] Add more batch operation templates
+- [ ] Enhance real-time monitoring capabilities
+- [ ] Add CLI configuration management
+- [ ] Improve performance for large workspaces
+
+#### Integration Improvements:
+
+- [ ] Add more CI/CD platform examples (Azure DevOps, GitLab CI, etc.)
+- [ ] Create VS Code extension pack for common workflows
+- [ ] Improve Git hooks integration
+- [ ] Add webhook support for external integrations
+- [ ] Create Docker container for CLI usage
+
+#### AI Agent Ecosystem:
+
+- [ ] Expand AI agent safety protocols
+- [ ] Add more automation templates
+- [ ] Create agent certification/validation tools
+- [ ] Improve batch operation error recovery
+- [ ] Add agent usage analytics and monitoring
+
 ### Long-Term: v2.0+ - Advanced Features (Optional & Simple)
 
 - **Target Release:** 6+ months post-v1.0
@@ -168,6 +223,62 @@ To keep CodeLapse simple and Git-friendly, we will **not** build features like:
 3.  **History Rewriting**: No rebasing, squashing, or amending snapshots. Snapshots are immutable.
 4.  **Complex Git Operations**: No replication of advanced Git commands. Focus is on leveraging Git info and convenient transitions (like commit creation).
 5.  **External Database Backend**: Storage will remain file-system based for simplicity and portability.
+
+## Current Challenges & Technical Debt
+
+Based on code analysis, these areas need attention:
+
+#### Code Quality & Maintenance:
+
+- [ ] Extract repeated file filtering logic into reusable methods
+- [ ] Optimize editor refresh mechanisms (currently marked as TODO)
+- [ ] Resolve debug logging scattered throughout codebase
+- [ ] Clean up experimental feature flags and warnings
+- [ ] Standardize error handling patterns across services
+
+#### Semantic Search Stability ⚠️ **(Experimental)**:
+
+- [ ] Fix webview comparison functionality
+- [ ] Improve API key validation and error messages
+- [ ] Add comprehensive fallback mechanisms for service outages
+- [ ] Optimize vector database query performance
+- [ ] Add proper cleanup for failed indexing operations
+
+#### CLI Robustness:
+
+- [ ] Add comprehensive error recovery for batch operations
+- [ ] Improve connection stability and retry mechanisms
+- [ ] Add validation for all JSON responses
+- [ ] Enhance timeout handling for large operations
+- [ ] Add proper cleanup for interrupted processes
+
+## Emerging Priorities
+
+New priorities identified through usage and feedback:
+
+#### Enterprise & Security:
+
+- [ ] Add audit logging for compliance requirements
+- [ ] Implement workspace-level security policies
+- [ ] Add support for corporate proxy configurations
+- [ ] Create enterprise deployment guides
+- [ ] Add GDPR compliance documentation
+
+#### Developer Productivity:
+
+- [ ] Add snapshot templates for common scenarios
+- [ ] Implement smart snapshot naming suggestions
+- [ ] Add bulk operations for snapshot management
+- [ ] Create snapshot analytics and insights
+- [ ] Add integration with popular task management tools
+
+#### Performance & Scalability:
+
+- [ ] Add progressive loading for large snapshot lists
+- [ ] Implement background cleanup of old snapshots
+- [ ] Add compression options for storage optimization
+- [ ] Optimize diff calculation for large files
+- [ ] Add memory usage monitoring and alerts
 
 ## Open Source & Community Driven
 

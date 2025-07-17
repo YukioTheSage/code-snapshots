@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { promises as fsPromises } from 'fs';
+import { promises as fsPromises, existsSync } from 'fs';
 import * as path from 'path';
 import { log, logVerbose } from './logger';
 import { Snapshot } from './snapshotManager';
@@ -29,10 +29,88 @@ export class SnapshotStorage {
     });
   }
 
+  /**
+   * Find the actual project root by looking for project indicators
+   * This handles cases where VSCode workspace is detected as a subdirectory
+   */
+  private findProjectRoot(startPath: string): string {
+    let currentDir = startPath;
+    const maxLevels = 5; // Prevent infinite traversal
+    let level = 0;
+
+    while (level < maxLevels) {
+      log(`Checking project root indicators in: ${currentDir}`);
+
+      // Check for project indicators
+      const indicators = [
+        'package.json',
+        '.git',
+        '.snapshots',
+        'src',
+        'tsconfig.json',
+        '.gitignore',
+      ];
+
+      let indicatorCount = 0;
+      for (const indicator of indicators) {
+        const indicatorPath = path.join(currentDir, indicator);
+        if (existsSync(indicatorPath)) {
+          indicatorCount++;
+          logVerbose(`Found project indicator: ${indicator} in ${currentDir}`);
+        }
+      }
+
+      // If we found multiple indicators, this is likely the project root
+      if (indicatorCount >= 3) {
+        log(
+          `Detected project root: ${currentDir} (${indicatorCount} indicators)`,
+        );
+        return currentDir;
+      }
+
+      // Check if we have a .snapshots directory with snapshots
+      const snapshotsDir = path.join(currentDir, '.snapshots');
+      if (existsSync(snapshotsDir)) {
+        try {
+          const indexFile = path.join(snapshotsDir, 'index.json');
+          if (existsSync(indexFile)) {
+            log(`Found existing snapshots in: ${currentDir}`);
+            return currentDir;
+          }
+        } catch (error) {
+          // Ignore errors reading snapshot index
+        }
+      }
+
+      // Move to parent directory
+      const parentDir = path.dirname(currentDir);
+      if (parentDir === currentDir) {
+        // Reached filesystem root
+        break;
+      }
+
+      currentDir = parentDir;
+      level++;
+    }
+
+    log(`Could not find project root, using original path: ${startPath}`);
+    return startPath;
+  }
+
   private initializeStoragePath() {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (workspaceFolder) {
-      this.workspaceRoot = workspaceFolder.uri.fsPath;
+      const detectedWorkspace = workspaceFolder.uri.fsPath;
+
+      // Find the actual project root
+      this.workspaceRoot = this.findProjectRoot(detectedWorkspace);
+
+      if (this.workspaceRoot !== detectedWorkspace) {
+        log(
+          `Workspace detection correction: ${detectedWorkspace} -> ${this.workspaceRoot}`,
+        );
+      }
+
       const snapshotLocationRelative = getSnapshotLocation();
       this.snapshotDirectory = path.join(
         this.workspaceRoot,

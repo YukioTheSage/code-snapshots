@@ -1,0 +1,66 @@
+{
+  "name": "codelapse-cli",
+  "version": "1.0.1",
+  "description": "Command-line interface for CodeLapse VSCode extension",
+  "main": "dist/cli.js",
+  "bin": {
+    "codelapse": "dist/cli.js",
+    "cl": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "prepublish": "npm run build"
+  },
+  "keywords": [
+    "vscode",
+    "snapshot",
+    "cli",
+    "terminal",
+    "ai-tools",
+    "version-control",
+    "git",
+    "github",
+    "codelapse",
+    "codelapse-cli",
+    "codelapse cli"
+  ],
+  "homepage": "https://github.com/YukioTheSage/code-snapshots",
+  "bugs": {
+    "url": "https://github.com/YukioTheSage/code-snapshots/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YukioTheSage/code-snapshots.git"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "author": "YukioTheSage",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.0.0",
+    "chalk": "^4.1.2",
+    "ora": "^5.4.1",
+    "inquirer": "^8.2.0",
+    "ws": "^8.14.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "@types/inquirer": "^8.2.0",
+    "typescript": "^5.0.0",
+    "jest": "^29.0.0",
+    "@types/jest": "^29.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md"
+  ]
+} 

@@ -20,3 +20,7 @@ scripts/**
 .github/**
 node_modules/**
 dist/**/*.map
+cli/**
+.cursor/**
+GEMINI.md
+.kiro

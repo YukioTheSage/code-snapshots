@@ -2,27 +2,171 @@
 
 CodeLapse is a lightweight companion to Git that focuses on your personal development workflow. This extension allows you to take point-in-time snapshots of your code and easily navigate between them, providing a frictionless safety net alongside traditional version control systems.
 
-## Getting Started
+## Table of Contents
 
-### Installation
+- [Quick Start Guide](#quick-start-guide)
+- [Core Features](#core-features)
+  - [Snapshot Management](#snapshot-management)
+  - [Navigation & Restoration](#navigation--restoration)
+  - [File Comparison & Recovery](#file-comparison--recovery)
+  - [Automatic Snapshots](#automatic-snapshots)
+  - [Semantic Search](#semantic-search)
+- [Common Tasks](#common-tasks)
+  - [Taking Your First Snapshot](#taking-your-first-snapshot)
+  - [Finding and Restoring Code](#finding-and-restoring-code)
+  - [Managing Snapshot History](#managing-snapshot-history)
+  - [Setting Up Automation](#setting-up-automation)
+- [Advanced Features](#advanced-features)
+- [Configuration Reference](#configuration-reference)
+- [Troubleshooting Guide](#troubleshooting-guide)
+  - [Common Issues](#common-issues)
+  - [Performance Problems](#performance-problems)
+  - [Configuration Issues](#configuration-issues)
+  - [Getting Help](#getting-help)
+- [Integration with Git](#integration-with-git)
+- [Best Practices](#best-practices)
+- [Quick Reference](#quick-reference)
 
-1. Install the "CodeLapse" extension from the VS Code Marketplace.
-2. Reload VS Code when prompted.
-3. Open a workspace folder you want to take snapshots in. The extension primarily works at the workspace level.
-4. The extension activates automatically. You should see a history icon (`$(history)`) and snapshot status in the bottom-left status bar.
+## Quick Start Guide
 
+**New to CodeLapse? Start here for a 5-minute setup:**
 
-No complex setup or initialization (`git init`-like command) is required.
+1. **Install**: Get "CodeLapse" from VS Code Marketplace
+2. **Open**: Open any workspace folder
+3. **Snapshot**: Press `Ctrl+Alt+S` (or `Cmd+Alt+S` on Mac)
+4. **View**: Click the history icon (📜) in the Activity Bar
+5. **Navigate**: Use `Ctrl+Alt+B` (Back) and `Ctrl+Alt+N` (Next) to move between snapshots
 
-### First-Time Setup
+> 💡 **First Time?** Run "Snapshots: Getting Started" from Command Palette for a guided tour
 
-When you first open a workspace with CodeLapse, you may see a welcome message offering to take a tour of the extension. This guided tour will walk you through:
+## Core Features
 
-1. Taking your first snapshot (`Ctrl+Alt+S` or `Cmd+Alt+S` on Mac)
-2. Viewing snapshots in the CodeLapse sidebar (Activity Bar)
-3. Navigating between snapshots
+### Snapshot Management
+CodeLapse provides three types of snapshots to match your workflow:
 
-You can always access this tour later using the "Snapshots: Getting Started" command from the Command Palette.
+- **Quick Snapshot** (`Ctrl+Alt+S`): Fastest option for capturing your current state with just a description
+- **Detailed Snapshot**: Includes tags, notes, task references, and favorite marking for better organization
+- **Selective Snapshot**: Choose specific files to include, perfect for focused changes
+
+**Key Benefits:**
+- Differential storage saves disk space by only storing changes
+- Respects `.gitignore` and `.snapshotignore` for clean snapshots
+- Automatic exclusion of binary files and common build directories
+
+### Navigation & Restoration
+Move through your development history with ease:
+
+- **Keyboard Navigation**: `Ctrl+Alt+B` (Back) and `Ctrl+Alt+N` (Next)
+- **Visual Timeline**: Browse snapshots in the Snapshot Explorer with time-based grouping
+- **Quick Restore**: Preview changes before restoring with conflict detection
+- **Safe Restoration**: Option to snapshot current state before restoring
+
+### File Comparison & Recovery
+Compare and recover individual files or entire snapshots:
+
+- **Diff View**: Compare any file version with your current workspace
+- **Single File Restore**: Recover just the files you need
+- **Change Indicators**: Visual gutter indicators show modifications since last snapshot
+- **Conflict Resolution**: Smart handling of unsaved changes during restoration
+
+### Automatic Snapshots
+Set up automated safety nets for your development workflow:
+
+- **Time-Based**: Automatic snapshots at regular intervals
+- **Rule-Based**: Pattern-matching rules for specific file types or directories
+- **Git Integration**: Automatic snapshots before Git operations (pull, merge, rebase)
+
+### Semantic Search
+> ⚠️ **EXPERIMENTAL FEATURE** - See [security warnings](#semantic-search) below
+
+Find code across all snapshots using natural language queries:
+- Natural language search (e.g., "find login function with JWT")
+- Cross-snapshot code discovery
+- Relevance scoring and filtering
+- Direct navigation to found code
+
+## Common Tasks
+
+### Taking Your First Snapshot
+
+**Scenario**: You've just implemented a new feature and want to save your progress.
+
+1. **Quick Method**: Press `Ctrl+Alt+S` (or `Cmd+Alt+S` on Mac)
+2. **Choose Snapshot Type**: Select "Quick Snapshot" for fastest capture
+3. **Add Description**: Enter something meaningful like "Implemented user authentication"
+4. **Confirm**: Press Enter to save
+
+**Result**: Your snapshot appears in the Snapshot Explorer, and the status bar updates to show the new snapshot count.
+
+**Pro Tip**: Use descriptive names that will help you find this snapshot later, like "Before refactoring user service" or "Working login with validation".
+
+### Finding and Restoring Code
+
+**Scenario**: You need to find and restore code from yesterday's work session.
+
+**Method 1: Browse by Time**
+1. Open Snapshot Explorer (history icon in Activity Bar)
+2. Expand "Yesterday" group in "My Snapshots"
+3. Look for snapshots with relevant descriptions
+4. Right-click desired snapshot → "Restore"
+
+**Method 2: Filter by Content**
+1. Click the file filter icon (`$(file)`) in Snapshot Explorer
+2. Enter file pattern (e.g., `src/auth/*.ts`)
+3. Browse filtered results
+4. Right-click desired snapshot → "Restore"
+
+**Method 3: Use Semantic Search** (if enabled)
+1. Press `Ctrl+Alt+Shift+F`
+2. Enter natural language query: "authentication code with JWT tokens"
+3. Review results with relevance scores
+4. Click "Jump to Snapshot" on desired result
+
+### Managing Snapshot History
+
+**Scenario**: Your snapshot history is getting cluttered and you want to organize it.
+
+**Organize with Tags and Favorites**:
+1. Right-click important snapshots → "Toggle Favorite Status"
+2. Right-click snapshots → "Edit Tags" → Add tags like "feature", "bugfix", "experiment"
+3. Use tag filter (`$(tag)`) to view snapshots by category
+
+**Clean Up Old Snapshots**:
+1. Right-click unwanted snapshots → "Delete"
+2. Adjust `maxSnapshots` setting to automatically limit history size
+3. Use date filters to focus on recent work
+
+**Bulk Operations**:
+- Filter by date range, then delete multiple old snapshots
+- Use favorites filter to protect important snapshots from cleanup
+
+### Setting Up Automation
+
+**Scenario**: You want CodeLapse to automatically protect your work without manual intervention.
+
+**Time-Based Automation**:
+1. Open Settings view in Snapshot Explorer
+2. Click "Auto Snapshot Interval (min)"
+3. Set to `30` for snapshots every 30 minutes
+4. Snapshots appear in "Auto Snapshots" view
+
+**Rule-Based Automation**:
+1. Run "Snapshots: Manage Auto-Snapshot Rules"
+2. Select "Add New Rule"
+3. Enter pattern: `src/**/*.ts` (for TypeScript files)
+4. Set interval: `15` minutes
+5. Save rule
+
+**Git Integration**:
+1. Open Settings view in Snapshot Explorer
+2. Click "Auto Snapshot Before Git Operations"
+3. Select "Yes" to enable
+4. Automatic snapshots before pull/merge/rebase operations
+
+**Example Rules for Different Projects**:
+- **Web Development**: `src/**/*.{js,ts,jsx,tsx}` every 20 minutes
+- **Configuration Files**: `config/**/*.{json,yaml,yml}` every 10 minutes
+- **Documentation**: `docs/**/*.md` every 30 minutes
 
 ### Basic Usage
 
@@ -120,9 +264,17 @@ When filters are active, a **Filter Status Bar** item appears on the right side 
 
 #### Semantic Search
 
-> ⚠️ **EXPERIMENTAL FEATURE**: Semantic search is currently an experimental feature. Use it at your own risk. The functionality may change or have limitations in future releases.
+> ⚠️ **EXPERIMENTAL FEATURE - CRITICAL SECURITY WARNING**: 
+> - **Data Privacy Risk**: Your code content is transmitted to external AI services (Pinecone, Gemini)
+> - **API Key Security**: Third-party services require API keys with potential access implications
+> - **Network Exposure**: Code is processed by external providers over the internet
+> - **Compliance Issues**: May violate organizational security policies and data protection regulations
+> - **Cost Impact**: API usage may result in unexpected charges on your accounts
+> - **Functionality Changes**: Experimental features may change, break, or be removed without notice
+> - **NOT RECOMMENDED** for proprietary, sensitive, or confidential codebases
+> - **Use at your own risk** and ensure compliance with your organization's security policies
 
-CodeLapse offers powerful semantic search capabilities to find code across all your snapshots using natural language queries:
+CodeLapse offers experimental semantic search capabilities to find code across all your snapshots using natural language queries:
 
 1. Press `Ctrl+Alt+Shift+F` (or `Cmd+Alt+Shift+F` on Mac), or run the "Snapshots: Semantic Search" command from the Command Palette.
 2. A search interface will open in the editor area.
@@ -140,34 +292,115 @@ CodeLapse offers powerful semantic search capabilities to find code across all y
    - Relevance score
    - Actions to open the file, compare with current version, or jump to the snapshot
 
-##### Managing API Keys for Semantic Search
+##### API Key Management and Security for Semantic Search
 
-> ⚠️ **EXPERIMENTAL FEATURE**: This API key management is part of the experimental semantic search feature. Use it at your own risk.
+> ⚠️ **CRITICAL SECURITY WARNING**: API key management is part of the experimental semantic search feature with significant security implications:
+> - **Third-party Access**: API keys grant external services access to process your code
+> - **Data Transmission**: Your code content is sent to external AI providers
+> - **Cost Implications**: API usage may result in unexpected charges
+> - **Compliance Risks**: May violate organizational security policies
+> - **Use with extreme caution** and only with non-sensitive codebases
 
-Semantic search requires two API keys to function:
+**Required API Keys:**
+Semantic search requires two API keys from external services:
 
-- **Pinecone API Key**: Used for vector storage and retrieval
-- **Gemini API Key**: Used for semantic code analysis
+- **Pinecone API Key**: Used for vector database storage and retrieval
+  - Service: Pinecone (vector database provider)
+  - Purpose: Stores code embeddings for search functionality
+  - Data exposure: Code chunks are stored as vectors in Pinecone's cloud service
 
-You can manage these keys directly from the Settings view in the Snapshot Explorer:
+- **Gemini API Key**: Used for semantic code analysis and embeddings
+  - Service: Google Gemini AI
+  - Purpose: Generates semantic embeddings from your code
+  - Data exposure: Code content is processed by Google's AI service
 
-1. Navigate to the Snapshot Explorer in the Activity Bar.
-2. Expand the "Settings" view.
-3. Expand the "API Keys" section.
-4. Click on either "Pinecone API Key" or "Gemini API Key" to update it.
-5. Enter your API key in the secure input dialog that appears.
-6. The key will be securely stored and masked in the UI.
+**🛡️ Security Best Practices:**
 
-Benefits of the Settings view interface for API key management:
+1. **API Key Security:**
+   - Use dedicated API keys with minimal permissions
+   - Regularly rotate API keys
+   - Monitor API usage and costs
+   - Never share API keys or commit them to version control
 
-- Update keys at any time without needing to restart the extension
-- No need to wait for authentication errors to update keys
-- Clearly see which keys are set and which need to be configured
-- API keys are securely stored using VS Code's Secret Storage
+2. **Data Privacy:**
+   - Only use with non-proprietary, non-sensitive code
+   - Review API provider terms of service and privacy policies
+   - Understand data retention policies of external services
+   - Consider geographic data residency requirements
 
-**First-time Setup**: On first use, you'll be prompted to provide API keys for the semantic search services. These keys are stored securely using VS Code's built-in SecretStorage.
+3. **Access Control:**
+   - Limit API key permissions to minimum required functionality
+   - Use separate API keys for different projects/environments
+   - Implement API usage monitoring and alerts
 
-**Indexing**: Before using semantic search, you need to index your snapshots. Use the "Snapshots: Index All Snapshots for Search" command to build the search index. This process analyzes your code and creates searchable embeddings.
+4. **Compliance Considerations:**
+   - Verify compliance with organizational security policies
+   - Check data protection regulations (GDPR, CCPA, etc.)
+   - Obtain necessary approvals before using with work-related code
+   - Document API usage for audit purposes
+
+**Managing API Keys:**
+
+You can manage API keys directly from the Settings view in the Snapshot Explorer:
+
+1. Navigate to the Snapshot Explorer in the Activity Bar
+2. Expand the "Settings" view
+3. Expand the "API Keys" section
+4. Click on either "Pinecone API Key" or "Gemini API Key" to update it
+5. Enter your API key in the secure input dialog that appears
+6. The key will be securely stored using VS Code's SecretStorage and masked in the UI
+
+**Security Features:**
+- API keys are encrypted using VS Code's built-in SecretStorage
+- Keys are never displayed in plain text in the UI
+- Keys are not logged or stored in configuration files
+- Secure transmission to external services via HTTPS
+
+**Setup Instructions with Security Considerations:**
+
+1. **Obtain API Keys Securely:**
+   - Create dedicated accounts for CodeLapse usage
+   - Use strong, unique passwords for API provider accounts
+   - Enable two-factor authentication where available
+   - Generate API keys with minimal required permissions
+
+2. **Configure Keys Safely:**
+   - Use the Settings view interface (never edit configuration files directly)
+   - Verify the key is masked after entry
+   - Test with non-sensitive code first
+   - Monitor initial API usage for unexpected behavior
+
+3. **Indexing Process:**
+   - Before using semantic search, index your snapshots using "Snapshots: Index All Snapshots for Search"
+   - This process analyzes your code and creates searchable embeddings
+   - Monitor the indexing process for any errors or unexpected API usage
+   - Verify that only intended snapshots are being indexed
+
+**🚫 How to Disable Semantic Search:**
+
+If you decide the security risks are too high, you can disable semantic search:
+
+1. **Via Settings View:**
+   - Navigate to Snapshot Explorer → Settings → Semantic Search
+   - Click "Enable Semantic Search" and select "No"
+
+2. **Via VS Code Settings:**
+   - Open Settings (`Ctrl+,`)
+   - Search for "semantic search"
+   - Set `vscode-snapshots.semanticSearch.enabled` to `false`
+
+3. **Remove API Keys:**
+   - Use the Settings view to clear stored API keys
+   - This prevents any accidental usage of the feature
+
+**Emergency Procedures:**
+
+If you suspect API key compromise:
+1. Immediately disable semantic search in CodeLapse settings
+2. Revoke the compromised API keys in the respective service dashboards
+3. Generate new API keys with different permissions
+4. Review API usage logs for unauthorized activity
+5. Update any other applications using the same keys
 
 
 #### Navigating Between Snapshots
@@ -397,15 +630,155 @@ Configure via VS Code Settings (`Ctrl+,`) or through the Settings view in the Sn
 | `vscode-snapshots.semanticSearch.chunkOverlap`     | Overlap between adjacent chunks in tokens                        | 50           |
 | `vscode-snapshots.semanticSearch.autoIndex`        | Automatically index snapshots in the background                  | `false`      |
 
-## Troubleshooting
+## Troubleshooting Guide
 
-- **Snapshots Not Created/Restored**: Check Output panel ("CodeLapse" channel), run Diagnostics (`Ctrl+Alt+D`), check file permissions, check ignore files.
-- **Performance Issues**: Reduce `maxSnapshots`, check ignore files, ensure large binary directories (`node_modules`) are ignored. Report issues if problems persist.
-- **Filtering Issues**: Ensure correct filter selection (Date, Tags, Favorites, File). Check filter status bar. Use "Clear All Filters". Tags are case-sensitive.
-- **Rule-based Auto-Snapshots Not Triggering**: Verify rule patterns and intervals in settings. Check Output panel for rule processing logs (enable verbose logging if needed). Ensure files are being saved if expecting save-triggered rules.
-- **Editor Decorators Not Showing**: Ensure you've taken at least one snapshot. Decorators show changes _since the last snapshot_. Check Output panel for errors.
-- **Semantic Search Not Working**: Verify API keys were entered correctly using the Settings view. Check the Output panel for any API error messages. Ensure snapshots are indexed by running "Snapshots: Index All Snapshots for Search" command. Make sure you have a stable internet connection for API calls.
-- **Settings View Not Loading**: Restart VS Code if the Settings view appears empty or doesn't respond to clicks. Check the Output panel for configuration errors.
+### Common Issues
+
+#### Snapshots Not Being Created
+**Symptoms**: Pressing `Ctrl+Alt+S` doesn't create snapshots, or snapshots appear empty
+
+**Solutions**:
+1. **Check File Permissions**: Ensure VS Code has write access to your workspace directory
+2. **Verify Workspace**: CodeLapse requires an open workspace folder (not just individual files)
+3. **Check Ignore Files**: Review `.gitignore` and `.snapshotignore` - they might be excluding all your files
+4. **Run Diagnostics**: Use `Ctrl+Alt+D` to check extension status and view detailed logs
+5. **Check Output Panel**: Open Output panel and select "CodeLapse" to see error messages
+
+**Example**: If working in a restricted directory, try opening a different workspace folder with proper permissions.
+
+#### Snapshots Not Being Restored
+**Symptoms**: Right-click "Restore" doesn't change files, or restoration fails silently
+
+**Solutions**:
+1. **Check Unsaved Changes**: Save or discard unsaved changes before restoring
+2. **Verify File Locks**: Close any files that might be locked by other applications
+3. **Check Workspace State**: Ensure you're in the same workspace where snapshots were created
+4. **Review Restore Preview**: Pay attention to the preview dialog - it shows what will change
+5. **Try Single File Restore**: Test with individual files first to isolate the issue
+
+**Example**: If restoring fails, try "Take Snapshot & Restore" option to preserve current changes.
+
+#### Filtering and Search Issues
+**Symptoms**: Filters don't show expected results, or search returns no matches
+
+**Solutions**:
+1. **Clear All Filters**: Use the clear filters button (`$(clear-all)`) to reset view
+2. **Check Filter Combinations**: Multiple filters work together - ensure they're not too restrictive
+3. **Verify Tag Spelling**: Tags are case-sensitive - check exact spelling
+4. **Review Date Ranges**: Ensure selected date range includes your snapshots
+5. **Check File Patterns**: Use correct glob syntax (e.g., `src/**/*.js` not `src/*.js` for subdirectories)
+
+**Example**: If searching for "feature" tag, ensure it's not filtered as "Feature" (different case).
+
+### Performance Problems
+
+#### Slow Snapshot Creation
+**Symptoms**: Taking snapshots takes a long time or causes VS Code to freeze
+
+**Solutions**:
+1. **Reduce Snapshot Size**: Use selective snapshots for large projects
+2. **Update Ignore Files**: Add large directories to `.snapshotignore`:
+   ```
+   node_modules/
+   dist/
+   build/
+   .git/
+   *.log
+   ```
+3. **Limit Max Snapshots**: Reduce `maxSnapshots` setting to 20-30 for better performance
+4. **Check Disk Space**: Ensure adequate free space in workspace directory
+5. **Monitor File Count**: Projects with >10,000 files may need selective snapshots
+
+**Example Configuration**:
+```json
+{
+  "vscode-snapshots.maxSnapshots": 25,
+  "vscode-snapshots.showOnlyChangedFiles": true
+}
+```
+
+#### High Memory Usage
+**Symptoms**: VS Code becomes slow or unresponsive when using CodeLapse
+
+**Solutions**:
+1. **Reduce Snapshot History**: Lower `maxSnapshots` setting
+2. **Use Selective Snapshots**: Only snapshot files you're actively working on
+3. **Clear Old Snapshots**: Manually delete old snapshots you no longer need
+4. **Restart VS Code**: Restart periodically to clear memory
+5. **Check Extension Conflicts**: Disable other extensions temporarily to identify conflicts
+
+### Configuration Issues
+
+#### Settings Not Saving
+**Symptoms**: Changes made in Settings view don't persist, or settings revert
+
+**Solutions**:
+1. **Check Workspace Settings**: Verify settings are saved in `.vscode/settings.json`
+2. **File Permissions**: Ensure VS Code can write to workspace settings file
+3. **Settings Sync**: If using VS Code Settings Sync, check for conflicts
+4. **Manual Configuration**: Edit settings directly in VS Code Settings (`Ctrl+,`)
+5. **Restart Extension**: Disable and re-enable CodeLapse extension
+
+**Example Settings File**:
+```json
+{
+  "vscode-snapshots.autoSnapshotInterval": 30,
+  "vscode-snapshots.maxSnapshots": 50,
+  "vscode-snapshots.autoSnapshot.rules": [
+    {
+      "pattern": "src/**/*.ts",
+      "intervalMinutes": 15
+    }
+  ]
+}
+```
+
+#### Auto-Snapshot Rules Not Working
+**Symptoms**: Rule-based auto-snapshots aren't triggering as expected
+
+**Solutions**:
+1. **Verify Pattern Syntax**: Use correct glob patterns:
+   - `src/**/*.js` - All JS files in src and subdirectories
+   - `*.json` - JSON files in root only
+   - `**/*.{ts,js}` - TypeScript and JavaScript files everywhere
+2. **Check Intervals**: Ensure enough time has passed since last auto-snapshot
+3. **Enable Verbose Logging**: Turn on detailed logging to see rule processing
+4. **Test Patterns**: Use VS Code's file search to verify your patterns match expected files
+5. **Save Files**: Rules trigger on file save - ensure you're saving files
+
+**Debugging Rules**:
+1. Open Output panel → "CodeLapse"
+2. Enable verbose logging in Settings view
+3. Save a file that should match your rule
+4. Check logs for rule processing messages
+
+### Getting Help
+
+#### Self-Help Resources
+1. **Run Diagnostics**: `Ctrl+Alt+D` provides comprehensive system information
+2. **Check Extension Logs**: "Snapshots: Show Extension Logs" for detailed troubleshooting
+3. **Review Documentation**: Check [Git Companion Guide](GIT_COMPANION.md) for integration help
+4. **Use Getting Started**: "Snapshots: Getting Started" command for guided tour
+
+#### Reporting Issues
+When reporting bugs, include:
+1. **Diagnostic Output**: Results from `Ctrl+Alt+D`
+2. **Extension Logs**: Output from "Show Extension Logs"
+3. **Steps to Reproduce**: Exact steps that cause the issue
+4. **Environment Info**: VS Code version, operating system, workspace type
+5. **Settings**: Relevant CodeLapse settings from your configuration
+
+#### Community Support
+- **GitHub Issues**: Report bugs and request features
+- **Discussions**: Ask questions and share tips
+- **Documentation**: Check for updates and new features
+
+**Emergency Recovery**:
+If CodeLapse causes VS Code instability:
+1. Disable the extension immediately
+2. Restart VS Code
+3. Check `.snapshots/` directory for corruption
+4. Re-enable extension after identifying the issue
 
 ## Tips and Best Practices
 
@@ -428,6 +801,189 @@ Configure via VS Code Settings (`Ctrl+,`) or through the Settings view in the Sn
 4. Use the "Snapshots: Getting Started" command for a guided tour.
 5. Check the extension's GitHub repository for known issues.
 6. Report bugs or request features via GitHub Issues.
+
+## Configuration Reference
+
+### Essential Settings
+
+**Storage and Performance**:
+- `vscode-snapshots.snapshotLocation`: Where snapshots are stored (default: `.snapshots`)
+- `vscode-snapshots.maxSnapshots`: Maximum snapshots to keep (default: 50)
+- `vscode-snapshots.showOnlyChangedFiles`: Show only modified files in snapshot view (default: true)
+
+**Automation Settings**:
+- `vscode-snapshots.autoSnapshotInterval`: Minutes between auto-snapshots (0 = disabled)
+- `vscode-snapshots.autoSnapshot.rules`: Array of pattern-based rules for automatic snapshots
+- `vscode-snapshots.git.autoSnapshotBeforeOperation`: Auto-snapshot before Git operations
+
+**User Experience**:
+- `vscode-snapshots.ux.confirmRestoreOperations`: Require confirmation before restoring
+- `vscode-snapshots.ux.useAnimations`: Enable smooth transitions and animations
+- `vscode-snapshots.ux.showKeyboardShortcutHints`: Display helpful keyboard shortcuts
+
+### Example Configuration
+
+**Basic Setup for Web Development**:
+```json
+{
+  "vscode-snapshots.maxSnapshots": 30,
+  "vscode-snapshots.autoSnapshotInterval": 20,
+  "vscode-snapshots.autoSnapshot.rules": [
+    {
+      "pattern": "src/**/*.{js,ts,jsx,tsx}",
+      "intervalMinutes": 15
+    },
+    {
+      "pattern": "*.{json,md}",
+      "intervalMinutes": 30
+    }
+  ],
+  "vscode-snapshots.git.autoSnapshotBeforeOperation": true
+}
+```
+
+**Performance-Optimized Setup**:
+```json
+{
+  "vscode-snapshots.maxSnapshots": 20,
+  "vscode-snapshots.showOnlyChangedFiles": true,
+  "vscode-snapshots.autoSnapshotInterval": 0,
+  "vscode-snapshots.verboseLogging": false
+}
+```
+
+### Advanced Configuration
+
+**Custom Ignore Patterns** (`.snapshotignore`):
+```
+# Build outputs
+dist/
+build/
+out/
+
+# Dependencies
+node_modules/
+vendor/
+
+# Logs and temporary files
+*.log
+.tmp/
+.cache/
+
+# IDE files
+.vscode/
+.idea/
+
+# Large media files
+*.mp4
+*.mov
+*.zip
+```
+
+**Rule-Based Auto-Snapshot Examples**:
+```json
+{
+  "vscode-snapshots.autoSnapshot.rules": [
+    {
+      "pattern": "src/components/**/*.{jsx,tsx}",
+      "intervalMinutes": 10,
+      "description": "React components"
+    },
+    {
+      "pattern": "config/**/*.{json,yaml,yml}",
+      "intervalMinutes": 5,
+      "description": "Configuration files"
+    },
+    {
+      "pattern": "docs/**/*.md",
+      "intervalMinutes": 30,
+      "description": "Documentation"
+    }
+  ]
+}
+```
+
+## Quick Reference
+
+### Keyboard Shortcuts
+
+| Action | Windows/Linux | Mac | Description |
+|--------|---------------|-----|-------------|
+| Take Snapshot | `Ctrl+Alt+S` | `Cmd+Alt+S` | Create a new snapshot |
+| Previous Snapshot | `Ctrl+Alt+B` | `Cmd+Alt+B` | Navigate to previous snapshot |
+| Next Snapshot | `Ctrl+Alt+N` | `Cmd+Alt+N` | Navigate to next snapshot |
+| View Snapshots | `Ctrl+Alt+V` | `Cmd+Alt+V` | Open snapshot selection dialog |
+| Run Diagnostics | `Ctrl+Alt+D` | `Cmd+Alt+D` | Check extension status |
+| Semantic Search | `Ctrl+Alt+Shift+F` | `Cmd+Alt+Shift+F` | Search code with natural language |
+
+### Common Commands
+
+**From Command Palette** (`Ctrl+Shift+P` / `Cmd+Shift+P`):
+- `Snapshots: Take Snapshot` - Create new snapshot
+- `Snapshots: View Snapshots` - Browse and restore snapshots
+- `Snapshots: Getting Started` - Launch guided tour
+- `Snapshots: Manage Auto-Snapshot Rules` - Configure automation
+- `Snapshots: Show Extension Logs` - View detailed logs
+- `Snapshots: Index All Snapshots for Search` - Prepare semantic search
+
+### Snapshot Types Quick Guide
+
+| Type | When to Use | What's Included | Setup Time |
+|------|-------------|-----------------|------------|
+| **Quick** | Frequent checkpoints | All files + description | 10 seconds |
+| **Detailed** | Important milestones | All files + tags/notes/favorites | 30 seconds |
+| **Selective** | Focused changes | Chosen files + full metadata | 1-2 minutes |
+
+### Filter Quick Reference
+
+| Filter | Icon | Purpose | Example |
+|--------|------|---------|---------|
+| Date | `$(calendar)` | Time-based filtering | "Last 7 Days" |
+| Tags | `$(tag)` | Category filtering | "feature", "bugfix" |
+| Favorites | `$(star)` | Important snapshots | Starred snapshots only |
+| File Path | `$(file)` | Content filtering | `src/**/*.ts` |
+
+### Troubleshooting Quick Fixes
+
+| Problem | Quick Fix | Command |
+|---------|-----------|---------|
+| Snapshots not creating | Check permissions & run diagnostics | `Ctrl+Alt+D` |
+| Can't find snapshots | Clear all filters | Click `$(clear-all)` |
+| Performance issues | Reduce max snapshots | Settings → Max Snapshots → 20 |
+| Rules not working | Enable verbose logging | Settings → Enable Verbose Logging |
+| Extension not responding | Restart extension | Disable/Enable in Extensions view |
+
+### File Patterns for Rules
+
+| Pattern | Matches | Use Case |
+|---------|---------|----------|
+| `src/**/*.js` | All JS files in src/ and subdirectories | JavaScript projects |
+| `*.{json,yaml,yml}` | Config files in root | Configuration management |
+| `**/*.{ts,tsx}` | All TypeScript files | TypeScript projects |
+| `docs/**/*.md` | All Markdown in docs/ | Documentation |
+| `test/**/*` | All test files | Test automation |
+
+### Status Bar Indicators
+
+| Display | Meaning |
+|---------|---------|
+| `$(history) 5m ago \| 15 Snapshots` | Last snapshot 5 minutes ago, 15 total |
+| `$(history) 2m ago \| 3/15 Snapshots` | Currently viewing snapshot 3 of 15 |
+| `$(filter) My Snapshots: 2 filters` | 2 active filters on My Snapshots view |
+
+### Emergency Procedures
+
+**If CodeLapse Causes Issues**:
+1. Disable extension: Extensions view → CodeLapse → Disable
+2. Restart VS Code
+3. Check `.snapshots/` directory for corruption
+4. Re-enable extension after resolving issue
+
+**If Snapshots Are Corrupted**:
+1. Backup `.snapshots/` directory
+2. Run diagnostics: `Ctrl+Alt+D`
+3. Check extension logs for errors
+4. Report issue with diagnostic output
 
 ## Future Updates
 
