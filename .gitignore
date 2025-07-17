@@ -8,3 +8,6 @@ combined_*
 gg.py
 .snapshots
 scripts
+.cursor
+GEMINI.md
+.kiro

@@ -1,6 +1,15 @@
 # CodeLapse Semantic Search Implementation Roadmap
 
-> ⚠️ **EXPERIMENTAL FEATURE**: Semantic search is currently an experimental feature. Use it at your own risk. The functionality may change or have limitations in future releases.
+> ⚠️ **CRITICAL SECURITY WARNING - EXPERIMENTAL FEATURE**: 
+> - **Data Privacy Risk**: Your code content is transmitted to external AI services (Pinecone, Gemini)
+> - **API Key Security**: Third-party services require API keys with potential access implications
+> - **Network Exposure**: Code is processed by external providers over the internet
+> - **Compliance Issues**: May violate organizational security policies and data protection regulations
+> - **Cost Impact**: API usage may result in unexpected charges on your accounts
+> - **Functionality Changes**: Experimental features may change, break, or be removed without notice
+> - **NOT RECOMMENDED** for proprietary, sensitive, or confidential codebases
+> - **Use at your own risk** and ensure compliance with your organization's security policies
+> - **ALWAYS** review API provider terms of service and privacy policies before use
 
 ## 📋 Overview
 
@@ -295,12 +304,72 @@ The semantic search feature will enable:
 
 ## 🚀 Implementation Notes
 
-### API Keys Management
+### 🔐 API Keys Management & Security
 
-- Use VS Code Secret Storage API for secure credential storage
-- Never store API keys in plain text
-- Implement graceful degradation when keys are unavailable
-- Add clear error messages for authentication issues
+> ⚠️ **CRITICAL SECURITY CONSIDERATIONS**: API key management involves significant security risks that must be understood and mitigated.
+
+#### Required API Services
+- **Pinecone**: Vector database for storing code embeddings
+  - **Data Exposure**: Code chunks stored as vectors in Pinecone's cloud service
+  - **Access Level**: Full read/write access to vector database
+  - **Cost Impact**: Storage and query costs based on usage
+
+- **Gemini (Google AI)**: Embedding generation service
+  - **Data Exposure**: Code content processed by Google's AI service
+  - **Access Level**: Text processing and embedding generation
+  - **Cost Impact**: API calls charged per token processed
+
+#### Security Implementation
+- **Secure Storage**: Use VS Code Secret Storage API for encrypted credential storage
+- **Access Control**: API keys never logged, displayed, or stored in plain text
+- **Transmission Security**: All API calls use HTTPS encryption
+- **Error Handling**: Graceful degradation when keys are unavailable
+- **User Notifications**: Clear error messages for authentication issues
+
+#### Security Best Practices for Users
+1. **API Key Security**:
+   - Use dedicated API keys with minimal required permissions
+   - Regularly rotate API keys (monthly recommended)
+   - Monitor API usage and costs continuously
+   - Never share or commit API keys to version control
+
+2. **Data Privacy**:
+   - Only use with non-proprietary, non-sensitive code
+   - Review API provider terms of service and privacy policies
+   - Understand data retention policies of external services
+   - Consider geographic data residency requirements
+
+3. **Access Control**:
+   - Limit API key permissions to minimum required functionality
+   - Use separate API keys for different projects/environments
+   - Implement API usage monitoring and alerts
+   - Document API usage for compliance audits
+
+4. **Compliance Considerations**:
+   - Verify compliance with organizational security policies
+   - Check data protection regulations (GDPR, CCPA, etc.)
+   - Obtain necessary approvals before using with work-related code
+   - Maintain audit trails for API usage
+
+#### Emergency Procedures
+- **API Key Compromise**: Immediate revocation and regeneration procedures
+- **Excessive Usage**: Automatic disable mechanisms and cost controls
+- **Service Outages**: Fallback strategies and user notifications
+- **Data Breach**: Incident response and user notification procedures
+
+#### Disable/Enable Instructions
+**Complete Disablement**:
+1. Set `vscode-snapshots.semanticSearch.enabled` to `false`
+2. Remove API keys from VS Code SecretStorage
+3. Clear local index files and cached data
+4. Verify no residual API calls are being made
+
+**Safe Re-enablement**:
+1. Review security policies and obtain necessary approvals
+2. Configure API keys with minimal required permissions
+3. Test with non-sensitive code first
+4. Monitor initial usage for unexpected behavior
+5. Gradually expand usage based on security assessment
 
 ### Chunking Strategy
 

@@ -1,142 +1,225 @@
-# CodeLapse Extension
+# CodeLapse - Your Development Time Machine ⏰
 
-A dead-simple snapshot system for VS Code that works alongside Git. Take code snapshots with a single keystroke and navigate between them without any complexity. Now with powerful semantic search capabilities to find your code across all snapshots.
+**Stop losing code. Start exploring fearlessly.**
 
-> ⚠️ **EXPERIMENTAL FEATURE**: Semantic search is currently an experimental feature. Use it at your own risk. The functionality may change or have limitations in future releases.
+CodeLapse is the missing link between your IDE's autosave and Git's formal commits. Create instant, zero-friction snapshots of your work and navigate through your development journey like never before.
 
-## Why CodeLapse?
+🚀 **One keystroke. Instant backup. Zero mental overhead.**
 
-**Not a Git replacement, but a perfect companion**. Git excels at formal version control and team collaboration, while CodeLapse excels at personal development workflow:
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/your-publisher.codelapse)](https://marketplace.visualstudio.com/items?itemName=your-publisher.codelapse)
+[![Downloads](https://img.shields.io/visual-studio-marketplace/d/your-publisher.codelapse)](https://marketplace.visualstudio.com/items?itemName=your-publisher.codelapse)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/your-publisher.codelapse)](https://marketplace.visualstudio.com/items?itemName=your-publisher.codelapse)
 
-- **One-Key Snapshots**: Create instant point-in-time backups with a single key press
-- **Zero Mental Overhead**: No staging, no commit messages, no branches to manage
-- **Frictionless Exploration**: Try ideas without worrying about "messing up" your Git history
-- **Development Safety Net**: Create snapshots between Git commits for personal checkpoints
-- **Instant Restoration**: Jump back to any snapshot instantly - no stashing, no cherry-picking
-- **Semantic Search**: Find your code across all snapshots using natural language queries ⚠️ **(Experimental - use at your own risk)**
+---
 
-CodeLapse is the missing tool between the autosave feature of your IDE and the formal commits of Git.
+## 🎯 Why CodeLapse?
 
-## Documentation
+**The Problem**: You're deep in a coding session. You want to try a risky refactor, but you're afraid of breaking what's working. Git feels too heavy for quick experiments, and you end up either:
+- Not trying the idea (missed opportunity)
+- Trying it and losing your progress (frustration)
+- Creating messy WIP commits (polluted history)
 
-- **[User Guide](docs/USER_GUIDE.md)** - How to use the extension, settings, and troubleshooting.
-- **[Git Companion Guide](docs/GIT_COMPANION.md)** - How to use CodeLapse alongside Git.
-- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Technical details, architecture, and contribution guidelines.
-- **[Roadmap](docs/ROADMAP.md)** - Planned features and improvements.
-- **[Semantic Roadmap](docs/SEMANTIC_ROADMAP.md)** - Detailed plan for semantic search implementation.
+**The Solution**: CodeLapse gives you the confidence to explore. One keystroke creates a perfect snapshot. Try anything. Break everything. Restore instantly.
 
-## Features
+### 🔥 Core Benefits
 
-CodeLapse offers a robust set of features, categorized as follows:
+- **🎯 Fearless Development**: Experiment without anxiety
+- **⚡ Zero Friction**: One key press, no forms, no decisions
+- **🧠 Mental Freedom**: No commit message fatigue
+- **🔄 Instant Recovery**: Jump between any point in time
+- **🤝 Git Harmony**: Works alongside, never conflicts with Git
+- **🔍 Smart Search**: Find any code across your entire history *(Experimental)*
 
-#### Snapshot Basics:
+> ⚠️ **EXPERIMENTAL FEATURE WARNING**: Semantic search is currently experimental with potential risks:
+> - **API Key Security**: Requires third-party API keys that may expose code to external services
+> - **Data Privacy**: Code content is processed by external AI services (Pinecone, Gemini)
+> - **Functionality Changes**: Features may change or be removed without notice
+> - **Performance Impact**: May affect extension performance and consume API quotas
+> - **Use at your own risk** and avoid on sensitive/proprietary codebases
 
-- [x] One-key snapshot creation (`Ctrl+Alt+S`)
-- [x] Snapshot navigation (forward/backward: `Ctrl+Alt+N`/`Ctrl+Alt+B`)
-- [x] Time-based grouping in "My Snapshots" & "Auto Snapshots" Explorer views
-- [x] Status bar indicator (time since last snapshot, current index)
-- [x] Semantic search across snapshots (`Ctrl+Alt+Shift+F`) ⚠️ **(Experimental)**
+---
 
-#### Working with Snapshots:
+## 📊 CodeLapse vs Git - Better Together
 
-- [x] File comparison (Diff View) between snapshots and current workspace
-- [x] Single file restoration
-- [x] Selective snapshots (choose specific files)
+| **Scenario** | **CodeLapse** | **Git** | **Best Choice** |
+|--------------|---------------|---------|-----------------|
+| 🧪 **Quick Experiments** | ✅ One keystroke, try anything | ❌ Too formal, requires planning | **CodeLapse** |
+| 💾 **Save Work-in-Progress** | ✅ Instant, no commit message | ❌ Messy WIP commits | **CodeLapse** |
+| 🔄 **Multiple Save Points** | ✅ Perfect for rapid iteration | ❌ Clutters history | **CodeLapse** |
+| 👥 **Team Collaboration** | ❌ Local only | ✅ Built for sharing | **Git** |
+| 📚 **Project History** | ❌ Personal snapshots | ✅ Formal version control | **Git** |
+| 🎯 **Feature Development** | ❌ Not structured | ✅ Logical commits | **Git** |
+| 🛡️ **Safety Net** | ✅ Zero overhead protection | ✅ Formal protection | **Both!** |
 
-#### Automation & Efficiency:
+**The Magic**: Use both tools together. Git for your formal commits, CodeLapse for your personal development flow.
 
-- [x] Basic time-based auto-snapshots (`autoSnapshotInterval`)
-- [x] Rule-based auto-snapshots for specific file patterns (`autoSnapshot.rules`)
-- [x] UI for managing auto-snapshot rules
-- [x] Editor Gutter Indicators for changed lines since last snapshot
-- [x] Efficient differential storage for text files
-- [x] Content Caching for faster diffs and restores
-- [x] Asynchronous file I/O for improved performance
+---
 
-#### Context & Organization:
+## 🚀 Quick Start
 
-- [x] Enhanced snapshot context: Tags, Notes, Task References, Favorites
-- [x] Editing snapshot context via Tree View context menu
-- [x] Filtering by Date, Tags, Favorites, File Path (View Title icons)
-- [x] Filter Status Bar indicator
-- [x] `.gitignore` / `.snapshotignore` support for file exclusion
-- [x] Natural language search through code across all snapshots ⚠️ **(Experimental)**
+### Installation
 
-#### Git Integration:
+1. **From VS Code Marketplace**:
+   - Open VS Code
+   - Go to Extensions (`Ctrl+Shift+X`)
+   - Search for "CodeLapse"
+   - Click "Install"
 
-- [x] Storing branch/commit info (`git.addCommitInfo`)
-- [x] Create Git Commit from Snapshot command (`git.commitFromSnapshotEnabled`)
-- [x] Auto-snapshot before pull/merge/rebase (`git.autoSnapshotBeforeOperation`)
+2. **From Command Line**:
+   ```bash
+   code --install-extension your-publisher.codelapse
+   ```
 
-#### Getting Started:
+### First steps
 
-- [x] Welcome Experience / Tour / Getting Started command
+1. **📁 Open your project** in VS Code
+2. **⌨️ Take your first snapshot**: Press `Ctrl+Alt+S` (or `Cmd+Alt+S` on Mac)
+3. **🎯 Choose snapshot type**:
+   - **Quick Snapshot**: Instant, no questions asked
+   - **Detailed Snapshot**: Add tags, notes, and context
+4. **🧪 Make some changes** to your code
+5. **🔄 Navigate snapshots**: Use `Ctrl+Alt+B` (back) / `Ctrl+Alt+N` (next)
+6. **👀 Browse visually**: Check the **Snapshots** panel in the Activity Bar
 
-## Configuration
+**🎉 That's it!** You're now protected by CodeLapse. Experiment fearlessly!
 
-CodeLapse offers several settings to customize its behavior:
+---
 
-- `vscode-snapshots.snapshotLocation`: Where to store snapshot data (default: `.snapshots`).
-- `vscode-snapshots.maxSnapshots`: Maximum number of snapshots to keep (default: `50`).
-- `vscode-snapshots.autoSnapshotInterval`: Interval for automatic snapshots in minutes (default: `0` - disabled).
-- `vscode-snapshots.loggingEnabled`: Enable detailed logging (default: `true`).
-- `vscode-snapshots.git.addCommitInfo`: Store Git branch/commit with snapshots (default: `true`).
-- `vscode-snapshots.git.commitFromSnapshotEnabled`: Enable the "Create Git Commit from Snapshot" command (default: `true`).
-- `vscode-snapshots.git.autoSnapshotBeforeOperation`: Automatically snapshot before Git pull/merge/rebase (default: `false`).
+## ✨ Features at a Glance
 
-### Semantic Search Configuration
+<details>
+<summary><strong>🎯 Core Snapshot Features</strong></summary>
 
-> ⚠️ **EXPERIMENTAL FEATURE**: Semantic search is currently an experimental feature. Use it at your own risk. The functionality may change or have limitations in future releases.
+- **⚡ One-Key Snapshots**: `Ctrl+Alt+S` - instant backup
+- **🔄 Time Navigation**: Jump between any point in your development
+- **📊 Visual Timeline**: See your progress in the Snapshots panel
+- **📈 Status Tracking**: Status bar shows time since last snapshot
+- **🔍 Smart Search**: Find code across all snapshots *(Experimental)*
 
-- `vscode-snapshots.semanticSearch.enabled`: Enable semantic code search across snapshots (default: `true`).
-- `vscode-snapshots.semanticSearch.chunkSize`: Maximum token size for each code chunk (default: `200`).
-- `vscode-snapshots.semanticSearch.chunkOverlap`: Overlap between adjacent chunks in tokens (default: `50`).
-- `vscode-snapshots.semanticSearch.autoIndex`: Automatically index snapshots in the background (default: `false`).
+</details>
 
-**API Key Management**
+<details>
+<summary><strong>🛠️ Advanced Snapshot Management</strong></summary>
 
-CodeLapse allows you to manage your API keys directly from the Configuration tree view:
+- **📝 Rich Context**: Add tags, notes, and task references
+- **⭐ Favorites**: Mark important snapshots
+- **🔍 Powerful Filtering**: By date, tags, files, or favorites
+- **📋 Selective Snapshots**: Choose specific files to include
+- **🔄 File Restoration**: Restore individual files or entire snapshots
 
-- **Pinecone API Key**: Required for semantic search vector storage
-- **Gemini API Key**: Required for semantic code analysis
+</details>
 
-You can update these keys at any time through the Configuration tree view in the Explorer panel without needing to restart the extension.
+<details>
+<summary><strong>🤖 Automation & Efficiency</strong></summary>
 
-See the **[User Guide](docs/USER_GUIDE.md)** for more details on configuration.
+- **⏰ Auto-Snapshots**: Time-based automatic backups
+- **📋 Smart Rules**: Auto-snapshot specific file patterns
+- **📊 Visual Indicators**: See changed lines in editor gutters
+- **⚡ Performance**: Efficient storage with differential compression
+- **🚫 Smart Exclusion**: Respects `.gitignore` and `.snapshotignore`
 
-## When to Use CodeLapse vs. Git
+</details>
 
-| If you want to...                           | Use CodeLapse                     | Use Git                                                     |
-| ------------------------------------------- | -------------------------------------- | ----------------------------------------------------------- |
-| Try an experimental approach quickly        | ✅ Perfect for rapid iteration         | ❌ Too formal for experiments                               |
-| Save work-in-progress state                 | ✅ One keystroke, no commit message    | ❌ Requires WIP commits or stashing                         |
-| Track logical feature development           | ❌ Not designed for this               | ✅ Designed for logical commits                             |
-| Collaborate with others                     | ❌ Local snapshots only                | ✅ Built for collaboration                                  |
-| Keep a clean project history                | ❌ Not designed for this               | ✅ Supports squashing, rebasing, etc.                       |
-| Create multiple save points between commits | ✅ Perfect use case                    | ❌ Would create messy history                               |
-| Organize changes with meaningful context    | ✅ Tags and notes provide rich context | ❌ Requires complex branch names or verbose commit messages |
-| Maintain a formal version control record    | ❌ Not designed for this               | ✅ Exactly what Git is for                                  |
-| Protect against accidental changes          | ✅ Quick protection with no overhead   | ✅ More formal protection                                   |
+<details>
+<summary><strong>🤝 Git Integration</strong></summary>
 
-**Both tools together provide the best experience**: Use Git for formal version control and team collaboration, and use CodeLapse for your personal development workflow.
+- **📝 Branch Context**: Store Git branch/commit info with snapshots
+- **🔄 Git Commands**: Create commits directly from snapshots
+- **🛡️ Safety Net**: Auto-snapshot before Git operations
+- **🤝 Perfect Harmony**: Works alongside Git without conflicts
 
-## Quick Start
+</details>
 
-1. Install the extension from the VS Code Marketplace.
-2. Open a project/workspace.
-3. Press `Ctrl+Alt+S` (or `Cmd+Alt+S` on Mac) to take your first snapshot.
-4. Choose between **Quick Snapshot** or **Detailed Snapshot** with tags and notes.
-5. Add a description and any context information if using a Detailed Snapshot.
-6. Use `Ctrl+Alt+B` / `Ctrl+Alt+N` to navigate between snapshots.
-7. Use the **Snapshots** view in the Activity Bar to browse, compare, restore, or delete snapshots.
-8. Right-click on snapshots to edit tags, notes, or toggle favorite status.
-9. Use filtering commands to find snapshots by date, tags, or favorite status.
-10. Use semantic search (`Ctrl+Alt+Shift+F`) to find code across all snapshots. ⚠️ **(Experimental - use at your own risk)**
-11. Run diagnostics (`Ctrl+Alt+D`) if needed.
+---
 
-For detailed usage, settings, and troubleshooting, see the **[User Guide](docs/USER_GUIDE.md)**.
+## 📚 Documentation & Support
 
-## System Requirements
+| **Getting Started** | **Advanced Usage** | **Development** |
+|---------------------|-------------------|-----------------|
+| 📖 [User Guide](docs/USER_GUIDE.md) | 🤝 [Git Integration](docs/GIT_COMPANION.md) | 🔧 [Developer Guide](docs/DEVELOPER_GUIDE.md) |
+| 🚀 [Quick Start](#-quick-start) | ⚙️ [Configuration](#-configuration) | 🗺️ [Roadmap](docs/ROADMAP.md) |
+| ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing) |
 
-- VS Code 1.60.0 or higher
-- Works on all platforms supported by VS Code
+---
+
+## ⚙️ Configuration
+
+<details>
+<summary><strong>📋 Core Settings</strong></summary>
+
+- `vscode-snapshots.snapshotLocation`: Where to store snapshot data (default: `.snapshots`)
+- `vscode-snapshots.maxSnapshots`: Maximum number of snapshots to keep (default: `50`)
+- `vscode-snapshots.autoSnapshotInterval`: Interval for automatic snapshots in minutes (default: `0` - disabled)
+- `vscode-snapshots.loggingEnabled`: Enable detailed logging (default: `true`)
+
+</details>
+
+<details>
+<summary><strong>🤝 Git Integration Settings</strong></summary>
+
+- `vscode-snapshots.git.addCommitInfo`: Store Git branch/commit with snapshots (default: `true`)
+- `vscode-snapshots.git.commitFromSnapshotEnabled`: Enable "Create Git Commit from Snapshot" command (default: `true`)
+- `vscode-snapshots.git.autoSnapshotBeforeOperation`: Auto-snapshot before Git pull/merge/rebase (default: `false`)
+
+</details>
+
+<details>
+<summary><strong>🔬 Semantic Search Settings (Experimental)</strong></summary>
+
+> ⚠️ **EXPERIMENTAL FEATURE - SECURITY RISKS**: 
+> - **Data Privacy**: Your code is sent to external AI services (Pinecone, Gemini)
+> - **API Key Security**: Third-party services require API keys with potential access risks
+> - **Network Exposure**: Code content transmitted over internet to external providers
+> - **Quota Costs**: API usage may incur charges on your accounts
+> - **Functionality Changes**: Features may change or be removed without notice
+> - **NOT RECOMMENDED** for proprietary, sensitive, or confidential codebases
+
+**Basic Settings:**
+- `vscode-snapshots.semanticSearch.enabled`: Enable semantic code search (default: `true`)
+- `vscode-snapshots.semanticSearch.chunkSize`: Maximum token size for code chunks (default: `200`)
+- `vscode-snapshots.semanticSearch.chunkOverlap`: Overlap between chunks in tokens (default: `50`)
+- `vscode-snapshots.semanticSearch.autoIndex`: Auto-index snapshots in background (default: `false`)
+
+**🔑 API Key Management & Security:**
+- **Secure Storage**: API keys are stored using VS Code's SecretStorage (encrypted)
+- **Access Control**: Keys are never logged or displayed in plain text
+- **Configuration**: Manage keys via Settings view in Snapshot Explorer
+- **Required Services**: 
+  - **Pinecone API Key**: For vector database storage and retrieval
+  - **Gemini API Key**: For semantic code analysis and embeddings
+
+**🛡️ Security Best Practices:**
+- Use dedicated API keys with minimal permissions
+- Monitor API usage and costs regularly
+- Disable feature when working with sensitive code
+- Review API provider terms of service
+- Consider network security implications
+
+**🚫 How to Disable:**
+1. Set `vscode-snapshots.semanticSearch.enabled` to `false`, OR
+2. Use Settings view in Snapshot Explorer → Semantic Search → Disable
+
+</details>
+
+---
+
+## 💡 Next Steps
+
+Ready to dive deeper? Here's where to go next:
+
+- **🎓 Learn More**: Check out the [User Guide](docs/USER_GUIDE.md) for detailed tutorials
+- **🤝 Git Workflow**: See how CodeLapse works with Git in the [Git Companion Guide](docs/GIT_COMPANION.md)
+- **🔧 Contribute**: Want to help improve CodeLapse? See the [Developer Guide](docs/DEVELOPER_GUIDE.md)
+- **🗺️ Future Plans**: Curious about what's coming? Check the [Roadmap](docs/ROADMAP.md)
+
+---
+
+## 📋 System Requirements
+
+- **VS Code**: Version 1.60.0 or higher
+- **Platform**: Windows, macOS, or Linux
+- **Optional**: API keys for semantic search features
+
+---
+
+**🎉 Happy coding with CodeLapse! Remember: Code fearlessly, snapshot frequently.**
