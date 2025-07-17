@@ -9,30 +9,46 @@ export interface TerminalApiInterface {
   takeSnapshot(options: TakeSnapshotOptions): Promise<SnapshotResponse>;
   getSnapshots(filter?: SnapshotFilter): Promise<Snapshot[]>;
   getSnapshot(id: string): Promise<Snapshot | null>;
-  restoreSnapshot(id: string, options?: RestoreOptions): Promise<RestoreResponse>;
+  restoreSnapshot(
+    id: string,
+    options?: RestoreOptions,
+  ): Promise<RestoreResponse>;
   deleteSnapshot(id: string): Promise<boolean>;
   navigateSnapshot(direction: 'previous' | 'next'): Promise<NavigationResponse>;
-  
+
   // Snapshot content operations
-  getSnapshotFileContent(snapshotId: string, filePath: string): Promise<string | null>;
+  getSnapshotFileContent(
+    snapshotId: string,
+    filePath: string,
+  ): Promise<string | null>;
   getSnapshotChanges(snapshotId: string): Promise<ChangesSummary>;
-  compareSnapshots(snapshotId1: string, snapshotId2: string): Promise<ComparisonResult>;
-  
+  compareSnapshots(
+    snapshotId1: string,
+    snapshotId2: string,
+  ): Promise<ComparisonResult>;
+
   // Semantic search operations (experimental)
-  searchSnapshots(query: string, options?: SearchOptions): Promise<SearchResult[]>;
+  searchSnapshots(
+    query: string,
+    options?: SearchOptions,
+  ): Promise<SearchResult[]>;
   indexSnapshots(snapshotIds?: string[]): Promise<IndexingResult>;
-  
+
   // Workspace operations
   getWorkspaceInfo(): Promise<WorkspaceInfo>;
   getCurrentState(): Promise<CurrentState>;
-  
+
   // Utility operations
   validateSnapshot(id: string): Promise<ValidationResult>;
   exportSnapshot(id: string, format: 'json' | 'zip'): Promise<ExportResult>;
-  
+
   // Event subscriptions
-  onSnapshotsChanged(callback: (snapshots: Snapshot[]) => void): vscode.Disposable;
-  onCurrentSnapshotChanged(callback: (snapshot: Snapshot | null) => void): vscode.Disposable;
+  onSnapshotsChanged(
+    callback: (snapshots: Snapshot[]) => void,
+  ): vscode.Disposable;
+  onCurrentSnapshotChanged(
+    callback: (snapshot: Snapshot | null) => void,
+  ): vscode.Disposable;
 }
 
 /**
@@ -235,4 +251,4 @@ export interface ExportResult {
   format: 'json' | 'zip';
   size: number;
   error?: string;
-} 
+}

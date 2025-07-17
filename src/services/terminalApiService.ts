@@ -18,7 +18,7 @@ import {
   WorkspaceInfo,
   CurrentState,
   ValidationResult,
-  ExportResult
+  ExportResult,
 } from './terminalApiTypes';
 
 /**
@@ -28,7 +28,10 @@ export class TerminalApiService implements TerminalApiInterface {
   private snapshotManager: SnapshotManager;
   private semanticSearchService?: SemanticSearchService;
 
-  constructor(snapshotManager: SnapshotManager, semanticSearchService?: SemanticSearchService) {
+  constructor(
+    snapshotManager: SnapshotManager,
+    semanticSearchService?: SemanticSearchService,
+  ) {
     this.snapshotManager = snapshotManager;
     this.semanticSearchService = semanticSearchService;
     log('TerminalApiService initialized');
@@ -37,10 +40,16 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Take a snapshot with the given options
    */
-  async takeSnapshot(options: TakeSnapshotOptions = {}): Promise<SnapshotResponse> {
+  async takeSnapshot(
+    options: TakeSnapshotOptions = {},
+  ): Promise<SnapshotResponse> {
     try {
-      log(`TerminalApiService: Taking snapshot with options: ${JSON.stringify(options)}`);
-      
+      log(
+        `TerminalApiService: Taking snapshot with options: ${JSON.stringify(
+          options,
+        )}`,
+      );
+
       const snapshot = await this.snapshotManager.takeSnapshot(
         options.description || `CLI snapshot at ${new Date().toISOString()}`,
         {
@@ -50,11 +59,13 @@ export class TerminalApiService implements TerminalApiInterface {
           isFavorite: options.isFavorite,
           isSelective: options.isSelective,
           selectedFiles: options.selectedFiles,
-        }
+        },
       );
 
       // Calculate statistics
-      const changes = this.snapshotManager.getSnapshotChangeSummary(snapshot.id);
+      const changes = this.snapshotManager.getSnapshotChangeSummary(
+        snapshot.id,
+      );
       const statistics = {
         filesProcessed: Object.keys(snapshot.files).length,
         filesChanged: changes.modified,
@@ -65,7 +76,7 @@ export class TerminalApiService implements TerminalApiInterface {
       // Show notification unless silent mode
       if (!options.silent) {
         vscode.window.showInformationMessage(
-          `Snapshot "${snapshot.description}" created successfully`
+          `Snapshot "${snapshot.description}" created successfully`,
         );
       }
 
@@ -75,7 +86,8 @@ export class TerminalApiService implements TerminalApiInterface {
         statistics,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       log(`TerminalApiService: Error taking snapshot: ${errorMessage}`);
       return {
         success: false,
@@ -94,22 +106,25 @@ export class TerminalApiService implements TerminalApiInterface {
       if (filter) {
         // Apply tag filter
         if (filter.tags && filter.tags.length > 0) {
-          snapshots = snapshots.filter(s => 
-            s.tags && s.tags.some(tag => filter.tags!.includes(tag))
+          snapshots = snapshots.filter(
+            (s) => s.tags && s.tags.some((tag) => filter.tags!.includes(tag)),
           );
         }
 
         // Apply date range filter
         if (filter.dateRange) {
-          snapshots = snapshots.filter(s => 
-            s.timestamp >= filter.dateRange!.start && 
-            s.timestamp <= filter.dateRange!.end
+          snapshots = snapshots.filter(
+            (s) =>
+              s.timestamp >= filter.dateRange!.start &&
+              s.timestamp <= filter.dateRange!.end,
           );
         }
 
         // Apply favorite filter
         if (filter.isFavorite !== undefined) {
-          snapshots = snapshots.filter(s => s.isFavorite === filter.isFavorite);
+          snapshots = snapshots.filter(
+            (s) => s.isFavorite === filter.isFavorite,
+          );
         }
 
         // Apply pagination
@@ -142,9 +157,16 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Restore a snapshot with options
    */
-  async restoreSnapshot(id: string, options: RestoreOptions = {}): Promise<RestoreResponse> {
+  async restoreSnapshot(
+    id: string,
+    options: RestoreOptions = {},
+  ): Promise<RestoreResponse> {
     try {
-      log(`TerminalApiService: Restoring snapshot ${id} with options: ${JSON.stringify(options)}`);
+      log(
+        `TerminalApiService: Restoring snapshot ${id} with options: ${JSON.stringify(
+          options,
+        )}`,
+      );
 
       const snapshot = this.snapshotManager.getSnapshotById(id);
       if (!snapshot) {
@@ -177,7 +199,7 @@ export class TerminalApiService implements TerminalApiInterface {
 
       // Perform the restore
       const success = await this.snapshotManager.applySnapshotRestore(id);
-      
+
       if (!success) {
         return {
           success: false,
@@ -191,7 +213,7 @@ export class TerminalApiService implements TerminalApiInterface {
       // Show notification unless silent
       if (!options.silent) {
         vscode.window.showInformationMessage(
-          `Snapshot "${snapshot.description}" restored successfully`
+          `Snapshot "${snapshot.description}" restored successfully`,
         );
       }
 
@@ -203,7 +225,8 @@ export class TerminalApiService implements TerminalApiInterface {
         conflicts,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       log(`TerminalApiService: Error restoring snapshot: ${errorMessage}`);
       return {
         success: false,
@@ -229,10 +252,12 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Navigate to previous or next snapshot
    */
-  async navigateSnapshot(direction: 'previous' | 'next'): Promise<NavigationResponse> {
+  async navigateSnapshot(
+    direction: 'previous' | 'next',
+  ): Promise<NavigationResponse> {
     try {
       const previousIndex = this.snapshotManager.getCurrentSnapshotIndex();
-      
+
       let success: boolean;
       if (direction === 'previous') {
         success = await this.snapshotManager.navigateToPreviousSnapshot();
@@ -241,8 +266,10 @@ export class TerminalApiService implements TerminalApiInterface {
       }
 
       const newIndex = this.snapshotManager.getCurrentSnapshotIndex();
-      const currentSnapshot = newIndex >= 0 ? 
-        this.snapshotManager.getSnapshots()[newIndex] : undefined;
+      const currentSnapshot =
+        newIndex >= 0
+          ? this.snapshotManager.getSnapshots()[newIndex]
+          : undefined;
 
       return {
         success,
@@ -251,7 +278,8 @@ export class TerminalApiService implements TerminalApiInterface {
         newIndex,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       return {
         success: false,
         previousIndex: this.snapshotManager.getCurrentSnapshotIndex(),
@@ -264,9 +292,15 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Get file content from a specific snapshot
    */
-  async getSnapshotFileContent(snapshotId: string, filePath: string): Promise<string | null> {
+  async getSnapshotFileContent(
+    snapshotId: string,
+    filePath: string,
+  ): Promise<string | null> {
     try {
-      return await this.snapshotManager.getSnapshotFileContentPublic(snapshotId, filePath);
+      return await this.snapshotManager.getSnapshotFileContentPublic(
+        snapshotId,
+        filePath,
+      );
     } catch (error) {
       log(`TerminalApiService: Error getting file content: ${error}`);
       return null;
@@ -324,7 +358,10 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Compare two snapshots
    */
-  async compareSnapshots(snapshotId1: string, snapshotId2: string): Promise<ComparisonResult> {
+  async compareSnapshots(
+    snapshotId1: string,
+    snapshotId2: string,
+  ): Promise<ComparisonResult> {
     try {
       const snapshot1 = this.snapshotManager.getSnapshotById(snapshotId1);
       const snapshot2 = this.snapshotManager.getSnapshotById(snapshotId2);
@@ -335,19 +372,25 @@ export class TerminalApiService implements TerminalApiInterface {
 
       const files1 = new Set(Object.keys(snapshot1.files));
       const files2 = new Set(Object.keys(snapshot2.files));
-      
-      const addedFiles = Array.from(files2).filter(f => !files1.has(f));
-      const removedFiles = Array.from(files1).filter(f => !files2.has(f));
-      const commonFiles = Array.from(files1).filter(f => files2.has(f));
-      
+
+      const addedFiles = Array.from(files2).filter((f) => !files1.has(f));
+      const removedFiles = Array.from(files1).filter((f) => !files2.has(f));
+      const commonFiles = Array.from(files1).filter((f) => files2.has(f));
+
       const modifiedFiles: string[] = [];
       const identicalFiles: string[] = [];
       const filesDiff: ComparisonResult['filesDiff'] = {};
 
       for (const filePath of commonFiles) {
-        const content1 = await this.getSnapshotFileContent(snapshotId1, filePath);
-        const content2 = await this.getSnapshotFileContent(snapshotId2, filePath);
-        
+        const content1 = await this.getSnapshotFileContent(
+          snapshotId1,
+          filePath,
+        );
+        const content2 = await this.getSnapshotFileContent(
+          snapshotId2,
+          filePath,
+        );
+
         if (content1 !== content2) {
           modifiedFiles.push(filePath);
           filesDiff[filePath] = {
@@ -360,12 +403,12 @@ export class TerminalApiService implements TerminalApiInterface {
       }
 
       // Add removed files to diff
-      removedFiles.forEach(filePath => {
+      removedFiles.forEach((filePath) => {
         filesDiff[filePath] = { changeType: 'removed' };
       });
 
       // Add added files to diff
-      addedFiles.forEach(filePath => {
+      addedFiles.forEach((filePath) => {
         filesDiff[filePath] = { changeType: 'added' };
       });
 
@@ -395,7 +438,10 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Search snapshots using semantic search
    */
-  async searchSnapshots(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
+  async searchSnapshots(
+    query: string,
+    options: SearchOptions = {},
+  ): Promise<SearchResult[]> {
     try {
       if (!this.semanticSearchService) {
         throw new Error('Semantic search service not available');
@@ -409,7 +455,7 @@ export class TerminalApiService implements TerminalApiInterface {
         scoreThreshold: options.scoreThreshold || 0.65,
       });
 
-      return results.map(result => ({
+      return results.map((result) => ({
         snapshotId: result.snapshotId,
         filePath: result.filePath,
         content: result.content,
@@ -436,7 +482,7 @@ export class TerminalApiService implements TerminalApiInterface {
   async indexSnapshots(snapshotIds?: string[]): Promise<IndexingResult> {
     try {
       const startTime = Date.now();
-      
+
       if (!this.semanticSearchService) {
         throw new Error('Semantic search service not available');
       }
@@ -447,13 +493,14 @@ export class TerminalApiService implements TerminalApiInterface {
           success: false,
           snapshotsIndexed: 0,
           filesIndexed: 0,
-          error: 'Individual snapshot indexing not supported. Use indexAllSnapshots instead.',
+          error:
+            'Individual snapshot indexing not supported. Use indexAllSnapshots instead.',
           timeElapsed: Date.now() - startTime,
         };
       } else {
         // Index all snapshots
         await this.semanticSearchService.indexAllSnapshots();
-        
+
         return {
           success: true,
           snapshotsIndexed: this.snapshotManager.getSnapshots().length,
@@ -462,7 +509,8 @@ export class TerminalApiService implements TerminalApiInterface {
         };
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       return {
         success: false,
         snapshotsIndexed: 0,
@@ -480,14 +528,18 @@ export class TerminalApiService implements TerminalApiInterface {
     try {
       const snapshots = this.snapshotManager.getSnapshots();
       const currentIndex = this.snapshotManager.getCurrentSnapshotIndex();
-      const currentSnapshot = currentIndex >= 0 ? snapshots[currentIndex] : undefined;
-      
+      const currentSnapshot =
+        currentIndex >= 0 ? snapshots[currentIndex] : undefined;
+
       return {
         workspaceRoot: this.snapshotManager.getWorkspaceRoot(),
         totalSnapshots: snapshots.length,
         currentSnapshotIndex: currentIndex,
         currentSnapshot,
-        lastSnapshotTime: snapshots.length > 0 ? snapshots[snapshots.length - 1].timestamp : undefined,
+        lastSnapshotTime:
+          snapshots.length > 0
+            ? snapshots[snapshots.length - 1].timestamp
+            : undefined,
       };
     } catch (error) {
       log(`TerminalApiService: Error getting workspace info: ${error}`);
@@ -507,12 +559,12 @@ export class TerminalApiService implements TerminalApiInterface {
       const changedFiles: string[] = [];
       const openFiles: string[] = [];
       let activeFile: string | undefined;
-      
+
       // Get open and active files
-      vscode.window.visibleTextEditors.forEach(editor => {
+      vscode.window.visibleTextEditors.forEach((editor) => {
         const filePath = editor.document.fileName;
         openFiles.push(filePath);
-        
+
         if (editor.document.isDirty) {
           changedFiles.push(filePath);
         }
@@ -557,7 +609,7 @@ export class TerminalApiService implements TerminalApiInterface {
   async validateSnapshot(id: string): Promise<ValidationResult> {
     try {
       const snapshot = this.snapshotManager.getSnapshotById(id);
-      
+
       if (!snapshot) {
         return {
           isValid: false,
@@ -593,10 +645,13 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Export a snapshot
    */
-  async exportSnapshot(id: string, format: 'json' | 'zip'): Promise<ExportResult> {
+  async exportSnapshot(
+    id: string,
+    format: 'json' | 'zip',
+  ): Promise<ExportResult> {
     try {
       const snapshot = this.snapshotManager.getSnapshotById(id);
-      
+
       if (!snapshot) {
         return {
           success: false,
@@ -629,7 +684,9 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Subscribe to snapshot changes
    */
-  onSnapshotsChanged(callback: (snapshots: Snapshot[]) => void): vscode.Disposable {
+  onSnapshotsChanged(
+    callback: (snapshots: Snapshot[]) => void,
+  ): vscode.Disposable {
     return this.snapshotManager.onDidChangeSnapshots(() => {
       callback(this.snapshotManager.getSnapshots());
     });
@@ -638,11 +695,14 @@ export class TerminalApiService implements TerminalApiInterface {
   /**
    * Subscribe to current snapshot changes
    */
-  onCurrentSnapshotChanged(callback: (snapshot: Snapshot | null) => void): vscode.Disposable {
+  onCurrentSnapshotChanged(
+    callback: (snapshot: Snapshot | null) => void,
+  ): vscode.Disposable {
     return this.snapshotManager.onDidChangeSnapshots(() => {
       const index = this.snapshotManager.getCurrentSnapshotIndex();
-      const snapshot = index >= 0 ? this.snapshotManager.getSnapshots()[index] : null;
+      const snapshot =
+        index >= 0 ? this.snapshotManager.getSnapshots()[index] : null;
       callback(snapshot);
     });
   }
-} 
+}

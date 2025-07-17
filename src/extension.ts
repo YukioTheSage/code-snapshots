@@ -163,12 +163,18 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Initialize Terminal API Service
     log('Initializing TerminalApiService...');
-    const terminalApiService = new TerminalApiService(snapshotManager, semanticSearchService);
+    const terminalApiService = new TerminalApiService(
+      snapshotManager,
+      semanticSearchService,
+    );
     log('TerminalApiService initialized successfully');
 
     // Initialize CLI Connector Service
     log('Initializing CliConnectorService...');
-    const cliConnectorService = new CliConnectorService(terminalApiService, context);
+    const cliConnectorService = new CliConnectorService(
+      terminalApiService,
+      context,
+    );
     context.subscriptions.push(cliConnectorService);
     log('CliConnectorService initialized successfully');
 
@@ -207,9 +213,11 @@ export async function activate(context: vscode.ExtensionContext) {
       // Legacy compatibility
       getSnapshots: () => terminalApiService.getSnapshots(),
       takeSnapshot: (options: any) => terminalApiService.takeSnapshot(options),
-      restoreSnapshot: (id: string, options?: any) => terminalApiService.restoreSnapshot(id, options),
+      restoreSnapshot: (id: string, options?: any) =>
+        terminalApiService.restoreSnapshot(id, options),
       deleteSnapshot: (id: string) => terminalApiService.deleteSnapshot(id),
-      searchSnapshots: (query: string, options?: any) => terminalApiService.searchSnapshots(query, options),
+      searchSnapshots: (query: string, options?: any) =>
+        terminalApiService.searchSnapshots(query, options),
     };
 
     // Register the API command

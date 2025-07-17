@@ -3,6 +3,7 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import { TerminalApiService } from './terminalApiService';
 import { log } from '../logger';
 
@@ -16,10 +17,13 @@ export class CliConnectorService implements vscode.Disposable {
   private context: vscode.ExtensionContext;
   private socketPath: string;
 
-  constructor(terminalApiService: TerminalApiService, context: vscode.ExtensionContext) {
+  constructor(
+    terminalApiService: TerminalApiService,
+    context: vscode.ExtensionContext,
+  ) {
     this.terminalApiService = terminalApiService;
     this.context = context;
-    
+
     // Create platform-specific socket path
     const workspaceId = this.getWorkspaceId();
     if (process.platform === 'win32') {
@@ -28,7 +32,7 @@ export class CliConnectorService implements vscode.Disposable {
       const tmpDir = os.tmpdir();
       this.socketPath = path.join(tmpDir, `codelapse-${workspaceId}.sock`);
     }
-    
+
     this.startServer();
   }
 
@@ -47,7 +51,7 @@ export class CliConnectorService implements vscode.Disposable {
         this.connections.add(socket);
 
         // Buffer to accumulate partial data chunks from this socket
-        let buffer = "";
+        let buffer = '';
 
         socket.on('data', async (data) => {
           buffer += data.toString();
@@ -92,7 +96,6 @@ export class CliConnectorService implements vscode.Disposable {
       this.server.on('error', (error) => {
         log(`CLI connector server error: ${error.message}`);
       });
-
     } catch (error) {
       log(`Failed to start CLI connector server: ${error}`);
     }
@@ -122,28 +125,46 @@ export class CliConnectorService implements vscode.Disposable {
           result = await this.terminalApiService.getSnapshot(data.id);
           break;
         case 'restoreSnapshot':
-          result = await this.terminalApiService.restoreSnapshot(data.id, data.options);
+          result = await this.terminalApiService.restoreSnapshot(
+            data.id,
+            data.options,
+          );
           break;
         case 'deleteSnapshot':
           result = await this.terminalApiService.deleteSnapshot(data.id);
           break;
         case 'navigateSnapshot':
-          result = await this.terminalApiService.navigateSnapshot(data.direction);
+          result = await this.terminalApiService.navigateSnapshot(
+            data.direction,
+          );
           break;
         case 'getSnapshotFileContent':
-          result = await this.terminalApiService.getSnapshotFileContent(data.snapshotId, data.filePath);
+          result = await this.terminalApiService.getSnapshotFileContent(
+            data.snapshotId,
+            data.filePath,
+          );
           break;
         case 'getSnapshotChanges':
-          result = await this.terminalApiService.getSnapshotChanges(data.snapshotId);
+          result = await this.terminalApiService.getSnapshotChanges(
+            data.snapshotId,
+          );
           break;
         case 'compareSnapshots':
-          result = await this.terminalApiService.compareSnapshots(data.snapshotId1, data.snapshotId2);
+          result = await this.terminalApiService.compareSnapshots(
+            data.snapshotId1,
+            data.snapshotId2,
+          );
           break;
         case 'searchSnapshots':
-          result = await this.terminalApiService.searchSnapshots(data.query, data.options);
+          result = await this.terminalApiService.searchSnapshots(
+            data.query,
+            data.options,
+          );
           break;
         case 'indexSnapshots':
-          result = await this.terminalApiService.indexSnapshots(data.snapshotIds);
+          result = await this.terminalApiService.indexSnapshots(
+            data.snapshotIds,
+          );
           break;
         case 'getWorkspaceInfo':
           result = await this.terminalApiService.getWorkspaceInfo();
@@ -155,7 +176,10 @@ export class CliConnectorService implements vscode.Disposable {
           result = await this.terminalApiService.validateSnapshot(data.id);
           break;
         case 'exportSnapshot':
-          result = await this.terminalApiService.exportSnapshot(data.id, data.format);
+          result = await this.terminalApiService.exportSnapshot(
+            data.id,
+            data.format,
+          );
           break;
         default:
           throw new Error(`Unknown method: ${method}`);
@@ -180,7 +204,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async getConnectionStatus(): Promise<any> {
     const workspaceInfo = await this.terminalApiService.getWorkspaceInfo();
-    
+
     return {
       connected: true,
       workspace: workspaceInfo.workspaceRoot,
@@ -207,8 +231,12 @@ export class CliConnectorService implements vscode.Disposable {
         created: new Date().toISOString(),
       };
 
-      const connectionFile = path.join(workspaceRoot, '.vscode', 'codelapse-connection.json');
-      
+      const connectionFile = path.join(
+        workspaceRoot,
+        '.vscode',
+        'codelapse-connection.json',
+      );
+
       // Ensure .vscode directory exists
       const vsCodeDir = path.dirname(connectionFile);
       if (!fs.existsSync(vsCodeDir)) {
@@ -228,11 +256,13 @@ export class CliConnectorService implements vscode.Disposable {
   private getWorkspaceId(): string {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (workspaceRoot) {
-      // Create a hash of the workspace path
-      const crypto = require('crypto');
-      return crypto.createHash('md5').update(workspaceRoot).digest('hex').substring(0, 8);
+      return crypto
+        .createHash('md5')
+        .update(workspaceRoot)
+        .digest('hex')
+        .substring(0, 8);
     }
-    
+
     // Fallback to random identifier
     return Math.random().toString(36).substring(2, 10);
   }
@@ -242,7 +272,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   public broadcastEvent(event: any): void {
     const message = JSON.stringify({ type: 'event', event }) + '\n';
-    
+
     this.connections.forEach((socket) => {
       try {
         socket.write(message);
@@ -258,7 +288,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   dispose(): void {
     log('Disposing CLI connector service...');
-    
+
     // Close all connections
     this.connections.forEach((socket) => {
       socket.destroy();
@@ -283,7 +313,11 @@ export class CliConnectorService implements vscode.Disposable {
     try {
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       if (workspaceRoot) {
-        const connectionFile = path.join(workspaceRoot, '.vscode', 'codelapse-connection.json');
+        const connectionFile = path.join(
+          workspaceRoot,
+          '.vscode',
+          'codelapse-connection.json',
+        );
         if (fs.existsSync(connectionFile)) {
           fs.unlinkSync(connectionFile);
         }
@@ -294,4 +328,4 @@ export class CliConnectorService implements vscode.Disposable {
 
     log('CLI connector service disposed');
   }
-} 
+}
