@@ -1,17 +1,15 @@
 import { CodeLapseClient } from '../client';
 
-export class SearchCommands {
+export class EnhancedSearchCommands {
   constructor(private client: CodeLapseClient) {}
 
-  async query(query: string, options: any): Promise<void> {
-    // Enhanced search options with backward compatibility
+  async enhanced(query: string, options: any): Promise<void> {
     const searchOpts = {
       query,
       limit: parseInt(options.limit) || 20,
       scoreThreshold: parseFloat(options.threshold) || 0.65,
       snapshotIds: options.snapshots ? options.snapshots.split(',').map((s: string) => s.trim()) : undefined,
       languages: options.languages ? options.languages.split(',').map((l: string) => l.trim()) : undefined,
-      // Enhanced search features
       searchMode: options.mode || 'semantic',
       includeExplanations: options.explanations !== false,
       includeRelationships: options.relationships !== false,
@@ -24,44 +22,20 @@ export class SearchCommands {
     };
 
     try {
-      // Try enhanced search first, fallback to basic search
-      let results;
-      try {
-        results = await this.client.callApi('enhancedSearch', searchOpts);
-        console.log(JSON.stringify({
-          success: true,
-          query,
-          results: results.results || results,
-          metadata: results.metadata || {},
-          suggestions: results.suggestions || [],
-          relatedQueries: results.relatedQueries || [],
-          enhanced: true
-        }));
-      } catch (enhancedError) {
-        // Fallback to basic search
-        const basicOpts = {
-          query: searchOpts.query,
-          limit: searchOpts.limit,
-          scoreThreshold: searchOpts.scoreThreshold,
-          snapshotIds: searchOpts.snapshotIds,
-          languages: searchOpts.languages
-        };
-        results = await this.client.callApi('searchSnapshots', basicOpts);
-        console.log(JSON.stringify({
-          success: true,
-          query,
-          results,
-          total: results.length,
-          options: basicOpts,
-          enhanced: false,
-          fallback: true
-        }));
-      }
+      const results = await this.client.callApi('enhancedSearch', searchOpts);
+      console.log(JSON.stringify({
+        success: true,
+        query,
+        results,
+        metadata: results.metadata || {},
+        suggestions: results.suggestions || [],
+        relatedQueries: results.relatedQueries || []
+      }));
     } catch (error) {
       console.log(JSON.stringify({
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        suggestions: ['Check search service availability', 'Verify query parameters', 'Try simpler query terms']
+        suggestions: ['Check semantic search service availability', 'Verify query parameters']
       }));
     }
   }
@@ -76,8 +50,7 @@ export class SearchCommands {
       languages: options.languages ? options.languages.split(',').map((l: string) => l.trim()) : undefined,
       includeExplanations: true,
       includeRelationships: options.relationships !== false,
-      contextRadius: parseInt(options.context) || 5,
-      filterCriteria: this.parseFilterCriteria(options)
+      contextRadius: parseInt(options.context) || 5
     };
 
     try {
@@ -86,7 +59,7 @@ export class SearchCommands {
         success: true,
         description,
         searchMode: 'behavioral',
-        results: results.results || results,
+        results,
         metadata: results.metadata || {},
         behaviorAnalysis: {
           matchedBehaviors: results.results?.map((r: any) => r.explanation?.matchedConcepts) || [],
@@ -97,7 +70,7 @@ export class SearchCommands {
       console.log(JSON.stringify({
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        suggestions: ['Refine behavior description', 'Check available snapshots', 'Try more specific behavioral terms']
+        suggestions: ['Refine behavior description', 'Check available snapshots']
       }));
     }
   }
@@ -113,8 +86,7 @@ export class SearchCommands {
       languages: options.languages ? options.languages.split(',').map((l: string) => l.trim()) : undefined,
       includeExplanations: true,
       includeRelationships: true,
-      contextRadius: parseInt(options.context) || 8,
-      filterCriteria: this.parseFilterCriteria(options)
+      contextRadius: parseInt(options.context) || 8
     };
 
     try {
@@ -123,7 +95,7 @@ export class SearchCommands {
         success: true,
         patternType,
         searchMode: 'pattern',
-        results: results.results || results,
+        results,
         metadata: results.metadata || {},
         patternAnalysis: {
           foundPatterns: results.results?.map((r: any) => r.enhancedMetadata?.designPatterns) || [],
@@ -135,7 +107,7 @@ export class SearchCommands {
       console.log(JSON.stringify({
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        suggestions: ['Check pattern type spelling', 'Try common patterns like Factory, Observer, Strategy', 'Use more specific pattern names']
+        suggestions: ['Check pattern type spelling', 'Try common patterns like Factory, Observer, Strategy']
       }));
     }
   }
@@ -143,14 +115,7 @@ export class SearchCommands {
   async batch(queriesFile: string, options: any): Promise<void> {
     try {
       const fs = await import('fs');
-      let queries;
-      
-      try {
-        const fileContent = fs.readFileSync(queriesFile, 'utf8');
-        queries = JSON.parse(fileContent);
-      } catch (parseError) {
-        throw new Error(`Invalid JSON format: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
-      }
+      const queries = JSON.parse(fs.readFileSync(queriesFile, 'utf8'));
 
       if (!Array.isArray(queries)) {
         throw new Error('Queries file must contain an array of query objects');
@@ -167,8 +132,7 @@ export class SearchCommands {
           languages: q.languages,
           includeExplanations: q.includeExplanations !== false,
           includeRelationships: q.includeRelationships !== false,
-          contextRadius: q.contextRadius || 5,
-          filterCriteria: q.filterCriteria || {}
+          contextRadius: q.contextRadius || 5
         })),
         parallel: options.parallel !== false,
         maxConcurrency: parseInt(options.concurrency) || 3
@@ -179,35 +143,16 @@ export class SearchCommands {
         success: true,
         batchResults: results,
         summary: {
-          totalQueries: results?.totalQueries || 0,
-          successfulQueries: results?.successfulQueries || 0,
-          failedQueries: results?.failedQueries || 0,
-          averageResponseTime: results?.averageResponseTime || 0
+          totalQueries: results.totalQueries || 0,
+          successfulQueries: results.successfulQueries || 0,
+          failedQueries: results.failedQueries || 0
         }
       }));
     } catch (error) {
       console.log(JSON.stringify({
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        suggestions: ['Check queries file format', 'Verify file path', 'Validate query objects', 'Ensure queries array structure']
-      }));
-    }
-  }
-
-  async index(options: any): Promise<void> {
-    try {
-      const result = await this.client.callApi('indexSnapshots', {
-        snapshotIds: options.all ? undefined : []
-      });
-      console.log(JSON.stringify({
-        success: true,
-        indexing: result,
-        message: 'Snapshots indexed successfully'
-      }));
-    } catch (error) {
-      console.log(JSON.stringify({
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
+        suggestions: ['Check queries file format', 'Verify file path', 'Validate query objects']
       }));
     }
   }
@@ -215,13 +160,14 @@ export class SearchCommands {
   private parseFilterCriteria(options: any): any {
     const criteria: any = {};
 
-    if (options.complexityMin !== undefined || options.complexityMax !== undefined) {
-      const min = options.complexityMin !== undefined ? parseFloat(options.complexityMin) : 0;
-      const max = options.complexityMax !== undefined ? parseFloat(options.complexityMax) : 100;
-      criteria.complexityRange = [min, max];
+    if (options.complexityMin || options.complexityMax) {
+      criteria.complexityRange = [
+        parseInt(options.complexityMin) || 0,
+        parseInt(options.complexityMax) || 100
+      ];
     }
 
-    if (options.qualityMin !== undefined) {
+    if (options.qualityMin) {
       criteria.qualityThreshold = parseFloat(options.qualityMin);
     }
 
@@ -243,4 +189,4 @@ export class SearchCommands {
 
     return criteria;
   }
-} 
+}

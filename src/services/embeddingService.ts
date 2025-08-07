@@ -19,7 +19,7 @@ export class EmbeddingService {
 
   constructor(credentialsManager: CredentialsManager) {
     this.credentialsManager = credentialsManager;
-    this.initialize();
+    // Note: Initialization is deferred until first use via ensureInitialized()
   }
 
   private async initialize(): Promise<void> {

@@ -55,14 +55,19 @@ export class CodeChunker {
       Math.min(config.get<number>('chunkOverlap', 100), this.chunkSize - 5),
     );
 
-    log(
-      `CodeChunker initialized with chunkSize=${this.chunkSize}, chunkOverlap=${this.chunkOverlap}`,
-    );
+    // Only log in non-test environment
+    if (process.env.NODE_ENV !== 'test') {
+      log(
+        `CodeChunker initialized with chunkSize=${this.chunkSize}, chunkOverlap=${this.chunkOverlap}`,
+      );
+    }
 
-    // Initialize parsers asynchronously to avoid blocking
-    this.initializeParsers().catch((error) => {
-      log(`Parser initialization error: ${error}`);
-    });
+    // Initialize parsers asynchronously to avoid blocking, but skip in tests
+    if (process.env.NODE_ENV !== 'test') {
+      this.initializeParsers().catch((error) => {
+        log(`Parser initialization error: ${error}`);
+      });
+    }
   }
 
   /**

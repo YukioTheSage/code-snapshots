@@ -174,6 +174,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const cliConnectorService = new CliConnectorService(
       terminalApiService,
       context,
+      semanticSearchService,
     );
     context.subscriptions.push(cliConnectorService);
     log('CliConnectorService initialized successfully');

@@ -11,6 +11,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "prepublish": "npm run build"
   },
   "keywords": [
@@ -63,4 +65,4 @@
     "dist/**/*",
     "README.md"
   ]
-} 
+}

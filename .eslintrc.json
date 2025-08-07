@@ -2,10 +2,15 @@
   "root": true,
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
-    "project": "./tsconfig.json",
+    "project": [
+      "./tsconfig.json",
+      "./tsconfig.test.json"
+    ],
     "sourceType": "module"
   },
-  "plugins": ["@typescript-eslint"],
+  "plugins": [
+    "@typescript-eslint"
+  ],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended",
@@ -15,5 +20,8 @@
     "node": true,
     "es6": true
   },
-  "ignorePatterns": ["out/", "node_modules/"]
+  "ignorePatterns": [
+    "out/",
+    "node_modules/"
+  ]
 }

@@ -37,7 +37,7 @@ function updateLoggingConfig() {
 }
 
 export function log(message: string, ...args: unknown[]): void {
-  if (loggingEnabled) {
+  if (loggingEnabled && process.env.NODE_ENV !== 'test') {
     const logMessage = `[CodeLapse] ${message}`;
     console.log(logMessage, ...args);
     if (outputChannel) {
@@ -49,7 +49,7 @@ export function log(message: string, ...args: unknown[]): void {
 }
 
 export function logVerbose(message: string, ...args: unknown[]): void {
-  if (loggingEnabled && verboseLogging) {
+  if (loggingEnabled && verboseLogging && process.env.NODE_ENV !== 'test') {
     log(`[VERBOSE] ${message}`, ...args);
   }
 }

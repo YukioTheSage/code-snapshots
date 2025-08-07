@@ -8,6 +8,9 @@ import { SnapshotCommands } from './commands/snapshot';
 import { SearchCommands } from './commands/search';
 import { WorkspaceCommands } from './commands/workspace';
 import { UtilityCommands } from './commands/utility';
+import { EnhancedSearchCommands } from './commands/enhanced-search';
+import { AnalysisCommands } from './commands/analysis';
+import { ChunkingCommands } from './commands/chunking';
 
 const program = new Command();
 
@@ -155,12 +158,70 @@ async function main() {
   searchCmd
     .command('query <query>')
     .alias('q')
-    .description('Search snapshots with natural language')
+    .description('Search snapshots with natural language (enhanced with AI-optimized features)')
     .option('-l, --limit <number>', 'Limit results', '20')
     .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.65')
     .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
     .option('--languages <langs>', 'Filter by languages (comma-separated)')
+    .option('-m, --mode <mode>', 'Search mode: semantic, syntactic, behavioral, hybrid', 'semantic')
+    .option('--no-explanations', 'Disable result explanations')
+    .option('--no-relationships', 'Disable relationship information')
+    .option('--no-quality', 'Disable quality metrics')
+    .option('-c, --context <lines>', 'Context radius in lines', '5')
+    .option('-r, --ranking <strategy>', 'Ranking strategy: relevance, quality, recency, usage', 'relevance')
+    .option('--complexity-min <number>', 'Minimum complexity score')
+    .option('--complexity-max <number>', 'Maximum complexity score')
+    .option('--quality-min <number>', 'Minimum quality threshold')
+    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
+    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
+    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
+    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .option('--max-per-file <number>', 'Maximum results per file')
+    .option('--no-diversify', 'Disable result diversification')
     .action(searchCommands.query.bind(searchCommands));
+
+  searchCmd
+    .command('behavioral <description>')
+    .alias('b')
+    .description('Search for code based on behavioral description')
+    .option('-l, --limit <number>', 'Limit results', '20')
+    .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.6')
+    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option('--languages <langs>', 'Filter by languages (comma-separated)')
+    .option('--no-relationships', 'Disable relationship information')
+    .option('-c, --context <lines>', 'Context radius in lines', '5')
+    .option('--complexity-min <number>', 'Minimum complexity score')
+    .option('--complexity-max <number>', 'Maximum complexity score')
+    .option('--quality-min <number>', 'Minimum quality threshold')
+    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
+    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
+    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
+    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .action(searchCommands.behavioral.bind(searchCommands));
+
+  searchCmd
+    .command('pattern <pattern-type>')
+    .alias('p')
+    .description('Search for specific design patterns or code structures')
+    .option('-l, --limit <number>', 'Limit results', '15')
+    .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.7')
+    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option('--languages <langs>', 'Filter by languages (comma-separated)')
+    .option('-c, --context <lines>', 'Context radius in lines', '8')
+    .option('--complexity-min <number>', 'Minimum complexity score')
+    .option('--complexity-max <number>', 'Maximum complexity score')
+    .option('--quality-min <number>', 'Minimum quality threshold')
+    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
+    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
+    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .action(searchCommands.pattern.bind(searchCommands));
+
+  searchCmd
+    .command('batch <queries-file>')
+    .description('Execute multiple search queries from JSON file')
+    .option('--no-parallel', 'Disable parallel processing')
+    .option('--concurrency <number>', 'Maximum concurrent queries', '3')
+    .action(searchCommands.batch.bind(searchCommands));
 
   searchCmd
     .command('index')
@@ -209,6 +270,197 @@ async function main() {
     .option('-f, --format <format>', 'Export format (json|zip)', 'json')
     .option('-o, --output <path>', 'Output path')
     .action(utilityCommands.export.bind(utilityCommands));
+
+  // Enhanced search commands for AI agents
+  const enhancedSearchCommands = new EnhancedSearchCommands(client);
+  const enhancedSearchCmd = program
+    .command('search-enhanced')
+    .alias('se')
+    .description('Enhanced semantic search commands for AI agents');
+
+  enhancedSearchCmd
+    .command('query <query>')
+    .alias('q')
+    .description('Enhanced semantic search with AI-optimized features')
+    .option('-l, --limit <number>', 'Limit results', '20')
+    .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.65')
+    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option('--languages <langs>', 'Filter by languages (comma-separated)')
+    .option('-m, --mode <mode>', 'Search mode: semantic, syntactic, behavioral, hybrid', 'semantic')
+    .option('--no-explanations', 'Disable result explanations')
+    .option('--no-relationships', 'Disable relationship information')
+    .option('--no-quality', 'Disable quality metrics')
+    .option('-c, --context <lines>', 'Context radius in lines', '5')
+    .option('-r, --ranking <strategy>', 'Ranking strategy: relevance, quality, recency, usage', 'relevance')
+    .option('--complexity-min <number>', 'Minimum complexity score')
+    .option('--complexity-max <number>', 'Maximum complexity score')
+    .option('--quality-min <number>', 'Minimum quality threshold')
+    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
+    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
+    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
+    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .option('--max-per-file <number>', 'Maximum results per file')
+    .option('--no-diversify', 'Disable result diversification')
+    .action(enhancedSearchCommands.enhanced.bind(enhancedSearchCommands));
+
+  enhancedSearchCmd
+    .command('behavioral <description>')
+    .alias('b')
+    .description('Search for code based on behavioral description')
+    .option('-l, --limit <number>', 'Limit results', '20')
+    .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.6')
+    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option('--languages <langs>', 'Filter by languages (comma-separated)')
+    .option('--no-relationships', 'Disable relationship information')
+    .option('-c, --context <lines>', 'Context radius in lines', '5')
+    .action(enhancedSearchCommands.behavioral.bind(enhancedSearchCommands));
+
+  enhancedSearchCmd
+    .command('pattern <pattern-type>')
+    .alias('p')
+    .description('Search for specific design patterns or code structures')
+    .option('-l, --limit <number>', 'Limit results', '15')
+    .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.7')
+    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option('--languages <langs>', 'Filter by languages (comma-separated)')
+    .option('-c, --context <lines>', 'Context radius in lines', '8')
+    .action(enhancedSearchCommands.pattern.bind(enhancedSearchCommands));
+
+  enhancedSearchCmd
+    .command('batch <queries-file>')
+    .description('Execute multiple search queries from JSON file')
+    .option('--no-parallel', 'Disable parallel processing')
+    .option('--concurrency <number>', 'Maximum concurrent queries', '3')
+    .action(enhancedSearchCommands.batch.bind(enhancedSearchCommands));
+
+  // Code analysis commands
+  const analysisCommands = new AnalysisCommands(client);
+  const analysisCmd = program
+    .command('analyze')
+    .alias('an')
+    .description('Code analysis commands for AI agents');
+
+  analysisCmd
+    .command('chunk <chunk-id>')
+    .description('Analyze a specific code chunk')
+    .option('-s, --snapshot <id>', 'Snapshot ID (required)')
+    .option('-t, --type <type>', 'Analysis type: full, quick, quality', 'full')
+    .option('--no-relationships', 'Disable relationship analysis')
+    .option('--no-quality', 'Disable quality metrics')
+    .option('--no-context', 'Disable context information')
+    .action(analysisCommands.chunk.bind(analysisCommands));
+
+  analysisCmd
+    .command('file <file-path>')
+    .description('Analyze a complete file')
+    .option('-s, --snapshot <id>', 'Snapshot ID (required)')
+    .option('-t, --type <type>', 'Analysis type: full, quick, quality', 'full')
+    .option('--no-chunks', 'Disable chunk information')
+    .option('--no-metrics', 'Disable file metrics')
+    .option('--no-suggestions', 'Disable improvement suggestions')
+    .action(analysisCommands.file.bind(analysisCommands));
+
+  analysisCmd
+    .command('quality <target>')
+    .description('Analyze code quality metrics')
+    .option('-s, --snapshot <id>', 'Snapshot ID (required)')
+    .option('-m, --metrics <metrics>', 'Specific metrics (comma-separated): readability,maintainability,complexity,documentation')
+    .option('--no-recommendations', 'Disable recommendations')
+    .option('--no-trends', 'Disable trend analysis')
+    .option('--threshold <number>', 'Quality threshold (0-1)', '0.7')
+    .action(analysisCommands.quality.bind(analysisCommands));
+
+  analysisCmd
+    .command('relationships <chunk-id>')
+    .description('Analyze chunk relationships and dependencies')
+    .option('--no-transitive', 'Disable transitive relationships')
+    .option('-d, --depth <number>', 'Maximum relationship depth', '3')
+    .option('--types <types>', 'Relationship types (comma-separated): calls,imports,extends,implements')
+    .option('--no-strength', 'Disable relationship strength calculation')
+    .action(analysisCommands.relationships.bind(analysisCommands));
+
+  analysisCmd
+    .command('batch <input-file>')
+    .description('Execute multiple analysis operations from JSON file')
+    .option('--no-parallel', 'Disable parallel processing')
+    .option('--concurrency <number>', 'Maximum concurrent operations', '5')
+    .action(analysisCommands.batch.bind(analysisCommands));
+
+  // Enhanced chunking commands
+  const chunkingCommands = new ChunkingCommands(client);
+  const chunkingCmd = program
+    .command('chunk')
+    .alias('ch')
+    .description('Enhanced code chunking commands');
+
+  chunkingCmd
+    .command('file <file-path>')
+    .description('Chunk a specific file with enhanced strategies')
+    .option('-s, --snapshot <id>', 'Snapshot ID (required)')
+    .option('--strategy <strategy>', 'Chunking strategy: semantic, hierarchical, context-aware', 'semantic')
+    .option('--max-size <number>', 'Maximum chunk size in lines', '1000')
+    .option('--min-size <number>', 'Minimum chunk size in lines', '50')
+    .option('--overlap <number>', 'Overlap between chunks in lines', '0')
+    .option('--no-preserve-structure', 'Disable structure preservation')
+    .option('--no-context', 'Disable context inclusion')
+    .action(chunkingCommands.file.bind(chunkingCommands));
+
+  chunkingCmd
+    .command('snapshot <snapshot-id>')
+    .description('Chunk all files in a snapshot')
+    .option('--strategy <strategy>', 'Chunking strategy: semantic, hierarchical, context-aware', 'semantic')
+    .option('--patterns <patterns>', 'File patterns to include (comma-separated)')
+    .option('--max-size <number>', 'Maximum chunk size in lines', '1000')
+    .option('--min-size <number>', 'Minimum chunk size in lines', '50')
+    .option('--overlap <number>', 'Overlap between chunks in lines', '0')
+    .option('--no-preserve-structure', 'Disable structure preservation')
+    .option('--no-context', 'Disable context inclusion')
+    .option('--no-exclude-binary', 'Include binary files')
+    .option('--exclude-tests', 'Exclude test files')
+    .action(chunkingCommands.snapshot.bind(chunkingCommands));
+
+  chunkingCmd
+    .command('list <snapshot-id>')
+    .description('List chunks in a snapshot with filtering')
+    .option('-f, --file <file-path>', 'Filter by specific file')
+    .option('--types <types>', 'Filter by semantic types (comma-separated)')
+    .option('--quality-min <number>', 'Minimum quality threshold')
+    .option('--complexity-min <number>', 'Minimum complexity score')
+    .option('--complexity-max <number>', 'Maximum complexity score')
+    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
+    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
+    .option('-p, --page <number>', 'Page number', '1')
+    .option('-l, --limit <number>', 'Results per page', '50')
+    .option('--sort <field>', 'Sort by field: startLine, endLine, quality, complexity', 'startLine')
+    .option('--order <order>', 'Sort order: asc, desc', 'asc')
+    .action(chunkingCommands.list.bind(chunkingCommands));
+
+  chunkingCmd
+    .command('metadata <chunk-id>')
+    .description('Get detailed metadata for a chunk')
+    .option('--no-relationships', 'Disable relationship information')
+    .option('--no-quality', 'Disable quality metrics')
+    .option('--no-context', 'Disable context information')
+    .option('--context-radius <number>', 'Context radius in lines', '5')
+    .action(chunkingCommands.metadata.bind(chunkingCommands));
+
+  chunkingCmd
+    .command('context <chunk-id>')
+    .description('Get contextual information for a chunk')
+    .option('-r, --radius <number>', 'Context radius in lines', '5')
+    .option('--no-file-context', 'Disable file context')
+    .option('--no-architectural', 'Disable architectural context')
+    .option('--no-business', 'Disable business context')
+    .action(chunkingCommands.context.bind(chunkingCommands));
+
+  chunkingCmd
+    .command('dependencies <chunk-id>')
+    .description('Get chunk dependencies and relationships')
+    .option('--no-transitive', 'Disable transitive dependencies')
+    .option('-d, --depth <number>', 'Maximum dependency depth', '3')
+    .option('--types <types>', 'Dependency types (comma-separated): imports,calls,extends,implements')
+    .option('--no-strength', 'Disable relationship strength calculation')
+    .action(chunkingCommands.dependencies.bind(chunkingCommands));
 
   // AI-friendly batch operations
   program

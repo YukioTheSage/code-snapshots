@@ -2,7 +2,7 @@
   "name": "vscode-snapshots",
   "displayName": "CodeLapse",
   "description": "Simple Git-like code snapshots with easy navigation and improved user experience",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "publisher": "YukioTheSage",
   "icon": "images/snapshot.png",
   "license": "MIT",
@@ -559,7 +559,10 @@
     "package": "npm run esbuild-prod && vsce package",
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
