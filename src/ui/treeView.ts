@@ -56,7 +56,7 @@ export enum SnapshotType {
  * Manages filtering and grouping of snapshots.
  */
 export class SnapshotTreeDataProvider
-  implements vscode.TreeDataProvider<SnapshotTreeItem>
+  implements vscode.TreeDataProvider<SnapshotTreeItem>, vscode.Disposable
 {
   private _onDidChangeTreeData: vscode.EventEmitter<
     SnapshotTreeItem | undefined | null | void
@@ -75,6 +75,14 @@ export class SnapshotTreeDataProvider
 
   private snapshotTypeFilter: SnapshotType; // Type of snapshots this provider shows (MANUAL or AUTO)
   private viewName: string; // For logging ("Manual" or "Auto")
+
+  /**
+   * Every subscription this provider registers. Both listeners below were
+   * previously registered and dropped on the floor: the configuration listener's
+   * return value was discarded, and the class had no `dispose()` at all, so the
+   * listeners outlived the provider and kept firing into a dead tree.
+   */
+  private disposables: vscode.Disposable[] = [];
 
   /**
    * Creates an instance of SnapshotTreeDataProvider.
@@ -102,27 +110,44 @@ export class SnapshotTreeDataProvider
     log(`Initializing TreeDataProvider for ${this.viewName} view.`);
 
     // Listen for changes in the snapshot manager to refresh the tree
-    snapshotManager.onDidChangeSnapshots(() => {
-      logVerbose(
-        `(${this.viewName} View) Snapshots changed event received, refreshing tree.`,
-      );
-      this.refresh();
-    });
-
-    // Listen for configuration changes relevant to this view
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('vscode-snapshots.showOnlyChangedFiles')) {
-        this.showOnlyChangedFiles = getShowOnlyChangedFiles();
+    this.disposables.push(
+      snapshotManager.onDidChangeSnapshots(() => {
         logVerbose(
-          `(${this.viewName} View) showOnlyChangedFiles config changed to ${this.showOnlyChangedFiles}, refreshing tree.`,
+          `(${this.viewName} View) Snapshots changed event received, refreshing tree.`,
         );
         this.refresh();
-      }
-      // Add listener for other config changes if needed in the future
-    });
+      }),
+    );
+
+    // Listen for configuration changes relevant to this view
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('vscode-snapshots.showOnlyChangedFiles')) {
+          this.showOnlyChangedFiles = getShowOnlyChangedFiles();
+          logVerbose(
+            `(${this.viewName} View) showOnlyChangedFiles config changed to ${this.showOnlyChangedFiles}, refreshing tree.`,
+          );
+          this.refresh();
+        }
+        // Add listener for other config changes if needed in the future
+      }),
+    );
 
     // Initialize with current configuration value
     this.showOnlyChangedFiles = getShowOnlyChangedFiles();
+  }
+
+  /**
+   * Releases every subscription this provider holds, including the tree-data
+   * event emitter. Without this the provider stays referenced by the workspace
+   * and the snapshot manager after its view is gone.
+   */
+  dispose(): void {
+    for (const d of this.disposables) {
+      d.dispose();
+    }
+    this.disposables = [];
+    this._onDidChangeTreeData.dispose();
   }
 
   /**

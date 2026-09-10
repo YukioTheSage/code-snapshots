@@ -5,10 +5,12 @@ import { log } from '../logger';
 /**
  * Displays the number of active filters in the status bar for a snapshot view.
  */
-export class FilterStatusBar {
+export class FilterStatusBar implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
   private treeDataProvider: SnapshotTreeDataProvider;
   private viewName: string;
+  /** Retained so it can be released; the return value was previously dropped. */
+  private treeDataSubscription: vscode.Disposable;
 
   /**
    * @param treeDataProvider The provider to observe for filter changes
@@ -22,13 +24,13 @@ export class FilterStatusBar {
       100,
     );
 
-    // Set initial state
-    this.update();
-
     // Watch for filter changes
-    treeDataProvider.onDidChangeTreeData(() => {
+    this.treeDataSubscription = treeDataProvider.onDidChangeTreeData(() => {
       this.update();
     });
+
+    // Set initial state
+    this.update();
 
     this.statusBarItem.show();
     log(`Filter status bar initialized for ${viewName} view`);
@@ -55,9 +57,10 @@ Click to clear all filters`;
   }
 
   /**
-   * Dispose of the status bar item when no longer needed.
+   * Dispose of the status bar item and its subscription when no longer needed.
    */
   dispose(): void {
+    this.treeDataSubscription.dispose();
     this.statusBarItem.dispose();
   }
 }

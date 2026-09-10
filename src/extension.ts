@@ -118,21 +118,22 @@ export async function activate(context: vscode.ExtensionContext) {
       manualSnapshotTreeDataProvider,
       'My Snapshots',
     );
-    context.subscriptions.push({
-      dispose: () => {
-        manualFilterStatusBar.dispose();
-      },
-    });
 
     const autoFilterStatusBar = new FilterStatusBar(
       autoSnapshotTreeDataProvider,
       'Auto Snapshots',
     );
-    context.subscriptions.push({
-      dispose: () => {
-        autoFilterStatusBar.dispose();
-      },
-    });
+
+    // Both status bars and both tree providers are Disposable, so they are
+    // registered directly. The manual `{ dispose: () => x.dispose() }` wrappers
+    // this replaces were the only disposal the tree providers ever had -- and
+    // they had none, so their listeners outlived them.
+    context.subscriptions.push(
+      manualFilterStatusBar,
+      autoFilterStatusBar,
+      manualSnapshotTreeDataProvider,
+      autoSnapshotTreeDataProvider,
+    );
     log('Filter Status Bars initialized.');
 
     // Register the Snapshot Content Provider for diff views
@@ -228,11 +229,7 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // Register status bar controller for disposal
-    context.subscriptions.push({
-      dispose: () => {
-        statusBarController.dispose();
-      },
-    });
+    context.subscriptions.push(statusBarController);
 
     // Register Config Tree View for settings
     const configTreeDataProvider = new ConfigTreeDataProvider(context);

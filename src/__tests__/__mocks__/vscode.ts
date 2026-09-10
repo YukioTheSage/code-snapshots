@@ -22,10 +22,33 @@ export const OutputChannel = {
 export class EventEmitter<T> {
   private listeners: Array<(e: T) => void> = [];
 
+  /**
+   * Returns a subscription that actually unsubscribes.
+   *
+   * This previously returned `{ dispose: jest.fn() }`, which made the mock
+   * convenient to assert against and useless for testing disposal: a test could
+   * prove `dispose` was *called* but never that the listener stopped firing. So
+   * a provider that leaked its listeners passed every test in this repo.
+   *
+   * Assertions should `jest.spyOn(subscription, 'dispose')` before disposing
+   * rather than expecting a pre-made mock.
+   */
   readonly event = (listener: (e: T) => void) => {
     this.listeners.push(listener);
-    return { dispose: jest.fn() };
+    return {
+      dispose: () => {
+        const index = this.listeners.indexOf(listener);
+        if (index !== -1) {
+          this.listeners.splice(index, 1);
+        }
+      },
+    };
   };
+
+  /** Current subscriber count, so tests can assert a listener was released. */
+  get listenerCount(): number {
+    return this.listeners.length;
+  }
 
   fire(value?: T): void {
     for (const listener of [...this.listeners]) {

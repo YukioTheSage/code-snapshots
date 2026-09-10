@@ -20,10 +20,10 @@ function formatTimeAgo(timestamp: number): string {
   }
 }
 
-export class StatusBarController {
+export class StatusBarController implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
   private snapshotManager: SnapshotManager;
-  private updateInterval: NodeJS.Timeout; // Track the interval for cleanup
+  private disposables: vscode.Disposable[] = [];
 
   constructor(snapshotManager: SnapshotManager) {
     this.snapshotManager = snapshotManager;
@@ -32,18 +32,26 @@ export class StatusBarController {
       100,
     );
 
-    // Update the status bar immediately
-    this.updateStatusBar();
-
     // Register commands
     const viewSnapshotsCommand = 'vscode-snapshots.viewSnapshots';
     this.statusBarItem.command = viewSnapshotsCommand;
 
+    // Update on change rather than on a timer.
+    //
+    // The previous implementation polled every 5 seconds -- rewriting the item
+    // 12 times a minute whether or not anything had changed, and still leaving
+    // the "time ago" text up to 5 seconds stale. A subscription updates exactly
+    // when the snapshot list changes, and the interval that kept the extension
+    // host awake is gone.
+    this.disposables.push(
+      this.snapshotManager.onDidChangeSnapshots(() => this.updateStatusBar()),
+    );
+
+    // Update the status bar immediately
+    this.updateStatusBar();
+
     // Show the status bar item
     this.statusBarItem.show();
-
-    // Listen for snapshot changes
-    this.updateInterval = setInterval(() => this.updateStatusBar(), 5000);
   }
 
   /**
@@ -90,6 +98,9 @@ export class StatusBarController {
    */
   public dispose(): void {
     this.statusBarItem.dispose();
-    clearInterval(this.updateInterval); // Clear the interval to prevent memory leak
+    for (const d of this.disposables) {
+      d.dispose();
+    }
+    this.disposables = [];
   }
 }
