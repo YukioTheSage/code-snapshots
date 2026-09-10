@@ -11,7 +11,11 @@ import { SnapshotStorage } from './snapshotStorage';
 import { API as GitAPI } from './types/git'; // Import Git API type
 import { assertNoSymlinkPath, ensureWithinDirectory } from './pathSecurity';
 import { MAX_FILE_SIZE_BYTES } from './security/limits';
-import { getUnrecoverableFiles } from './snapshotVerification';
+import {
+  getUnrecoverableFiles,
+  scanSnapshotIntegrity,
+  type SnapshotIntegrityReport,
+} from './snapshotVerification';
 
 // Keep Snapshot interface definition here as it's central to the manager
 export interface Snapshot {
@@ -114,6 +118,18 @@ export function selectPrunableSnapshots(
 
 export class SnapshotManager {
   private snapshots: Snapshot[] = [];
+
+  /**
+   * Cached integrity scan of `snapshots`, refreshed at every site that changes
+   * the list. Cached rather than recomputed per read because the tree view asks
+   * per snapshot row, which would otherwise rescan the whole store for each one.
+   */
+  private integrityReport: SnapshotIntegrityReport = {
+    brokenSnapshotIds: [],
+    missingBaseSnapshotIds: [],
+    unrecoverableFileCount: 0,
+    perSnapshot: {},
+  };
   private currentSnapshotIndex = -1;
   private storage: SnapshotStorage;
   private gitApi: GitAPI | null; // Store Git API instance
@@ -163,6 +179,7 @@ export class SnapshotManager {
       log('Snapshot loading failed or returned null state.');
     }
     // No need to sort here, assuming storage returns them sorted
+    this.refreshIntegrityReport();
     this._onDidChangeSnapshots.fire(); // Notify listeners about the loaded state
   }
 
@@ -560,6 +577,7 @@ export class SnapshotManager {
     // Add to our in-memory list
     this.snapshots.push(snapshot);
     this.currentSnapshotIndex = this.snapshots.length - 1;
+    this.refreshIntegrityReport();
 
     // Update the index file
     await this.saveSnapshotIndex();
@@ -1132,6 +1150,39 @@ export class SnapshotManager {
   }
 
   /**
+   * Rescan integrity. Must be called after anything that changes `snapshots`.
+   */
+  private refreshIntegrityReport(): void {
+    this.integrityReport = scanSnapshotIntegrity(this.snapshots);
+    if (this.integrityReport.unrecoverableFileCount > 0) {
+      log(
+        `Integrity: ${
+          this.integrityReport.unrecoverableFileCount
+        } file(s) across ${
+          this.integrityReport.brokenSnapshotIds.length
+        } snapshot(s) cannot be reconstructed. Missing base snapshot(s): ${
+          this.integrityReport.missingBaseSnapshotIds.join(', ') || 'none'
+        }.`,
+      );
+    }
+  }
+
+  /**
+   * The most recent integrity scan. Detection is worthless if it stays in the
+   * log, so the tree and the restore preview read this.
+   */
+  public getIntegrityReport(): SnapshotIntegrityReport {
+    return this.integrityReport;
+  }
+
+  /**
+   * Relative paths in one snapshot whose content cannot be reconstructed.
+   */
+  public getUnrecoverableFilesFor(snapshotId: string): string[] {
+    return this.integrityReport.perSnapshot[snapshotId] ?? [];
+  }
+
+  /**
    * Delete a specific snapshot
    */
   public async deleteSnapshot(snapshotId: string): Promise<boolean> {
@@ -1183,6 +1234,10 @@ export class SnapshotManager {
 
       await this.saveSnapshotIndex();
       log(`Snapshot index saved after deleting ${snapshotId}.`);
+
+      // Deleting a snapshot can break every snapshot that used it as a base, so
+      // the report must be rebuilt before listeners render the tree.
+      this.refreshIntegrityReport();
 
       this._onDidChangeSnapshots.fire();
       log('Fired onDidChangeSnapshots event after deleteSnapshot');
@@ -1423,7 +1478,6 @@ export class SnapshotManager {
       );
       return;
     }
-
     const requested = this.snapshots.length - maxSnapshots;
     if (removableIds.length < requested) {
       log(
@@ -1453,6 +1507,10 @@ export class SnapshotManager {
 
     // Emit event if snapshots were actually removed
     if (removedSnapshots.length > 0) {
+      // Pruning removes deltas other snapshots may depend on, so rebuild the
+      // report before listeners render. (The early returns above do not change
+      // the list, so they need no refresh.)
+      this.refreshIntegrityReport();
       this._onDidChangeSnapshots.fire();
       log(
         `Pruned ${removedSnapshots.length} snapshot(s); ${this.snapshots.length} remain. Fired onDidChangeSnapshots event after enforceSnapshotLimit`,

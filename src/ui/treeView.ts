@@ -795,6 +795,15 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       if (snapshot.gitBranch) {
         descParts.push(`$(git-branch) ${snapshot.gitBranch}`);
       }
+      // Detection is worthless if it stays in the log: mark snapshots whose
+      // history is incomplete so the state is visible before a restore is
+      // attempted, not discovered afterwards.
+      const unrecoverable = snapshotManager.getUnrecoverableFilesFor(
+        snapshot.id,
+      );
+      if (unrecoverable.length > 0) {
+        descParts.push(`$(warning) ${unrecoverable.length} unreadable`);
+      }
       // Join parts with a separator for readability
       description = descParts.join('  |  ');
 
@@ -845,6 +854,11 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       } else {
         snapshotTooltip.appendMarkdown(
           `**Changes:** None detected relative to previous snapshot.\n\n`,
+        );
+      }
+      if (unrecoverable.length > 0) {
+        snapshotTooltip.appendMarkdown(
+          `\n$(warning) **${unrecoverable.length} file(s) in this snapshot cannot be restored** — their history is incomplete. Affected paths are listed when you restore or compare.\n\n`,
         );
       }
       snapshotTooltip.appendMarkdown(

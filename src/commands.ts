@@ -312,6 +312,27 @@ function registerJumpToSnapshotCommand({
         return;
       }
 
+      // Warn before the confirmation UI, so the user knows this snapshot cannot
+      // be fully applied before they are asked to approve anything. The restore
+      // itself will skip those files and refuse to delete anything; saying so up
+      // front is the difference between an informed choice and a surprise.
+      const unrecoverableFiles = snapshotManager.getUnrecoverableFilesFor(
+        snapshot.id,
+      );
+      if (unrecoverableFiles.length > 0) {
+        const proceed = await vscode.window.showWarningMessage(
+          `This snapshot's history is incomplete: ${unrecoverableFiles.length} file(s) cannot be reconstructed and will be skipped. Files not in the snapshot will also be left untouched rather than deleted. Restore what is readable anyway?`,
+          { modal: true },
+          'Restore What Is Readable',
+        );
+        if (proceed !== 'Restore What Is Readable') {
+          log(
+            `Restore cancelled by user: snapshot ${targetSnapshotId} has ${unrecoverableFiles.length} unrecoverable file(s).`,
+          );
+          return;
+        }
+      }
+
       if (changes.length === 0) {
         log('No changes detected between snapshot and workspace.'); // Corrected: Use log
         vscode.window.showInformationMessage(
