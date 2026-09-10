@@ -228,7 +228,11 @@ describe('Authentication Service', () => {
       expect(stats).toBeDefined();
       expect(stats.originalCount).toBe(mockResults.length);
       expect(stats.finalCount).toBe(results.length);
-      expect(stats.processingTime).toBeGreaterThan(0);
+      // A duration is not required to be > 0: sub-millisecond work
+      // legitimately measures 0 ms, which made this fail intermittently.
+      expect(typeof stats.processingTime).toBe('number');
+      expect(Number.isFinite(stats.processingTime)).toBe(true);
+      expect(stats.processingTime).toBeGreaterThanOrEqual(0);
       expect(stats.diversityScore).toBeGreaterThanOrEqual(0);
       expect(stats.averageQualityScore).toBeGreaterThan(0);
 
@@ -425,7 +429,11 @@ export class SecureAuthenticationService {
       const endTime = Date.now();
 
       // Verify performance metrics
-      expect(stats.processingTime).toBeGreaterThan(0);
+      // A duration is not required to be > 0: sub-millisecond work
+      // legitimately measures 0 ms, which made this fail intermittently.
+      expect(typeof stats.processingTime).toBe('number');
+      expect(Number.isFinite(stats.processingTime)).toBe(true);
+      expect(stats.processingTime).toBeGreaterThanOrEqual(0);
       expect(stats.processingTime).toBeLessThan(endTime - startTime + 100); // Allow some margin
       expect(stats.originalCount).toBe(20);
       expect(stats.finalCount).toBeLessThanOrEqual(10);

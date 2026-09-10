@@ -202,7 +202,11 @@ describe('ResultManager', () => {
       expect(stats).toBeDefined();
       expect(stats.originalCount).toBe(mockBaseResults.length);
       expect(stats.finalCount).toBe(results.length);
-      expect(stats.processingTime).toBeGreaterThan(0);
+      // A duration is not required to be > 0: sub-millisecond work
+      // legitimately measures 0 ms, which made this fail intermittently.
+      expect(typeof stats.processingTime).toBe('number');
+      expect(Number.isFinite(stats.processingTime)).toBe(true);
+      expect(stats.processingTime).toBeGreaterThanOrEqual(0);
       expect(stats.diversityScore).toBeGreaterThanOrEqual(0);
       expect(stats.averageQualityScore).toBeGreaterThanOrEqual(0);
     });
@@ -750,7 +754,11 @@ describe('ResultManager', () => {
 
       expect(results.length).toBeLessThanOrEqual(20);
       expect(processingTime).toBeLessThan(5000); // Should complete within 5 seconds
-      expect(stats.processingTime).toBeGreaterThan(0);
+      // A duration is not required to be > 0: sub-millisecond work
+      // legitimately measures 0 ms, which made this fail intermittently.
+      expect(typeof stats.processingTime).toBe('number');
+      expect(Number.isFinite(stats.processingTime)).toBe(true);
+      expect(stats.processingTime).toBeGreaterThanOrEqual(0);
     });
 
     it('should handle results with missing metadata gracefully', async () => {

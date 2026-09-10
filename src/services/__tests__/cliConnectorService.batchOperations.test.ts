@@ -261,7 +261,10 @@ describe('CliConnectorService - Batch Operations', () => {
       );
 
       expect(result.performance).toBeDefined();
-      expect(result.performance.totalTime).toBeGreaterThan(0);
+      // See the note on processingTime below: a duration can be 0.
+      expect(typeof result.performance.totalTime).toBe('number');
+      expect(Number.isFinite(result.performance.totalTime)).toBe(true);
+      expect(result.performance.totalTime).toBeGreaterThanOrEqual(0);
       expect(result.performance.averageTimePerOperation).toBeGreaterThan(0);
       expect(result.performance.throughput).toBeGreaterThan(0);
       expect(result.performance.memoryUsage).toBeDefined();
@@ -493,7 +496,10 @@ describe('CliConnectorService - Batch Operations', () => {
       const result = await (cliConnectorService as any).handleBatchSearch(data);
 
       expect(result.performance).toBeDefined();
-      expect(result.performance.totalTime).toBeGreaterThan(0);
+      // See the note on processingTime below: a duration can be 0.
+      expect(typeof result.performance.totalTime).toBe('number');
+      expect(Number.isFinite(result.performance.totalTime)).toBe(true);
+      expect(result.performance.totalTime).toBeGreaterThanOrEqual(0);
       expect(result.performance.averageTimePerQuery).toBeGreaterThan(0);
       expect(result.performance.throughput).toBeGreaterThan(0);
       expect(result.performance.memoryUsage).toBeDefined();
