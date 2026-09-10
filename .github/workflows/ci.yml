@@ -7,6 +7,39 @@ on:
     branches: [ main ]
 
 jobs:
+  # `shared/` is a source package that neither of the other jobs compiles.
+  # Locally it reaches the extension and CLI through a *junction*
+  # (node_modules/codelapse-core -> shared/), but that junction is created by
+  # hand, not by npm -- there are no `workspaces` declarations. So `npm ci` here
+  # and in the jobs below installs the *published* codelapse-core from the
+  # registry, not the local source. Two consequences worth knowing:
+  #   1. A change to shared/src does not affect what CI tests. Anything fixed
+  #      here must be published (or the repo moved to npm workspaces) before the
+  #      other jobs exercise it.
+  #   2. Without this job, shared/ was compiled by nothing at all, so a compile
+  #      error in it passed CI while breaking every local build.
+  shared:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+      # No lint or format:check step here, deliberately. shared/ has neither
+      # script, and 8 of its files do not currently satisfy prettier. Add both
+      # once those are formatted, rather than gating on a check that would fail
+      # on arrival.
+
   extension:
     runs-on: ubuntu-latest
     steps:

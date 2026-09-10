@@ -60,11 +60,15 @@ export class GitIntegration {
    */
   public getCurrentBranch(): string | undefined {
     try {
-      const result = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-        cwd: this.workspaceRoot,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
+      const result = execFileSync(
+        'git',
+        ['rev-parse', '--abbrev-ref', 'HEAD'],
+        {
+          cwd: this.workspaceRoot,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'ignore'],
+        },
+      );
       return result.trim();
     } catch {
       return undefined;
@@ -145,11 +149,15 @@ export class GitIntegration {
     }
 
     try {
-      const result = execFileSync('git', ['log', '-1', '--format=%B', commitHash], {
-        cwd: this.workspaceRoot,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
+      const result = execFileSync(
+        'git',
+        ['log', '-1', '--format=%B', commitHash],
+        {
+          cwd: this.workspaceRoot,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'ignore'],
+        },
+      );
       return result.trim();
     } catch {
       return undefined;
@@ -231,7 +239,10 @@ export class GitIntegration {
     date: string;
   }> {
     // Validate limit is a safe positive integer
-    const safeLimit = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 10)));
+    const safeLimit = Math.max(
+      1,
+      Math.min(10000, Math.floor(Number(limit) || 10)),
+    );
 
     try {
       const result = execFileSync(
@@ -327,15 +338,31 @@ export class GitIntegration {
   }
 
   /**
-   * List local branches
+   * List local branches.
+   *
+   * Uses `%(refname:lstrip=2)` rather than the more obvious
+   * `%(refname:short)`. `:short` returns the *shortest unambiguous* name, so on
+   * any repository that has a branch and a tag sharing a name -- release
+   * branches such as `v0.9.4` almost always do -- it yields `heads/v0.9.4`
+   * instead of `v0.9.4`. `getCurrentBranch()` uses
+   * `git rev-parse --abbrev-ref`, which never disambiguates, so the two
+   * disagreed and the current branch was missing from its own branch list
+   * (the CLI marks it with `branch === result.currentBranch`).
+   *
+   * `lstrip=2` strips exactly `refs/heads/`, so names containing slashes
+   * (`feature/foo`) survive intact.
    */
   public listBranches(): string[] {
     try {
-      const result = execFileSync('git', ['branch', '--list', '--format=%(refname:short)'], {
-        cwd: this.workspaceRoot,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
+      const result = execFileSync(
+        'git',
+        ['branch', '--list', '--format=%(refname:lstrip=2)'],
+        {
+          cwd: this.workspaceRoot,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'ignore'],
+        },
+      );
 
       return result
         .trim()
