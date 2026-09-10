@@ -228,12 +228,6 @@
           "scope": "resource",
           "description": "Enable the 'Create Git Commit from Snapshot' command."
         },
-        "vscode-snapshots.git.autoSnapshotBeforeOperation": {
-          "type": "boolean",
-          "default": false,
-          "scope": "resource",
-          "description": "Automatically take a snapshot before Git operations like pull, merge, and rebase."
-        },
         "vscode-snapshots.autoSnapshot.rules": {
           "type": "array",
           "items": {
@@ -271,27 +265,27 @@
         "vscode-snapshots.ux.useAnimations": {
           "type": "boolean",
           "default": true,
-          "description": "Use animations for smoother transitions"
+          "description": "Show a gutter direction indicator while navigating to the previous or next snapshot. Nothing else is animated."
         },
         "vscode-snapshots.ux.confirmRestoreOperations": {
           "type": "boolean",
           "default": true,
-          "description": "Confirm before restoring snapshots"
+          "description": "Ask for confirmation before restoring a snapshot. This does NOT control the unsaved-changes warning when a restore would discard unsaved work; that warning is always shown, because it prevents data loss."
         },
         "vscode-snapshots.semanticSearch.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable semantic code search across snapshots"
+          "description": "Enable semantic code search across snapshots. Requires a Gemini API key and a Pinecone API key; there is no offline mode, so indexing prompts for a missing key and fails if you decline."
         },
         "vscode-snapshots.semanticSearch.chunkSize": {
           "type": "number",
           "default": 200,
-          "description": "Maximum token size for each code chunk"
+          "description": "Maximum lines per code chunk"
         },
         "vscode-snapshots.semanticSearch.chunkOverlap": {
           "type": "number",
           "default": 50,
-          "description": "Overlap between adjacent chunks in tokens"
+          "description": "Overlap between adjacent chunks in lines, clamped to chunkSize minus 5"
         },
         "vscode-snapshots.semanticSearch.autoIndex": {
           "type": "boolean",

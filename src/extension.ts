@@ -13,7 +13,7 @@ import { SnapshotContentProvider } from './snapshotContentProvider'; // Import t
 import { registerCommands, CommandDependencies } from './commands'; // Import the new command registration function and interface
 import { ChangeNotifier } from './changeNotifier'; // Import the new notifier class
 import { GitExtension, API as GitAPI } from './types/git.d'; // Import Git API types
-import { getGitAutoSnapshotEnabled, getUxSettings } from './config'; // Import config helper
+import { getUxSettings } from './config'; // Import config helper
 import { CredentialsManager } from './services/credentialsManager';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
@@ -241,7 +241,16 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // --- Setup Git Command Interception ---
-    setupGitCommandInterception(context, snapshotManager);
+    // Removed. `setupGitCommandInterception` registered three private command
+    // IDs (`vscode-snapshots.internal.preGitCommand.git.pull` and friends) that
+    // nothing in the repository ever invoked, so `git.autoSnapshotBeforeOperation`
+    // never fired -- and even if something had invoked them, re-registering a
+    // command ID in another extension does not take over the built-in Git
+    // extension's execution path, so the handler would have been a pass-through.
+    // The advertised safety net did not exist, so the setting and the dead
+    // registration are gone rather than left as a decorative promise. See
+    // docs/KNOWN_ISSUES.md; take the snapshot explicitly instead (`codelapse git
+    // auto-commit <operation>`, or Ctrl+Alt+S before the Git operation).
     // --- End Git Command Interception ---
 
     // Setup auto-snapshot timer if enabled
@@ -399,77 +408,3 @@ export async function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   // Clean up resources when extension is deactivated
 }
-
-// --- Helper Function for Git Command Interception ---
-
-function setupGitCommandInterception(
-  context: vscode.ExtensionContext,
-  snapshotManager: SnapshotManager,
-) {
-  const gitCommandsToWrap = ['git.pull', 'git.merge', 'git.rebase']; // Add more if needed, e.g., git.sync, git.pullRebase
-
-  log('Setting up Git command interception...');
-
-  gitCommandsToWrap.forEach((commandId) => {
-    const disposable = vscode.commands.registerCommand(
-      `vscode-snapshots.internal.preGitCommand.${commandId}`, // Use a unique internal command ID
-      async (...args: unknown[]): Promise<void> => {
-        // Check configuration *at the time of execution*
-        const autoSnapshotEnabled = getGitAutoSnapshotEnabled(); // Use config helper
-
-        if (autoSnapshotEnabled) {
-          log(`Intercepted Git command: ${commandId}.`);
-
-          // The change check that used to live here asked the wrong question:
-          // it read `getSnapshotChangeSummary(active.id)`, which describes what
-          // changed when that snapshot was *taken*, not whether anything has
-          // changed since. It could therefore skip a snapshot that was needed,
-          // and it could disagree with the manager's own check. The manager
-          // decides, and reports which it did.
-          try {
-            // Take snapshot silently with a descriptive message
-            const description = `Auto-snapshot before ${commandId}`;
-            const outcome = await snapshotManager.takeSnapshot(description, {
-              tags: ['auto', 'git', commandId],
-            });
-            if (outcome.created) {
-              log(`Auto-snapshot taken successfully before ${commandId}.`);
-            } else {
-              log(
-                `No snapshot taken before ${commandId}: nothing changed since the last snapshot.`,
-              );
-            }
-          } catch (error: unknown) {
-            const errMsg =
-              error instanceof Error ? error.message : String(error);
-            log(`Failed to take auto-snapshot before ${commandId}: ${errMsg}`);
-            vscode.window.showWarningMessage(
-              `Failed to take automatic snapshot before ${commandId}. Proceeding with Git operation.`,
-            );
-          }
-        } else {
-          log(
-            `Intercepted Git command: ${commandId}. Auto-snapshot disabled, skipping.`,
-          );
-        }
-
-        // Execute the original Git command
-        log(`Executing original Git command: ${commandId}`);
-        try {
-          await vscode.commands.executeCommand(commandId, ...args);
-          log(`Original Git command ${commandId} executed successfully.`);
-        } catch (error: unknown) {
-          const errMsg = error instanceof Error ? error.message : String(error);
-          log(`Error executing original Git command ${commandId}: ${errMsg}`);
-        }
-      },
-    );
-
-    context.subscriptions.push(disposable);
-    log(`Registered wrapper for Git command: ${commandId}`);
-  });
-
-  log('Git command interception setup complete.');
-}
-
-// --- End Helper Function ---

@@ -59,12 +59,6 @@ export class ConfigTreeDataProvider
       section: 'General',
     },
     {
-      key: 'git.autoSnapshotBeforeOperation',
-      label: 'Auto Snapshot Before Git Operations',
-      type: 'boolean',
-      section: 'General',
-    },
-    {
       key: 'autoSnapshot.rules',
       label: 'Auto Snapshot Rules',
       // Declared as a string, so the row rendered "[object Object]" and the

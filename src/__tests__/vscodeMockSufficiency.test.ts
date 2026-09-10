@@ -35,10 +35,12 @@ describe('vscode mock sufficiency', () => {
   it('can construct CodeChunker with numeric configuration, not NaN', () => {
     const chunker = new CodeChunker();
     // A mock whose config.get returned undefined made these NaN, silently
-    // exercising a code path production never takes.
-    expect((chunker as unknown as { chunkSize: number }).chunkSize).toBe(250);
+    // exercising a code path production never takes. The values are the same
+    // ones package.json declares as the schema defaults, because in a real
+    // host the schema default is what `.get` returns for an unset key.
+    expect((chunker as unknown as { chunkSize: number }).chunkSize).toBe(200);
     expect((chunker as unknown as { chunkOverlap: number }).chunkOverlap).toBe(
-      100,
+      50,
     );
   });
 

@@ -79,13 +79,20 @@ export class CodeChunker {
       'vscode-snapshots.semanticSearch',
     );
 
-    // Increase default chunk size for better context
-    this.chunkSize = Math.max(10, config.get<number>('chunkSize', 250));
+    // These are LINE counts, not token counts, and they are the fallback used
+    // when the key is absent. The manifest declares the same values as the
+    // schema defaults (`semanticSearch.chunkSize` 200, `chunkOverlap` 100 --
+    // see package.json), and in a real host the schema default is what `.get`
+    // returns, so the two must agree. They did not: the fallbacks said 250/100
+    // while the manifest said 200/50, so no reader could tell which number was
+    // live. Behaviour is unchanged -- 200/50 is what the host has always
+    // resolved to.
+    this.chunkSize = Math.max(10, config.get<number>('chunkSize', 200));
 
-    // Increase default overlap for better continuity
+    // Overlap is clamped to leave at least 5 lines of progress per chunk.
     this.chunkOverlap = Math.max(
       0,
-      Math.min(config.get<number>('chunkOverlap', 100), this.chunkSize - 5),
+      Math.min(config.get<number>('chunkOverlap', 50), this.chunkSize - 5),
     );
 
     // Only log in non-test environment

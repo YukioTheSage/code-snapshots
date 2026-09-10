@@ -18,11 +18,9 @@ export function getMaxSnapshots(): number {
 // as it needs to react to changes immediately. If more complex config
 // interactions are needed later, this could be centralized here.
 
-export function getGitAutoSnapshotEnabled(): boolean {
-  return vscode.workspace
-    .getConfiguration(CONFIG_SECTION)
-    .get<boolean>('git.autoSnapshotBeforeOperation', false); // Default to false
-}
+// `getGitAutoSnapshotEnabled` was removed along with `git.autoSnapshotBeforeOperation`
+// and the unreachable command interception it fed. Nothing invoked the wrapper
+// commands, so the setting could never have an effect. See docs/KNOWN_ISSUES.md.
 
 // Add a type for auto-snapshot rules
 export interface AutoSnapshotRule {
