@@ -21,6 +21,12 @@ export interface SnapshotContextOptions {
  * implementation hardcoded `**\/node_modules/**` and ignored `.gitignore`, so a
  * user could select build output and end up with a snapshot containing none of
  * their selections.
+ *
+ * Paths are returned with the platform's own separator, because the engine
+ * matches the selection set against `path.relative(...)`. Normalising to
+ * forward slashes here looks tidier and silently drops every selection on
+ * Windows: `selectedPathsSet.has('src\\a.ts')` is false for `'src/a.ts'`, so a
+ * selective snapshot would contain nothing at all.
  */
 export async function listSelectableFiles(
   workspaceRoot: string,
@@ -33,9 +39,7 @@ export async function listSelectableFiles(
 
   const seen = new Set<string>();
   for (const uri of initial) {
-    const relative = path
-      .relative(workspaceRoot, uri.fsPath)
-      .replace(/\\/g, '/');
+    const relative = path.relative(workspaceRoot, uri.fsPath);
     if (!relative || relative.startsWith('..')) {
       continue;
     }

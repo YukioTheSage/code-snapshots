@@ -7,9 +7,14 @@ jest.mock('codelapse-core', () => ({
   GitignoreParser: jest.fn().mockImplementation(() => ({
     getExcludeGlobPattern: () => '**/out/**,**/node_modules/**',
     getNegatedGlobs: () => [],
-    shouldIgnore: (relativePath: string) =>
-      relativePath.startsWith('out/') ||
-      relativePath.startsWith('node_modules/'),
+    // The real parser normalises separators internally, so the mock must too:
+    // these called with the platform's native path separator.
+    shouldIgnore: (relativePath: string) => {
+      const normalized = relativePath.replace(/\\/g, '/');
+      return (
+        normalized.startsWith('out/') || normalized.startsWith('node_modules/')
+      );
+    },
   })),
 }));
 
@@ -31,17 +36,21 @@ describe('listSelectableFiles', () => {
     // The bug: the picker offered out/ and node_modules/ files, which
     // takeSnapshotInternal then filtered out, producing a snapshot that
     // contained none of the user's selections.
-    expect(files).toEqual(['README.md', 'src/a.ts']);
+    expect(files).toEqual(['README.md', path.join('src', 'a.ts')]);
   });
 
-  it('returns workspace-relative paths with forward slashes', async () => {
+  it('returns paths in the separator the engine matches against', async () => {
     (vscode.workspace as any).findFiles = jest
       .fn()
       .mockResolvedValue([vscode.Uri.file(`${ROOT}/src/deep/b.ts`)]);
 
     const files = await listSelectableFiles(ROOT);
 
-    expect(files).toEqual(['src/deep/b.ts']);
+    // The engine matches the selection set against `path.relative(...)`, which
+    // uses the platform separator. Returning forward slashes here looks tidier
+    // and drops every selection on Windows, emptying the snapshot.
+    expect(files).toEqual([path.join('src', 'deep', 'b.ts')]);
+    expect(files).toEqual([path.relative(ROOT, `${ROOT}/src/deep/b.ts`)]);
   });
 
   it('returns an empty list when nothing is selectable', async () => {
@@ -50,6 +59,23 @@ describe('listSelectableFiles', () => {
       .mockResolvedValue([vscode.Uri.file(`${ROOT}/out/a.js`)]);
 
     expect(await listSelectableFiles(ROOT)).toEqual([]);
+  });
+
+  it('produces keys the engine lookup will find', () => {
+    // The engine's selective filter is
+    // `selectedPathsSet.has(path.relative(workspaceRoot, fileUri.fsPath))`.
+    // Reproducing that lookup here is the only thing that catches a separator
+    // contract mismatch, which is invisible on POSIX and fatal on Windows.
+    const workspaceRoot = ROOT;
+    const fileUri = vscode.Uri.file(`${ROOT}/src/a.ts`);
+    (vscode.workspace as any).findFiles = jest
+      .fn()
+      .mockResolvedValue([fileUri]);
+    const engineKey = path.relative(workspaceRoot, fileUri.fsPath);
+
+    return listSelectableFiles(workspaceRoot).then((files) => {
+      expect(new Set(files).has(engineKey)).toBe(true);
+    });
   });
 });
 
