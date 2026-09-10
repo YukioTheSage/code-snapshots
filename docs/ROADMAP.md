@@ -51,7 +51,11 @@ CodeLapse has evolved into a comprehensive snapshot management system with the f
 
 - [x] Storing branch/commit info (`git.addCommitInfo`)
 - [x] Create Git Commit from Snapshot command (`git.commitFromSnapshotEnabled`)
-- [x] Auto-snapshot before pull/merge/rebase (`git.autoSnapshotBeforeOperation`)
+- [ ] Auto-snapshot before pull/merge/rebase — **not implemented**. The
+      `git.autoSnapshotBeforeOperation` setting was removed because its
+      interception handlers were never invoked; VS Code exposes no
+      pre-operation hook, so this needs a design decision. See
+      [Known Issues](KNOWN_ISSUES.md).
 
 #### Getting Started:
 

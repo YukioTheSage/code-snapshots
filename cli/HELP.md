@@ -36,6 +36,15 @@ codelapse <command> --help
 
 ## Command Groups
 
+> **Which groups need the extension running.** Commands are served by the
+> CodeLapse extension over IPC. With no extension running the CLI falls back to
+> **standalone mode**, which implements snapshot, config, workspace, file and
+> `git` commit operations against `.snapshots/` directly — but *not* the
+> `analyze`, `chunk`, `search index`, `rules`, `filter` and `diagnostics` API
+> methods. Those fail with an explicit "not supported in standalone mode" error
+> rather than returning anything invented. Start VS Code with the extension
+> active to use them.
+
 ### Connection & Status
 - `codelapse status` - Check connection to CodeLapse extension
 
@@ -52,16 +61,16 @@ codelapse <command> --help
 - `codelapse search query <query>` - Semantic search across snapshots
 - `codelapse search behavioral <description>` - Search by behavioral description
 - `codelapse search pattern <pattern-type>` - Search for design patterns
-- `codelapse search index` - Index snapshots for search
-- `codelapse analyze chunk <chunk-id>` - Analyze a specific code chunk
-- `codelapse analyze file <file-path>` - Analyze a complete file
-- `codelapse analyze quality <target>` - Analyze code quality metrics
+- `codelapse search index --all` - Index snapshots for search. **`--all` is required**: the extension can index every snapshot but not individual ones, so the unflagged form fails with "Individual snapshot indexing not supported".
+- `codelapse analyze chunk <chunk-id>` - Analyze a specific code chunk ⚠️ **placeholder data** (see below)
+- `codelapse analyze file <file-path>` - Analyze a complete file (derived from the snapshot's real content)
+- `codelapse analyze quality <target>` - Analyze code quality metrics ⚠️ **placeholder data**
 
 ### Git Integration
 - `codelapse git commit <snapshot-id>` - Create Git commit from snapshot
-- `codelapse git auto-commit <operation>` - Auto-snapshot before Git operations
+- `codelapse git auto-commit <operation>` - Auto-snapshot before Git operations (requires the extension; not available in standalone mode)
 - `codelapse git info` - Get Git repository information
-- `codelapse git compare <snapshot-id> <commit-hash>` - Compare with Git commit
+- `codelapse git compare <snapshot-id> <commit-hash>` - Compare with Git commit (requires the extension; not available in standalone mode)
 
 ### Auto-Snapshot Rules
 - `codelapse rules list` - List auto-snapshot rules
@@ -104,6 +113,14 @@ codelapse <command> --help
 - `codelapse files history <file-path>` - Show file history across snapshots
 - `codelapse files export <snapshot-id> <file-path> <output>` - Export file
 
+### Code Chunking
+- `codelapse chunk file <file-path>` - Chunk a file with the enhanced strategies (real data)
+- `codelapse chunk snapshot <snapshot-id>` - Chunk every file in a snapshot (real data)
+- `codelapse chunk list <snapshot-id>` - List chunks in a snapshot ⚠️ **placeholder data**
+- `codelapse chunk metadata <chunk-id>` - Chunk metadata ⚠️ **placeholder data**
+- `codelapse chunk context <chunk-id>` - Chunk context ⚠️ **placeholder data**
+- `codelapse chunk dependencies <chunk-id>` - Chunk dependencies ⚠️ **placeholder data**
+
 ### Workspace Information
 - `codelapse workspace info` - Show workspace information
 - `codelapse workspace state` - Show current workspace state
@@ -115,7 +132,10 @@ codelapse <command> --help
 
 ### Advanced Features
 - `codelapse batch <file>` - Execute batch commands from JSON file
-- `codelapse watch` - Watch for snapshot changes (real-time events)
+- `codelapse watch` - Watch for snapshot changes (real-time events). **Requires a
+  running extension**: events are pushed over IPC, and in standalone mode there
+  is no event source, so the command returns immediately without printing
+  anything.
 - `codelapse api <method>` - Direct API call (AI-friendly)
 
 ## Examples
@@ -153,7 +173,7 @@ codelapse search behavioral "validates user input and returns error messages"
 ### Git Integration
 ```bash
 # Create auto-snapshot before git pull
-codelapse git auto-snapshot "pull" --description "Before pulling latest changes"
+codelapse git auto-commit "pull" --description "Before pulling latest changes"
 
 # Create git commit from snapshot
 codelapse git commit abc123 --message "Add user authentication" --push
@@ -262,9 +282,27 @@ codelapse search query "authentication" --json
 codelapse filter favorites --json
 ```
 
+Progress and warnings are written to stderr, so stdout stays parseable. The
+process exit code is 0 when the JSON payload's `success` is `true` and 1 when it
+is `false` (verified for 30 command/argument combinations).
+
+## Placeholder data
+
+These commands return a well-formed response whose **values are not derived from
+your repository** — hardcoded numbers, `chunk-1`, `example.ts`, `'Factory'`,
+`'User authentication service'`. Do not use them for decisions:
+
+- `codelapse analyze chunk`
+- `codelapse analyze quality`
+- `codelapse chunk list` / `metadata` / `context` / `dependencies`
+
+`codelapse analyze file`, `codelapse chunk file` and `codelapse chunk snapshot`
+are **not** in this list: they read real snapshot content and score real chunks.
+See [Known Issues](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/KNOWN_ISSUES.md).
+
 ## Real-time Events
 
-Watch for real-time changes:
+Watch for real-time changes. Requires a running extension (IPC mode):
 
 ```bash
 # Watch all events

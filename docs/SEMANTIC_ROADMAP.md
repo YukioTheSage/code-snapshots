@@ -71,12 +71,12 @@ The semantic search feature will enable:
   "vscode-snapshots.semanticSearch.chunkSize": {
     "type": "number",
     "default": 200,
-    "description": "Maximum token size for each code chunk"
+    "description": "Maximum lines per code chunk"
   },
   "vscode-snapshots.semanticSearch.chunkOverlap": {
     "type": "number",
     "default": 50,
-    "description": "Overlap between adjacent chunks in tokens"
+    "description": "Overlap between adjacent chunks in lines"
   },
   "vscode-snapshots.semanticSearch.autoIndex": {
     "type": "boolean",

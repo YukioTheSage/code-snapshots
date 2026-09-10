@@ -243,7 +243,9 @@ codelapse batch ai-workflow.json --json --silent
 
 #### Real-time Monitoring
 ```bash
-# Monitor workspace changes for reactive workflows
+# Monitor workspace changes for reactive workflows.
+# Requires a running extension: events are pushed over IPC, and in standalone
+# mode there is no event source, so this prints nothing and exits immediately.
 codelapse watch --events snapshots,workspace --json | while read -r event; do
   echo "Processing event: $event"
   # Add your AI logic here
@@ -294,6 +296,15 @@ codelapse snapshot restore dev-config-snapshot --files "config/" --json --silent
 
 ### JSON Output Mode
 All commands support the `--json` flag for structured, machine-readable output.
+
+Verified against the built `dist/cli.js` for `status`, `snapshot list`,
+`snapshot show`, `git info`, `git compare`, `config list/get/validate/export`,
+`workspace info/state/files`, `rules list`, `filter favorites/tags/file/date`,
+`diagnostics system/health/performance`, `files list/history/export`,
+`utility validate`, `analyze chunk/file/quality`, `search query`,
+`search index` and `api`: every one wrote a single JSON object to stdout and
+exit code 0 or 1 agreeing with its own `success` field. Human-readable progress
+and warnings go to **stderr**, so stdout stays parseable.
 
 ```bash
 # Success response
@@ -813,7 +824,9 @@ Create a Git commit from a snapshot.
 ```
 
 #### `auto-commit <operation>`
-Create an auto-snapshot before a Git operation.
+Create an auto-snapshot before a Git operation. **Requires the extension** — this
+method is not implemented in standalone mode, where it fails with
+`Method autoSnapshotBeforeGitOperation not supported in standalone mode`.
 - `-d, --description <desc>`: Snapshot description.
 - `-u, --include-untracked`: Include untracked files.
 

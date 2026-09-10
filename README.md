@@ -148,8 +148,14 @@ codelapse status --json --silent
 
 - **📝 Branch Context**: Store Git branch/commit info with snapshots
 - **🔄 Git Commands**: Create commits directly from snapshots
-- **🛡️ Safety Net**: Auto-snapshot before Git operations
 - **🤝 Perfect Harmony**: Works alongside Git without conflicts
+
+> **Not implemented:** taking a snapshot *automatically* before `git pull`,
+> `git merge` or `git rebase` run from the VS Code Git UI. No such setting exists
+> (the previous `git.autoSnapshotBeforeOperation` did nothing and was removed),
+> and VS Code exposes no pre-operation hook. Take the snapshot explicitly with
+> Ctrl+Alt+S or `codelapse git auto-commit <operation>` before a destructive Git
+> operation. See [Known Issues](docs/KNOWN_ISSUES.md).
 
 </details>
 
@@ -381,6 +387,7 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 | ⚡ [CLI Guide](cli/README.md)                  | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing) |
 | 🏗️ [Standalone Mode](STANDALONE_MODE.md)     | 🤖 [AI Guidelines](cli/README.md#ai-agent-guidelines) | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
 | ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 📦 [Core Package](shared/README.md)           | 💬 [Issues](https://github.com/YukioTheSage/code-snapshots/issues) |
+| ⚠️ [Known Issues](docs/KNOWN_ISSUES.md)       |                                                |                                                         |
 
 ---
 
@@ -401,7 +408,10 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 
 - `vscode-snapshots.git.addCommitInfo`: Store Git branch/commit with snapshots (default: `true`)
 - `vscode-snapshots.git.commitFromSnapshotEnabled`: Enable "Create Git Commit from Snapshot" command (default: `true`)
-- `vscode-snapshots.git.autoSnapshotBeforeOperation`: Auto-snapshot before Git pull/merge/rebase (default: `false`)
+
+> There is no setting for taking a snapshot *before* a Git operation. The previous
+> `git.autoSnapshotBeforeOperation` was removed because nothing ever invoked the
+> interception it configured. See [Known Issues](docs/KNOWN_ISSUES.md).
 
 </details>
 
@@ -420,9 +430,15 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 **Basic Settings:**
 
 - `vscode-snapshots.semanticSearch.enabled`: Enable semantic code search (default: `true`)
-- `vscode-snapshots.semanticSearch.chunkSize`: Maximum token size for code chunks (default: `200`)
-- `vscode-snapshots.semanticSearch.chunkOverlap`: Overlap between chunks in tokens (default: `50`)
+- `vscode-snapshots.semanticSearch.chunkSize`: Maximum number of **lines** per code chunk (default: `200`)
+- `vscode-snapshots.semanticSearch.chunkOverlap`: Overlap between adjacent chunks, in **lines** (default: `50`, clamped to `chunkSize - 5`)
 - `vscode-snapshots.semanticSearch.autoIndex`: Auto-index snapshots in background (default: `false`)
+- `vscode-snapshots.semanticSearch.embedding.model` / `.dimension`: Embedding model id and vector dimension (defaults: `gemini-embedding-2`, `3072`)
+
+> **There is no offline mode.** Semantic search needs *both* a Gemini API key
+> (embeddings) and a Pinecone API key (vector store). Indexing prompts for a
+> missing key and fails if you decline the prompt; it never falls back to a
+> local index.
 
 **🔑 API Key Management & Security:**
 
@@ -432,6 +448,14 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 - **Required Services**:
   - **Pinecone API Key**: For vector database storage and retrieval
   - **Gemini API Key**: For semantic code analysis and embeddings
+
+> ⚠️ **Not everything is in SecretStorage.** The API keys are. The CLI connection
+> file is not: on every activation the extension writes
+> `.vscode/codelapse-connection.json` inside your workspace, containing the IPC
+> auth token and socket path for the running session. It is listed in
+> `.gitignore`, so do not remove that entry, and treat any committed copy as a
+> leaked credential. The token is regenerated on every activation, so a stale
+> copy is inert.
 
 **🛡️ Security Best Practices:**
 

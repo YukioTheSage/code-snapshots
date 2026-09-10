@@ -570,7 +570,10 @@ codelapse git commit snapshot-123 --branch feature/auth --push
 
 #### `git auto-commit <operation>`
 
-Create an auto-snapshot before a Git operation.
+Create an auto-snapshot before a Git operation. **Requires a running extension** —
+`autoSnapshotBeforeGitOperation` is not implemented in standalone mode, where this
+command exits 1 with `Method autoSnapshotBeforeGitOperation not supported in
+standalone mode`.
 
 ```bash
 codelapse git auto-commit merge
@@ -1118,13 +1121,16 @@ codelapse api createSnapshot -d '{"description": "test"}'
 
 ## Mode Availability
 
+Verified by running each family with `--json` in standalone mode (no extension
+running) and reading the resulting envelope.
+
 | Feature | Standalone | IPC (Extension) |
 |---------|-----------|-----------------|
 | Snapshot CRUD | Yes | Yes |
 | File operations | Yes | Yes |
-| Filtering & metadata | Yes | Yes |
+| Filtering & metadata (`filter …`) | **No** | Yes |
 | Configuration | Yes | Yes |
-| Git integration | Yes | Yes |
+| Git integration | **Partly** — `commit`, `info` work; `auto-commit` and `compare` require IPC | Yes |
 | Workspace info (`workspace info`) | Yes | Yes |
 | Workspace state (`workspace state`/`files`) | No | Yes |
 | Utility tasks (`export`, `validate`) | No | Yes |
@@ -1136,7 +1142,7 @@ codelapse api createSnapshot -d '{"description": "test"}'
 | Live features (`watch`) | No | Yes |
 | UI components | No | Yes |
 
-*Note: Commands that are not supported in Standalone mode require the CodeLapse VS Code Extension to be running and connected.*
+*Note: Commands that are not supported in Standalone mode require the CodeLapse VS Code Extension to be running and connected. They fail with `{"success": false, "error": "Method <name> not supported in standalone mode"}` and exit 1 — they do not return invented data.*
 
 ---
 

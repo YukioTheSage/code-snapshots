@@ -77,6 +77,8 @@
   "files": [
     "dist/**/*",
     "README.md",
-    "HELP.md"
+    "HELP.md",
+    "API.md",
+    "AI_GUIDE.md"
   ]
 }

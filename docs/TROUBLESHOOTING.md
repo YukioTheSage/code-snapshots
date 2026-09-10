@@ -689,19 +689,25 @@ If security concerns outweigh benefits, completely disable semantic search:
    - Handle any merge conflicts first
    - Check for uncommitted changes
 
-#### Problem: Auto-snapshot before Git operations not working
-**Symptoms**: No snapshots created before Git pull/merge/rebase
+#### Problem: No snapshot is taken before a Git pull/merge/rebase
+**Symptoms**: You ran `git pull`, `git merge` or `git rebase` and no snapshot appeared
 
-**Solutions**:
-1. **Setting Verification**:
-   - Enable `vscode-snapshots.git.autoSnapshotBeforeOperation`
-   - Ensure Git operations are performed through VS Code
-   - External Git commands won't trigger auto-snapshots
+**Explanation**: this is expected. CodeLapse cannot take a snapshot before a Git
+operation performed from the VS Code Git UI or command palette, and there is no
+setting that makes it do so.
 
-2. **Git Extension Compatibility**:
-   - Verify VS Code Git extension is enabled
-   - Check for conflicts with other Git extensions
-   - Update VS Code and Git extension to latest versions
+1. **Why**: VS Code exposes no pre-operation hook for the built-in Git extension,
+   and re-registering a command id in another extension does not take over its
+   execution path. The setting that claimed to do this
+   (`vscode-snapshots.git.autoSnapshotBeforeOperation`) never fired, and both it
+   and its dead registration have been removed. See [Known Issues](KNOWN_ISSUES.md).
+
+2. **What to do instead**:
+   - Press `Ctrl+Alt+S` before the Git operation.
+   - Or run `codelapse git auto-commit pull` from a terminal with the extension
+     running (this API method is not available in standalone mode).
+   - External `git` commands run from a terminal have never triggered CodeLapse;
+     only the extension's own change detection does.
 
 ### CI/CD Integration Issues
 

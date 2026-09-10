@@ -247,6 +247,12 @@ interface CodelapseConfig {
 }
 ```
 
+> `git.autoSnapshotBeforeOperation` is part of the type, is validated and is
+> settable, but **nothing reads it** — neither the extension (where the VS Code
+> setting and its dead command interception were removed) nor the CLI. Setting it
+> has no effect. `git.addCommitInfo` is read. See
+> [Known Issues](../docs/KNOWN_ISSUES.md).
+
 ## Configuration
 
 The package reads configuration from multiple sources:
@@ -262,8 +268,7 @@ The package reads configuration from multiple sources:
   "snapshotLocation": ".snapshots",
   "maxSnapshots": 50,
   "git": {
-    "addCommitInfo": true,
-    "autoSnapshotBeforeOperation": false
+    "addCommitInfo": true
   }
 }
 ```

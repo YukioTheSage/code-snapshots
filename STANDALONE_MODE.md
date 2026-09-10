@@ -101,8 +101,7 @@ Both CLI and extension share configuration through `.vscode/codelapse.json`:
   "snapshotLocation": ".snapshots",
   "maxSnapshots": 50,
   "git": {
-    "addCommitInfo": true,
-    "autoSnapshotBeforeOperation": false
+    "addCommitInfo": true
   },
   "semanticSearch": {
     "enabled": true,
@@ -111,6 +110,10 @@ Both CLI and extension share configuration through `.vscode/codelapse.json`:
   }
 }
 ```
+
+> `git.autoSnapshotBeforeOperation` is accepted by the schema and can be set with
+> `codelapse config set`, but nothing reads it, so it has no effect. It is omitted
+> here for that reason. See [Known Issues](docs/KNOWN_ISSUES.md).
 
 **Fallback chain**:
 1. `.vscode/codelapse.json` (shared file)
@@ -220,8 +223,7 @@ codelapse analyze file src/auth.ts
   "snapshotLocation": ".snapshots",
   "maxSnapshots": 50,
   "git": {
-    "addCommitInfo": true,
-    "autoSnapshotBeforeOperation": false
+    "addCommitInfo": true
   },
   "semanticSearch": {
     "enabled": true,
