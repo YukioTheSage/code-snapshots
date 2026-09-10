@@ -1,8 +1,41 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import * as javaParser from 'java-parser';
 import * as Parser from 'web-tree-sitter'; // Added tree-sitter for better parsing
 import { log, logVerbose } from '../logger';
+
+/**
+ * Builds a vector-store record key for a chunk.
+ *
+ * Includes the full workspace-relative path and a content hash. The previous
+ * scheme used `path.basename` only, so `src/a/util.js` and `src/b/util.js`
+ * produced the same key and the second silently overwrote the first in the
+ * vector store, while the embedding cache served the first one's vector for
+ * the second one's content.
+ *
+ * `relativePath` must be workspace-relative, not absolute: an absolute path
+ * would make the key machine-specific and would write the user's directory
+ * layout into a remote vector store.
+ */
+export function buildChunkId(
+  snapshotId: string,
+  relativePath: string,
+  startLine: number,
+  endLine: number,
+  content: string,
+): string {
+  const normalizedPath = relativePath.replace(/\\/g, '/');
+  const contentHash = crypto
+    .createHash('sha1')
+    .update(content, 'utf8')
+    .digest('hex')
+    .slice(0, 12);
+  return `${snapshotId}_${normalizedPath}_${startLine}-${endLine}_${contentHash}`.replace(
+    /[^a-zA-Z0-9_.-]/g,
+    '_',
+  );
+}
 
 export interface CodeChunk {
   id: string;
@@ -798,10 +831,7 @@ export class CodeChunker {
     const ELine = Math.max(SLine, endLine);
 
     return {
-      id: `${snapshotId}_${path.basename(filePath)}_${SLine}-${ELine}`.replace(
-        /[^a-zA-Z0-9_.-]/g,
-        '_',
-      ),
+      id: buildChunkId(snapshotId, filePath, SLine, ELine, content),
       content,
       filePath,
       startLine: SLine,

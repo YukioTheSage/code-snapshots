@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { log, logVerbose } from '../logger';
 import { CredentialsManager } from './credentialsManager';
 import { CodeChunk } from './codeChunker';
@@ -124,8 +125,14 @@ export class EmbeddingService {
    * Embeds a single code chunk
    */
   async embedCodeChunk(chunk: CodeChunk): Promise<number[]> {
+    // Format once: this string is both the cache key's payload and the exact
+    // request body, so the cache can only ever return a vector that was
+    // produced for this request.
+    const formattedContent = this.formatChunkForEmbedding(chunk);
+    const cacheKey = this.embeddingCacheKey(formattedContent);
+
     // Check cache first
-    const cached = this.getCachedEmbedding(chunk.id);
+    const cached = this.getCachedEmbedding(cacheKey);
     if (cached) {
       logVerbose(`Using cached embedding for chunk ${chunk.id}`);
       return cached;
@@ -135,9 +142,6 @@ export class EmbeddingService {
 
     for (let attempt = 1; attempt <= this.MAX_RETRY_ATTEMPTS; attempt++) {
       try {
-        // Format the content to include metadata for better embeddings
-        const formattedContent = this.formatChunkForEmbedding(chunk);
-
         const response = await client.models.embedContent({
           model: this.getModelId(),
           contents: [formattedContent],
@@ -147,7 +151,7 @@ export class EmbeddingService {
         const embedding = response.embeddings?.[0]?.values ?? [];
 
         // Cache and throttle
-        this.setCachedEmbedding(chunk.id, embedding);
+        this.setCachedEmbedding(cacheKey, embedding);
         await this.delay(this.THROTTLE_DELAY_MS);
         return embedding;
       } catch (error: unknown) {
@@ -179,7 +183,9 @@ export class EmbeddingService {
 
     // First check cache
     for (const chunk of chunks) {
-      const cached = this.getCachedEmbedding(chunk.id);
+      const cached = this.getCachedEmbedding(
+        this.embeddingCacheKey(this.formatChunkForEmbedding(chunk)),
+      );
       if (cached) {
         results.set(chunk.id, cached);
       } else {
@@ -345,6 +351,31 @@ export class EmbeddingService {
   clearCache(): void {
     this.embeddingCache.clear();
     log('Embedding cache cleared');
+  }
+
+  /**
+   * Cache key for an embedding request.
+   *
+   * Hashes the model id, the output dimension and the exact formatted content
+   * rather than `chunk.id`. Keying on `chunk.id` meant a re-chunked file with
+   * the same path and line span reused the previous content's vector.
+   *
+   * The model and dimension are part of the key because both are read from
+   * configuration on every call: without them, changing the model in settings
+   * would keep serving vectors produced by the previous one, which is the same
+   * class of silent wrongness this key exists to prevent.
+   *
+   * The NUL separator keeps the fields unambiguous.
+   */
+  private embeddingCacheKey(formattedContent: string): string {
+    return crypto
+      .createHash('sha1')
+      .update(this.getModelId(), 'utf8')
+      .update('\u0000')
+      .update(String(this.getDimension()), 'utf8')
+      .update('\u0000')
+      .update(formattedContent, 'utf8')
+      .digest('hex');
   }
 
   private getCachedEmbedding(key: string): number[] | undefined {
