@@ -1,17 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ChunkingCommands } from '../commands/chunking';
-import { CodeLapseClient } from '../client';
+import { UnifiedClient } from '../unifiedClient';
 
 // Mock the client
-jest.mock('../client');
+jest.mock('../unifiedClient');
 
 describe('ChunkingCommands', () => {
-  let mockClient: jest.Mocked<CodeLapseClient>;
+  let mockClient: jest.Mocked<UnifiedClient>;
   let chunkingCommands: ChunkingCommands;
   let consoleSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    mockClient = new CodeLapseClient() as jest.Mocked<CodeLapseClient>;
+    mockClient = new UnifiedClient() as unknown as jest.Mocked<UnifiedClient>;
     chunkingCommands = new ChunkingCommands(mockClient);
     consoleSpy = jest.spyOn(console, 'log').mockImplementation();
   });

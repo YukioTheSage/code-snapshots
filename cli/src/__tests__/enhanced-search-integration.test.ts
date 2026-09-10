@@ -1,17 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { SearchCommands } from '../commands/search';
-import { CodeLapseClient } from '../client';
+import { UnifiedClient } from '../unifiedClient';
 
 // Mock the client
-jest.mock('../client');
+jest.mock('../unifiedClient');
 
 describe('Enhanced Search Integration', () => {
   let searchCommands: SearchCommands;
-  let mockClient: jest.Mocked<CodeLapseClient>;
+  let mockClient: jest.Mocked<UnifiedClient>;
   let consoleSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    mockClient = new CodeLapseClient() as jest.Mocked<CodeLapseClient>;
+    mockClient = new UnifiedClient() as unknown as jest.Mocked<UnifiedClient>;
     searchCommands = new SearchCommands(mockClient);
     consoleSpy = jest.spyOn(console, 'log').mockImplementation();
   });

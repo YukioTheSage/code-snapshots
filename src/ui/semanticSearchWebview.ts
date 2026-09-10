@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { log } from '../logger';
+import { log, logVerbose } from '../logger';
 import { SemanticSearchService } from '../services/semanticSearchService';
 import path = require('path');
 
@@ -65,11 +65,10 @@ export class SemanticSearchWebview {
   private setupMessageHandling() {
     this.panel!.webview.onDidReceiveMessage(
       async (message) => {
-        // Debug: log all incoming messages from webview
-        log(`Received message from webview: ${JSON.stringify(message)}`);
-        vscode.window.showInformationMessage(
-          `Webview message: ${message.command}`,
-        );
+        // Verbose-only: an earlier version called showInformationMessage here
+        // on every inbound message, producing two notifications per search
+        // and leaking the internal message vocabulary to the user.
+        logVerbose(`Received message from webview: ${message.command}`);
         switch (message.command) {
           case 'debug':
             log('Webview debug:', ...message.args);
@@ -99,12 +98,9 @@ export class SemanticSearchWebview {
                 command: 'searchResults',
                 results: results,
               });
-              // Debug: log and notify number of results posted
-              log(
+              // Verbose-only diagnostics; no user-facing notification here.
+              logVerbose(
                 `SemanticSearchWebview: posted searchResults with count ${results.length}`,
-              );
-              vscode.window.showInformationMessage(
-                `Search results sent: ${results.length}`,
               );
             } catch (error: unknown) {
               const errorMessageText =

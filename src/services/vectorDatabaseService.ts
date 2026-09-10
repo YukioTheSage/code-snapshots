@@ -319,18 +319,36 @@ export class VectorDatabaseService {
   }
 
   /**
-   * Deletes all vectors for a snapshot
+   * Deletes all vectors for a snapshot.
+   *
+   * Pinecone's v5 data-plane API has no `delete()`. It exposes `deleteAll`,
+   * `deleteMany(options)` and `deleteOne(options)` — and for `deleteMany` the
+   * **entire argument is the filter**, with no `{ filter: ... }` wrapper
+   * (the compiled SDK does `requestOptions.filter = options`). Passing a
+   * wrapper filters on a metadata field literally named `filter`, matches no
+   * vector, returns HTTP 200 and silently deletes nothing.
    */
   async deleteSnapshotVectors(snapshotId: string): Promise<void> {
     await this.ensureInitialized();
     const idx = this.getIndex();
+
+    const deleteMany = (idx as unknown as { deleteMany?: unknown }).deleteMany;
+    if (typeof deleteMany !== 'function') {
+      // Surface the API drift rather than swallowing it: the previous
+      // implementation called a nonexistent `delete` through an `any` cast,
+      // so tsc could not see it and the TypeError was caught and logged after
+      // the caller had already recorded the snapshot as de-indexed.
+      throw new Error(
+        'The vector store client does not expose deleteMany(); cannot purge vectors. Update @pinecone-database/pinecone.',
+      );
+    }
+
     try {
-      // Delete vectors by snapshotId metadata filter
-      await (idx as any).delete({
-        filter: {
-          snapshotId: { $eq: snapshotId },
-        },
-      });
+      await (
+        idx as unknown as {
+          deleteMany: (options: object) => Promise<void>;
+        }
+      ).deleteMany({ snapshotId: { $eq: snapshotId } });
       log(`Deleted vectors for snapshot ${snapshotId}`);
     } catch (error) {
       log(`Error deleting vectors for snapshot ${snapshotId}: ${error}`);

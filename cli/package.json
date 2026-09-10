@@ -10,10 +10,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "check-types": "tsc --noEmit",
+    "check-types:test": "tsc -p tsconfig.test.json --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "test": "jest",
+    "test:ci": "jest --runInBand --forceExit --ci",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "prepublish": "npm run build"

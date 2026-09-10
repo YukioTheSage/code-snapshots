@@ -21,7 +21,12 @@ async function main() {
     .description(
       'CLI for CodeLapse VSCode extension - AI-friendly snapshot management',
     )
-    .version('1.0.0');
+    .version(
+      // Read from package.json rather than hardcoding: the literal here said
+      // 1.0.0 while package.json said 2.0.0, so `codelapse --version`
+      // (documented at cli/README.md:131) reported the wrong number.
+      (require('../package.json') as { version: string }).version,
+    );
 
   // Global options
   program
@@ -30,9 +35,57 @@ async function main() {
     .option('--verbose', 'Verbose output for debugging')
     .option('--timeout <ms>', 'Connection timeout in milliseconds', '5000');
 
-  // Initialize client
-  const client = new CodeLapseClient();
-  await client.initialize();
+  // Lazily created and initialised. The client was previously constructed and
+  // initialised here, before the command tree existed and before parseAsync()
+  // had decided which command was even being run. In standalone mode that made
+  // `--help`, `--version` and an invalid `--mode` perform a full
+  // snapshot-store scan first, printing "Snapshot file not found" warnings to
+  // stdout and corrupting machine-readable output.
+  //
+  // Initialisation is still required before any real command runs, because it
+  // selects standalone vs IPC and constructs the standalone handler. So it is
+  // memoised rather than skipped: the first command that needs the client pays
+  // for it, exactly once.
+  let clientInstance: CodeLapseClient | undefined;
+  let clientReady: Promise<CodeLapseClient> | undefined;
+
+  const getClientReady = (): Promise<CodeLapseClient> => {
+    if (!clientInstance) {
+      clientInstance = new CodeLapseClient();
+    }
+    if (!clientReady) {
+      clientReady = clientInstance.initialize().then(() => clientInstance!);
+    }
+    return clientReady;
+  };
+
+  /**
+   * A lazily-resolving stand-in for the client.
+   *
+   * Every property access returns a function that initialises on first use and
+   * then delegates. Command classes can therefore be constructed safely before
+   * `parseAsync()`, which is what makes `--help`, `--version` and
+   * `--mode` validation possible without touching the filesystem.
+   */
+  const getClient = (): CodeLapseClient =>
+    new Proxy({} as CodeLapseClient, {
+      get(_target, property) {
+        if (property === 'then') {
+          // Never look thenable: awaiting the proxy directly would recurse.
+          return undefined;
+        }
+        return (...args: unknown[]) =>
+          getClientReady().then((real) => {
+            const member = (real as unknown as Record<string, unknown>)[
+              property as string
+            ];
+            if (typeof member !== 'function') {
+              return member;
+            }
+            return (member as (...a: unknown[]) => unknown).apply(real, args);
+          });
+      },
+    });
 
   // Global error handling
   process.on('uncaughtException', (error) => {
@@ -55,7 +108,7 @@ async function main() {
         : ora('Checking connection...').start();
 
       try {
-        const status = await client.getStatus();
+        const status = await getClient().getStatus();
 
         if (spinner) spinner.succeed('Connected to CodeLapse extension');
 
@@ -96,7 +149,7 @@ async function main() {
     });
 
   // Snapshot management commands
-  const snapshotCommands = new SnapshotCommands(client);
+  const snapshotCommands = new SnapshotCommands(getClient());
   const snapshotCmd = program
     .command('snapshot')
     .alias('snap')
@@ -166,7 +219,7 @@ async function main() {
     .action(snapshotCommands.navigate.bind(snapshotCommands));
 
   // Search commands
-  const searchCommands = new SearchCommands(client);
+  const searchCommands = new SearchCommands(getClient());
   const searchCmd = program
     .command('search')
     .description('Semantic search commands');
@@ -298,7 +351,7 @@ async function main() {
     .action(searchCommands.index.bind(searchCommands));
 
   // Workspace commands
-  const workspaceCommands = new WorkspaceCommands(client);
+  const workspaceCommands = new WorkspaceCommands(getClient());
   const workspaceCmd = program
     .command('workspace')
     .alias('ws')
@@ -321,7 +374,7 @@ async function main() {
     .action(workspaceCommands.files.bind(workspaceCommands));
 
   // Utility commands
-  const utilityCommands = new UtilityCommands(client);
+  const utilityCommands = new UtilityCommands(getClient());
   const utilityCmd = program
     .command('utility')
     .alias('util')
@@ -340,7 +393,7 @@ async function main() {
     .action(utilityCommands.export.bind(utilityCommands));
 
   // Enhanced search commands for AI agents
-  const enhancedSearchCommands = new EnhancedSearchCommands(client);
+  const enhancedSearchCommands = new EnhancedSearchCommands(getClient());
   const enhancedSearchCmd = program
     .command('search-enhanced')
     .alias('se')
@@ -431,7 +484,7 @@ async function main() {
     .action(enhancedSearchCommands.batch.bind(enhancedSearchCommands));
 
   // Code analysis commands
-  const analysisCommands = new AnalysisCommands(client);
+  const analysisCommands = new AnalysisCommands(getClient());
   const analysisCmd = program
     .command('analyze')
     .alias('an')
@@ -490,7 +543,7 @@ async function main() {
     .action(analysisCommands.batch.bind(analysisCommands));
 
   // Enhanced chunking commands
-  const chunkingCommands = new ChunkingCommands(client);
+  const chunkingCommands = new ChunkingCommands(getClient());
   const chunkingCmd = program
     .command('chunk')
     .alias('ch')
@@ -601,7 +654,7 @@ async function main() {
         const results = [];
         for (const cmd of batchCommands) {
           try {
-            const result = await client.executeCommand(cmd);
+            const result = await getClient().executeCommand(cmd);
             results.push({ success: true, command: cmd, result });
           } catch (error) {
             results.push({
@@ -624,7 +677,7 @@ async function main() {
     });
 
   // Git commands
-  const gitCommands = new GitCommands(client);
+  const gitCommands = new GitCommands(getClient());
   const gitCmd = program
     .command('git')
     .alias('g')
@@ -699,7 +752,7 @@ async function main() {
         );
       }
 
-      await client.watchEvents(eventTypes, (event) => {
+      await getClient().watchEvents(eventTypes, (event) => {
         if (globalOpts.json) {
           console.log(JSON.stringify({ type: 'event', event }));
         } else {
@@ -720,7 +773,7 @@ async function main() {
     .action(async (method, options) => {
       try {
         const data = options.data ? JSON.parse(options.data) : {};
-        const result = await client.callApi(method, data);
+        const result = await getClient().callApi(method, data);
         console.log(JSON.stringify({ success: true, result }));
       } catch (error) {
         console.log(
@@ -739,7 +792,7 @@ async function main() {
     // For most commands, disconnect and exit gracefully.
     // The 'watch' command is long-running and should not cause an exit.
     if (commandName !== 'watch') {
-      await client.disconnect();
+      await clientInstance?.disconnect();
       // Force exit if the process hasn't terminated after a short delay
       const exitTimeout = setTimeout(() => {
         process.exit(0);

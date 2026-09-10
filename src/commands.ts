@@ -1683,12 +1683,28 @@ function registerFilterCommand({
   // --- Tag filter command ---
   const filterByTagsCmd = vscode.commands.registerCommand(
     'vscode-snapshots.filterByTags',
-    async () => {
+    async (preselectedTags?: string[]) => {
       log('filterByTags command executed');
 
-      // Ask where to apply the filter FIRST to get target providers
-      const targetProviders = await getTargetProviders('tag');
-      if (!targetProviders) return; // User cancelled target selection
+      // When called programmatically with tags (the "Filter by Tags" action in
+      // the restore success toast at the top of this file), apply them
+      // directly to both views. Prompting for a target there would interrogate
+      // the user about a decision the caller already made. This parameter was
+      // previously dropped entirely, so the action opened an unselected picker.
+      const applyToBothViews = Array.isArray(preselectedTags);
+
+      let targetProviders: SnapshotTreeDataProvider[];
+      if (applyToBothViews) {
+        targetProviders = [
+          snapshotTreeDataProvider,
+          autoSnapshotTreeDataProvider,
+        ];
+      } else {
+        // Ask where to apply the filter FIRST to get target providers
+        const chosen = await getTargetProviders('tag');
+        if (!chosen) return; // User cancelled target selection
+        targetProviders = chosen;
+      }
 
       // Get all unique tags from all snapshots (regardless of target) for the selection list
       const allSnapshots = snapshotManager.getSnapshots();
@@ -1701,6 +1717,23 @@ function registerFilterCommand({
 
       if (tagCounts.size === 0) {
         vscode.window.showInformationMessage('No tags found in any snapshots');
+        return;
+      }
+
+      if (applyToBothViews) {
+        const tags = (preselectedTags ?? []).filter((t) => t.length > 0);
+        if (tags.length === 0) {
+          vscode.window.showInformationMessage(
+            'That snapshot has no tags to filter by.',
+          );
+          return;
+        }
+        applyFilterToProviders(targetProviders, { tags });
+        vscode.window.showInformationMessage(
+          `Filtering by ${tags.length} tag${
+            tags.length === 1 ? '' : 's'
+          } in both views: ${tags.join(', ')}`,
+        );
         return;
       }
 
