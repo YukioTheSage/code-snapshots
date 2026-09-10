@@ -1115,11 +1115,22 @@ export class SnapshotTreeItem extends vscode.TreeItem {
         role: 'treeitem',
       };
     } else if (snapshot && relativePath) {
-      // File item
+      // File item. The change type was carried only by a theme icon and a
+      // hover-only tooltip, so a screen-reader user could not tell an added
+      // file from a deleted one.
+      const changeWord =
+        changeType === 'added'
+          ? 'added'
+          : changeType === 'modified'
+          ? 'modified'
+          : changeType === 'deleted'
+          ? 'deleted'
+          : 'unchanged';
+      const dir = path.dirname(relativePath);
       this.accessibilityInformation = {
-        label: `${changeType || 'File'} ${path.basename(
-          relativePath,
-        )} in directory ${path.dirname(relativePath)} from snapshot ${
+        label: `${changeWord} file ${path.basename(relativePath)}${
+          dir === '.' ? '' : ` in directory ${dir}`
+        }, from snapshot ${
           snapshot.description || snapshot.id.substring(0, 8)
         }`,
         role: 'treeitem',

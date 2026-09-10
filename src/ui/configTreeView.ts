@@ -4,7 +4,7 @@ import { CredentialsManager } from '../services/credentialsManager';
 interface ConfigItem {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'api-key';
+  type: 'string' | 'number' | 'boolean' | 'api-key' | 'json';
   section?: string;
 }
 
@@ -67,7 +67,9 @@ export class ConfigTreeDataProvider
     {
       key: 'autoSnapshot.rules',
       label: 'Auto Snapshot Rules',
-      type: 'string',
+      // Declared as a string, so the row rendered "[object Object]" and the
+      // editor wrote a quoted string where an array belongs.
+      type: 'json',
       section: 'General',
     },
     {
@@ -163,6 +165,24 @@ export class ConfigTreeDataProvider
               });
               if (str === undefined) return;
               newValue = str;
+              break;
+            }
+            case 'json': {
+              const current = config.get(key);
+              const str = await vscode.window.showInputBox({
+                prompt: `Set ${item.label} as JSON`,
+                value: JSON.stringify(current ?? [], null, 2),
+                ignoreFocusOut: true,
+              });
+              if (str === undefined) return;
+              try {
+                newValue = JSON.parse(str) as unknown as string;
+              } catch {
+                vscode.window.showErrorMessage(
+                  `${item.label} must be valid JSON, for example [{"pattern":"src/**","intervalMinutes":10}]`,
+                );
+                return;
+              }
               break;
             }
             case 'api-key': {
@@ -313,6 +333,10 @@ export class ConfigTreeDataProvider
       if (element.contextValue) {
         treeItem.contextValue = element.contextValue;
       }
+      treeItem.accessibilityInformation = {
+        label: `${element.label} settings group`,
+        role: 'treeitem',
+      };
       return treeItem;
     }
 
@@ -322,6 +346,15 @@ export class ConfigTreeDataProvider
       vscode.TreeItemCollapsibleState.None,
     );
     treeItem.description = element.value;
+    // The value lived only in `description`, which screen readers announce
+    // inconsistently and which never appears on hover.
+    treeItem.tooltip = `${element.label}: ${
+      element.value || '(not set)'
+    }\nClick to edit.`;
+    treeItem.accessibilityInformation = {
+      label: `${element.label}: ${element.value || 'not set'}`,
+      role: 'button',
+    };
     treeItem.command = {
       command: 'vscode-snapshots.editConfig',
       title: 'Edit Setting',
@@ -364,6 +397,12 @@ export class ConfigTreeDataProvider
           const key = await this.credentialsManager.getGeminiApiKey();
           value = key ? '●●●●●●●●●●●●' : 'Not set';
         }
+      } else if (item.type === 'json') {
+        // An array rendered with String() is "[object Object]".
+        const raw = config.get<unknown[]>(item.key);
+        const count = Array.isArray(raw) ? raw.length : 0;
+        value =
+          count === 0 ? 'No rules' : `${count} rule${count === 1 ? '' : 's'}`;
       } else {
         value = String(config.get(item.key));
       }
