@@ -31,6 +31,9 @@ const CONVERSION_CALL = /\b(?:to|from)Ratio\s*\((?:[^()]|\([^()]*\))*\)/g;
  * `.<field>` access and cannot match an unrelated line that happens to contain
  * `<` or `+`:
  *   - a comparison, or an assignment, of the field;
+ *   - the field assigned into a `value:` payload, which is how the readability
+ *     metric reached `SearchResultExplanation.confidenceFactors` and where its
+ *     siblings (`result.score`, `documentationRatio`) are both 0-1;
  *   - the field arithmetic'd against another field, with or without a receiver
  *     (`1 - duplicationRisk`, `a.f - b.f`, `x.f / x.g`), which is the shape of
  *     the inversion that `1 - 30` turns into `-29`;
@@ -42,14 +45,26 @@ const CONVERSION_CALL = /\b(?:to|from)Ratio\s*\((?:[^()]|\([^()]*\))*\)/g;
  * `readabilityScore < criteria.qualityThreshold` -- the exact shape where the
  * caller's unit meets the metric's.
  *
- * Two exclusions, both for operands that are already on the same scale rather
- * than for operators: a `chunk.qualityMetrics.overallScore` right-hand operand
- * is a reduce accumulator over 0-100 scores (`cliConnectorService.ts`), and a
- * `metrics.<field>` one is a weighted sum whose weight is a 0-100 quantity
- * (`qualityMetricsCalculator.ts`). Neither is a unit mix.
+ * One exclusion, on the operand rather than the operator: a right-hand operand
+ * received through `qualityMetrics` or `metrics` is skipped, because
+ * `sum + chunk.qualityMetrics.overallScore` (`cliConnectorService.ts:1402`,
+ * `:2871`) is a reduce accumulator over 0-100 scores and both operands are
+ * already the same unit. That negative lookahead sits in two branches only
+ * because the operand can be written two ways, with and without the receiver:
+ * `sum + chunk.qualityMetrics.overallScore` arrives via the arithmetic branch
+ * and `1 - metrics.duplicationRisk` via the prefix branch. What is suppressed
+ * is the *receiver*, not the operator -- `sum + metrics.readabilityScore` fires,
+ * and the weighted sums in `qualityMetricsCalculator.ts` are quiet only because
+ * `*` is not in the arithmetic alternation at all.
+ *
+ * Known coverage boundary, stated rather than implied: a violation written in
+ * the accumulator shape (`sum + chunk.qualityMetrics.overallScore` where the
+ * other operand really is 0-1), or as a compound assignment
+ * (`score += metrics.readabilityScore`, which the ca27009 pattern also could
+ * not see), stays invisible to this guard. It is a net, not a proof.
  */
 const UNCONVERTED_USE =
-  /\.\w+\s*(?:[<>]=?|=(?!=))|\.\w+\s*[-+/]\s*\w*\.(?!quality[Mm]etrics\.)\w|[-+]\s*\w+\.(?!quality[Mm]etrics\.|metrics\.)\w+|\breturn\s+[\w.]*\.\w+/;
+  /\.\w+\s*(?:[<>]=?|=(?!=))|value:\s*[\w.]*\.|\.\w+\s*[-+/]\s*\w*\.(?!quality[Mm]etrics\.)\w|[-+]\s*\w+\.(?!quality[Mm]etrics\.|metrics\.)\w+|\breturn\s+[\w.]*\.\w+/;
 
 /**
  * Opt-out for a line that genuinely compares two values already on the same
@@ -152,6 +167,38 @@ describe('quality metric scale contract', () => {
           'if (x.performanceRisk > 70) { // quality-scale: same-unit',
         ]),
       ).toEqual([3]);
+    });
+
+    it('fires on a raw value: payload and not on a converted one', () => {
+      // `generateResultExplanation` is one of the six sites Step 7 names, and
+      // this is the only thing standing between it and a silent regression.
+      expect(
+        findUnconvertedUses(['value: result.qualityMetrics.readabilityScore,']),
+      ).toEqual([1]);
+      expect(
+        findUnconvertedUses([
+          'value: toRatio(result.qualityMetrics.readabilityScore),',
+        ]),
+      ).toEqual([]);
+    });
+
+    it('draws the coverage boundary at the receiver, not the operator', () => {
+      // A `metrics.` receiver on the right-hand side is suppressed (see the
+      // pattern's comment): that is the accumulator shape. The same inversion
+      // written against anything else is reported.
+      expect(
+        findUnconvertedUses(['score += 1 - metrics.duplicationRisk;']),
+      ).toEqual([1]);
+      expect(
+        findUnconvertedUses([
+          '  (sum, chunk) => sum + chunk.qualityMetrics.overallScore,',
+        ]),
+      ).toEqual([]);
+      // Outside the net entirely, because the field check needs a `.<field>`
+      // access: a bare identifier is not a detection the guard ever makes.
+      expect(findUnconvertedUses(['score += 1 - duplicationRisk;'])).toEqual(
+        [],
+      );
     });
   });
 });
