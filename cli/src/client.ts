@@ -23,6 +23,7 @@ interface ConnectionInfo {
   workspaceRoot: string;
   extensionVersion: string;
   apiVersion: string;
+  authToken: string;
   created: string;
 }
 
@@ -37,6 +38,11 @@ export class CodeLapseClient extends EventEmitter {
   >();
   private connectionInfo?: ConnectionInfo | null;
   private messageBuffer = '';
+  /**
+   * Whether this socket has completed the `authenticate` handshake. The server
+   * rejects every other method until it has, so this gates `ensureConnection`.
+   */
+  private authenticated = false;
 
   constructor(options?: { timeout?: number }) {
     super();
@@ -166,7 +172,11 @@ export class CodeLapseClient extends EventEmitter {
       );
     }
 
-    return new Promise((resolve, reject) => {
+    // The connection promise is awaited rather than returned, so the handshake
+    // below is reachable. While this was `return new Promise(...)`, anything
+    // after it was dead code. The explicit `<void>` is needed now that the
+    // promise is not the function's return value.
+    await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Connection timeout'));
       }, this.connectionTimeout);
@@ -183,6 +193,7 @@ export class CodeLapseClient extends EventEmitter {
       this.socket.on('error', (error) => {
         clearTimeout(timeout);
         this.connected = false;
+        this.authenticated = false;
         reject(
           new Error(
             `Failed to connect to CodeLapse extension: ${error.message}`,
@@ -192,6 +203,7 @@ export class CodeLapseClient extends EventEmitter {
 
       this.socket.on('close', () => {
         this.connected = false;
+        this.authenticated = false;
         this.socket = undefined;
         this.emit('disconnected');
       });
@@ -221,6 +233,56 @@ export class CodeLapseClient extends EventEmitter {
         }
       });
     });
+
+    // The server rejects every method except `authenticate` until it has seen a
+    // valid token, so this must complete before any request is written.
+    if (!this.authenticated) {
+      await this.performHandshake();
+    }
+  }
+
+  /**
+   * Send the discovery-file token and wait for the server to accept it.
+   *
+   * There is deliberately no `response.success` check here. `handleMessage`
+   * unwraps the envelope before this function sees it: it resolves the pending
+   * request with `message.result` and rejects with `new Error(message.error)`.
+   * The server's authenticate case replies with `result: { authenticated: true }`
+   * (`cliConnectorService.ts:106-113`), so testing `response.success` would read
+   * `undefined` on a *successful* login and throw "Authentication rejected",
+   * while a *failed* login never reaches the test at all, because the promise
+   * rejects first. Assert the field the server actually sends.
+   */
+  private async performHandshake(): Promise<void> {
+    const token = this.connectionInfo?.authToken;
+    if (!token) {
+      throw new Error(
+        'Connection file has no authToken. Restart the CodeLapse extension to regenerate it.',
+      );
+    }
+
+    const id = ++this.requestId;
+    const result = await new Promise<any>((resolve, reject) => {
+      this.pendingRequests.set(id, { resolve, reject });
+      this.socket!.write(
+        JSON.stringify({ id, method: 'authenticate', data: { token } }) + '\n',
+      );
+      setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error('Authentication timed out'));
+        }
+      }, this.connectionTimeout);
+    });
+
+    // Resolving at all means the server accepted the token; this assertion only
+    // guards against the reply shape changing underneath the client.
+    if (result?.authenticated !== true) {
+      throw new Error(
+        'Extension accepted the connection but did not confirm authentication.',
+      );
+    }
+    this.authenticated = true;
   }
 
   /**
