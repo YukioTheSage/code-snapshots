@@ -230,9 +230,10 @@ describe('ResultManager', () => {
       }
       // `averageQualityScore` averages `overallScore` (70, a 0-100 field) and is
       // reported on the 0-1 statistic scale, so it is 0.7 -- not 70, and not the
-      // 0.675 quality term, which is a different quantity.
+      // 0.675 quality term, which is a different quantity. The composite itself
+      // is proven unchanged in src/__tests__/rankingThreshold.test.ts, against a
+      // fixture with controlled weights.
       expect(stats.averageQualityScore).toBeCloseTo(0.7);
-      expect(stats.averageQualityScore).toBeGreaterThan(0);
     });
 
     it('should handle empty results gracefully', async () => {

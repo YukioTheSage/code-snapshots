@@ -1338,7 +1338,7 @@ export class CliConnectorService implements vscode.Disposable {
         analysis: {
           qualityMetrics: {
             overallScore: 75,
-            readabilityScore: 0.8,
+            readabilityScore: 80,
             maintainabilityScore: 70,
             complexityScore: 15,
           },
@@ -1750,7 +1750,7 @@ export class CliConnectorService implements vscode.Disposable {
         qualityMetrics: includeQuality
           ? {
               overallScore: 82,
-              readabilityScore: 0.85,
+              readabilityScore: 85,
               maintainabilityScore: 78,
             }
           : undefined,

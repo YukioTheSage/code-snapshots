@@ -189,4 +189,18 @@ describe('rankResults minimum score threshold', () => {
     // `score` is a similarity and is never rewritten by normalization.
     expect(ranked[0].score).toBe(0.9);
   });
+
+  it('produces the composite the 0-1 arithmetic produced (Task 2 equality proof)', async () => {
+    const manager = new ResultManager();
+    // One result: normalization is skipped, so rankingScore is the raw composite.
+    // 0.9*0.6 + 0.675*0.2 + 1.0*0.05 + 0.5*0.1 + 1.0*0.03 + 0.5*0.02 = 0.815,
+    // where 0.675 = (toRatio(70) + 0.5 + (1 - toRatio(30)) + (1 - toRatio(20))) / 4.
+    const ranked = await manager.rankResults(
+      [makeResult('src/a.ts', 0.9)],
+      processedQuery,
+      options,
+    );
+
+    expect(ranked[0].rankingScore).toBeCloseTo(0.815, 6);
+  });
 });

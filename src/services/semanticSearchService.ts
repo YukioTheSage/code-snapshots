@@ -1309,10 +1309,9 @@ export class SemanticSearchService implements vscode.Disposable {
       });
     }
 
-    // `testCoverage` is a 0-100 field. This asks whether coverage was measured
-    // at all, and both `undefined` and `0` mean it was not, so a falsy test
-    // states the intent without introducing a scale question.
-    if (!qualityMetrics.testCoverage) {
+    // `testCoverage` is a 0-100 field, but zero is zero on either scale, so the
+    // equality test needs no conversion.
+    if (qualityMetrics.testCoverage === 0) {
       suggestions.push({
         type: 'testing',
         description: 'Add unit tests to improve code reliability',
@@ -1624,6 +1623,9 @@ export class SemanticSearchService implements vscode.Disposable {
     return results.sort((a, b) => {
       switch (strategy) {
         case 'quality':
+          // Both operands are readabilityScore, both 0-100: this is a sort
+          // comparator, so only the sign matters and no conversion is involved.
+          // quality-scale: same-unit
           return (
             b.qualityMetrics.readabilityScore -
             a.qualityMetrics.readabilityScore
