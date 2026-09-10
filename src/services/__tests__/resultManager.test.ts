@@ -224,25 +224,49 @@ describe('ResultManager', () => {
     });
 
     it('should apply quality threshold filtering', async () => {
-      const optionsWithHighThreshold = {
-        ...mockOptions,
-        filterCriteria: {
-          qualityThreshold: 0.9,
-        },
-      };
-
-      const { results } = await resultManager.processResults(
+      // This test previously set a threshold of 0.9 while the pipeline assigns
+      // every result a default readabilityScore of 0.7. Every result was
+      // therefore filtered out and the `results.forEach(...)` body never ran,
+      // so deleting the filter altogether would not have failed it.
+      //
+      // The default score is read from an unfiltered run rather than
+      // hardcoded, so this asserts the filtering boundary without depending on
+      // the 0-1 versus 0-100 scale mismatch recorded in docs/KNOWN_ISSUES.md.
+      const unfiltered = await resultManager.processResults(
         mockBaseResults,
         mockProcessedQuery,
-        optionsWithHighThreshold,
+        { ...mockOptions, filterCriteria: {}, limit: 10 },
       );
 
-      // Should filter out results with lower quality scores
-      results.forEach((result) => {
-        expect(result.qualityMetrics.readabilityScore).toBeGreaterThanOrEqual(
-          0.6,
-        ); // Default quality
-      });
+      expect(unfiltered.results.length).toBeGreaterThan(0);
+      const defaultScore =
+        unfiltered.results[0].qualityMetrics.readabilityScore;
+      expect(typeof defaultScore).toBe('number');
+
+      // A threshold at the default keeps everything...
+      const atThreshold = await resultManager.processResults(
+        mockBaseResults,
+        mockProcessedQuery,
+        {
+          ...mockOptions,
+          filterCriteria: { qualityThreshold: defaultScore },
+          limit: 10,
+        },
+      );
+      expect(atThreshold.results).toHaveLength(unfiltered.results.length);
+
+      // ...and one above it removes everything, which is what proves the
+      // filter runs at all.
+      const aboveThreshold = await resultManager.processResults(
+        mockBaseResults,
+        mockProcessedQuery,
+        {
+          ...mockOptions,
+          filterCriteria: { qualityThreshold: defaultScore + 0.1 },
+          limit: 10,
+        },
+      );
+      expect(aboveThreshold.results).toHaveLength(0);
     });
 
     it('should respect result limit', async () => {
