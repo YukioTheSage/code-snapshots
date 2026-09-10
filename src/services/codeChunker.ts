@@ -1714,18 +1714,27 @@ export class CodeChunker {
       let chunkStartLine = 0;
 
       for (const breakpoint of logicalBreakpoints) {
-        // Skip invalid breakpoints
-        if (breakpoint <= chunkStartLine || breakpoint >= lines.length) {
+        // `breakpoint >= lines.length` must NOT be skipped: findFileBreakpoints
+        // always appends lineCount as its final breakpoint, so skipping it
+        // discarded every line after the last section marker -- and for a file
+        // with no interior breakpoints (every .json) it discarded the whole
+        // file, producing zero chunks. The clamp below keeps the slice in range.
+        if (breakpoint <= chunkStartLine) {
+          continue;
+        }
+
+        const effectiveEnd = Math.min(breakpoint, lines.length);
+        if (effectiveEnd <= chunkStartLine) {
           continue;
         }
 
         // Get the chunk content
-        const chunkLines = lines.slice(chunkStartLine, breakpoint);
+        const chunkLines = lines.slice(chunkStartLine, effectiveEnd);
         const chunkContent = chunkLines.join('\n');
 
         // Skip empty chunks
         if (chunkContent.trim() === '') {
-          chunkStartLine = breakpoint;
+          chunkStartLine = effectiveEnd;
           continue;
         }
 
@@ -1739,7 +1748,7 @@ export class CodeChunker {
             chunkContent,
             snapshotId,
             chunkStartLine,
-            breakpoint - 1,
+            effectiveEnd - 1,
             language,
             symbols,
             imports,
@@ -1747,21 +1756,13 @@ export class CodeChunker {
         );
 
         // Move to the next chunk
-        chunkStartLine = breakpoint;
+        chunkStartLine = effectiveEnd;
       }
-    } else {
-      // Create fixed-size chunks with overlap if no logical breakpoints found
-      const fixedChunks = this.createFixedSizeChunks(
-        filePath,
-        lines,
-        snapshotId,
-        language,
-        imports,
-      );
-      fixedChunks.forEach((chunk) => {
-        chunks.push(chunk);
-      });
     }
+    // The former `else` branch called createFixedSizeChunks. It was
+    // unreachable: findFileBreakpoints seeds its result with 0 and appends
+    // lineCount, so logicalBreakpoints always holds at least [0, lineCount]
+    // for a non-empty file, and the caller rejects empty content.
 
     // Apply overlap with improved context preservation
     const finalChunks = this.applyChunkOverlapping(
@@ -1778,6 +1779,11 @@ export class CodeChunker {
 
   /**
    * Create fixed-size chunks with overlap
+   *
+   * Currently unused: its only caller was a branch in `chunkByLines` that
+   * could not be reached, because `findFileBreakpoints` always returns at
+   * least [0, lineCount]. Kept as a genuine fixed-window fallback for a future
+   * caller rather than deleted.
    */
   private createFixedSizeChunks(
     filePath: string,
