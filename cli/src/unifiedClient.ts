@@ -26,10 +26,14 @@ export class UnifiedClient {
   private activeMode: 'standalone' | 'ipc' | null = null;
   private verbose = false;
 
-  constructor(mode: ClientMode = 'auto', verbose = false) {
+  constructor(mode: ClientMode = 'auto', verbose = false, timeout?: number) {
     this.mode = mode;
     this.verbose = verbose;
-    this.ipcClient = new CodeLapseClient();
+    // `CodeLapseClient` accepts `{ timeout }` but defaults to 5000. It never
+    // received one before, so the documented `--timeout` flag was inert.
+    this.ipcClient = new CodeLapseClient(
+      timeout === undefined ? undefined : { timeout },
+    );
   }
 
   private isRecord(value: any): value is Record<string, any> {

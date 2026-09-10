@@ -6,7 +6,7 @@ import ora from 'ora';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { UnifiedClient as CodeLapseClient } from './unifiedClient';
-import { inheritGlobalOptions } from './globalOptions';
+import { inheritGlobalOptions, parseTimeout } from './globalOptions';
 import { SnapshotCommands } from './commands/snapshot';
 import { SearchCommands } from './commands/search';
 import { WorkspaceCommands } from './commands/workspace';
@@ -103,10 +103,16 @@ export function buildProgram(): Command {
     if (!clientInstance) {
       // Read after parsing, not at module load: `--verbose` is only populated
       // once Commander has parsed argv.
-      const opts = program.opts() as { verbose?: boolean };
+      const opts = program.opts() as { verbose?: boolean; timeout?: string };
       // Mode is always 'auto' (standalone first, IPC fallback) because the CLI
       // exposes no way to override it. See the note on the global options above.
-      clientInstance = new CodeLapseClient('auto', opts.verbose === true);
+      // `timeout` was previously parsed and dropped here, so `--timeout` never
+      // reached the IPC client and had no effect at all.
+      clientInstance = new CodeLapseClient(
+        'auto',
+        opts.verbose === true,
+        parseTimeout(opts.timeout),
+      );
     }
     if (!clientReady) {
       clientReady = clientInstance.initialize().then(() => clientInstance!);

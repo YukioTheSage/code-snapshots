@@ -16,7 +16,19 @@ These options apply to all commands:
 | `--silent` | Silent mode - no user prompts or status messages | `false` |
 | `--verbose` | Verbose output for debugging | `false` |
 | `--timeout <ms>` | Connection timeout in milliseconds | `5000` |
-| `--mode <mode>` | Client mode: `auto`, `standalone`, or `ipc` | `auto` |
+
+> **There is no global `--mode`.** An earlier version of this table documented
+> one (`auto` / `standalone` / `ipc`), but it cannot exist under that name:
+> Commander resolves an option to the first command in the chain declaring it,
+> so a program-level `--mode` would *shadow* the `-m, --mode` that
+> `search query` and `search-enhanced query` declare to select a search
+> strategy. Measured: with the global present, `search query foo --mode hybrid`
+> left the handler with the default `semantic`, silently discarding the user's
+> choice.
+>
+> The client therefore always runs in `auto` mode (standalone first, IPC
+> fallback) and there is currently no way to force one. If a selector is wanted,
+> it must use a non-colliding name such as `--client-mode`.
 
 ---
 

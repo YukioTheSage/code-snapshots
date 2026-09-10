@@ -15,6 +15,7 @@ import { Command } from 'commander';
 import {
   INHERITED_GLOBAL_OPTIONS,
   inheritGlobalOptions,
+  parseTimeout,
 } from '../globalOptions';
 
 /** Build a program shaped like the real one, and capture the action options. */
@@ -106,12 +107,28 @@ describe('global option propagation', () => {
     ]);
     expect(options.silent).toBe(true);
     expect(options.verbose).toBe(true);
-    expect(options.timeout).toBe('9000');
+    // Normalised to a number so consumers do not each re-parse a string.
+    expect(options.timeout).toBe(9000);
   });
 
   it('defaults --timeout to the program default', async () => {
     const options = await parse(['git', 'info']);
-    expect(options.timeout).toBe('5000');
+    expect(options.timeout).toBe(5000);
+  });
+
+  it('rejects a non-numeric --timeout before the action runs', async () => {
+    await expect(parse(['--timeout', 'abc', 'git', 'info'])).rejects.toThrow(
+      /Invalid timeout/,
+    );
+  });
+
+  it('rejects a non-positive --timeout before the action runs', async () => {
+    await expect(parse(['--timeout', '0', 'git', 'info'])).rejects.toThrow(
+      /Invalid timeout/,
+    );
+    await expect(parse(['--timeout', '-5', 'git', 'info'])).rejects.toThrow(
+      /Invalid timeout/,
+    );
   });
 
   it('leaves unrelated subcommand options untouched', async () => {
@@ -137,6 +154,24 @@ describe('global option propagation', () => {
       'timeout',
       'verbose',
     ]);
+  });
+});
+
+describe('parseTimeout', () => {
+  it('accepts a numeric string, as Commander passes arguments through', () => {
+    expect(parseTimeout('9000')).toBe(9000);
+  });
+
+  it('accepts a number', () => {
+    expect(parseTimeout(9000)).toBe(9000);
+  });
+
+  it('defaults when unset', () => {
+    expect(parseTimeout(undefined)).toBe(5000);
+  });
+
+  it.each(['abc', '', '0', '-1', 'NaN', 'Infinity'])('rejects %p', (value) => {
+    expect(() => parseTimeout(value)).toThrow(/Invalid timeout/);
   });
 });
 

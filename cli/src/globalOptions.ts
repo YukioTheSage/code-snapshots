@@ -31,6 +31,32 @@ export const INHERITED_GLOBAL_OPTIONS = [
 ] as const;
 
 /**
+ * Validate the `--timeout` value, returning it as a positive number.
+ *
+ * Commander passes option arguments through as raw strings, so this both
+ * narrows the type and rejects values that would otherwise become `NaN` deep
+ * inside a `setTimeout` — where a `NaN` delay silently fires immediately rather
+ * than reporting anything.
+ *
+ * @throws if the value is not a positive, finite number of milliseconds.
+ */
+export function parseTimeout(value: unknown): number {
+  // The declared default is the string '5000', so an unset option is not
+  // `undefined` in practice; treat both as "use the default" anyway.
+  const raw = value === undefined || value === null ? 5000 : value;
+  const ms = typeof raw === 'number' ? raw : Number(String(raw).trim());
+
+  if (!Number.isFinite(ms) || ms <= 0) {
+    throw new Error(
+      `Invalid timeout "${String(
+        value,
+      )}". Expected a positive number of milliseconds.`,
+    );
+  }
+  return ms;
+}
+
+/**
  * Copy program-level global options down onto the command about to run.
  *
  * Commander parses parent and subcommand options independently: a subcommand
@@ -50,6 +76,7 @@ export const INHERITED_GLOBAL_OPTIONS = [
  *
  * @param thisCommand the command the hook was registered on (the program)
  * @param actionCommand the command whose action is about to run
+ * @throws if `--timeout` is not a positive number of milliseconds.
  */
 export function inheritGlobalOptions(
   thisCommand: Command,
@@ -63,7 +90,8 @@ export function inheritGlobalOptions(
     json: globals.json === true,
     silent: globals.silent === true,
     verbose: globals.verbose === true,
-    timeout: globals.timeout,
+    // Normalised to a number so consumers do not each re-parse a string.
+    timeout: parseTimeout(globals.timeout),
   };
 
   for (const key of INHERITED_GLOBAL_OPTIONS) {

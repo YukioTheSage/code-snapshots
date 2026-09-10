@@ -54,7 +54,7 @@ codelapse <command> --help
 
 ### Git Integration
 - `codelapse git commit <snapshot-id>` - Create Git commit from snapshot
-- `codelapse git auto-snapshot <operation>` - Auto-snapshot before Git operations
+- `codelapse git auto-commit <operation>` - Auto-snapshot before Git operations
 - `codelapse git info` - Get Git repository information
 - `codelapse git compare <snapshot-id> <commit-hash>` - Compare with Git commit
 
