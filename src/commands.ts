@@ -12,6 +12,7 @@ import { API as GitAPI } from './types/git.d';
 import { AutoSnapshotRulesUI } from './ui/autoSnapshotRulesUI';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
+import { throwIfCancelled, isCancellationError } from './utils/cancellation';
 
 // Structure to hold dependencies passed from activate
 export interface CommandDependencies {
@@ -102,11 +103,12 @@ function registerTakeSnapshotCommand({
               increment: 5,
             });
 
-            // Cancel support
-            token.onCancellationRequested(() => {
-              log('Snapshot creation cancelled by user');
-              throw new Error('Operation cancelled');
-            });
+            // Cancellation is checked at the await boundaries below. A listener
+            // that throws cannot interrupt the work: its return value is
+            // discarded, so the throw lands in the emitter's dispatch frame and
+            // the operation runs to completion while the UI says it was
+            // cancelled. See utils/cancellation.ts.
+            throwIfCancelled(token);
 
             // Scanning workspace files stage
             progress.report({
@@ -197,10 +199,7 @@ function registerTakeSnapshotCommand({
                 }
               });
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Operation cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Snapshot creation cancelled',
               );
@@ -445,13 +444,11 @@ function registerJumpToSnapshotCommand({
         },
         async (progress, token) => {
           try {
-            // Add cancellation support
-            token.onCancellationRequested(() => {
-              log(
-                `Snapshot restore cancelled by user for ID: ${targetSnapshotId}`,
-              );
-              throw new Error('Restore cancelled');
-            });
+            // Cancellation is checked at the await boundaries below. A listener
+            // that throws cannot interrupt the work: its return value is discarded,
+            // so the throw lands in the emitter's dispatch frame. See
+            // utils/cancellation.ts.
+            throwIfCancelled(token);
 
             // Save editor states for better transition
             progress.report({
@@ -563,10 +560,7 @@ function registerJumpToSnapshotCommand({
                 }
               });
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Restore cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Snapshot restore cancelled',
               );
@@ -1283,11 +1277,9 @@ function registerPreviousSnapshotCommand({
         },
         async (progress, token) => {
           try {
-            // Add cancellation support
-            token.onCancellationRequested(() => {
-              log('Navigation to previous snapshot cancelled by user');
-              throw new Error('Navigation cancelled');
-            });
+            // Cancellation is checked at the await boundaries below; see
+            // utils/cancellation.ts for why a throwing listener cannot work.
+            throwIfCancelled(token);
 
             // Begin smooth transition
             progress.report({
@@ -1347,10 +1339,7 @@ function registerPreviousSnapshotCommand({
                 }
               });
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Navigation cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Navigation to previous snapshot cancelled',
               );
@@ -1407,11 +1396,9 @@ function registerNextSnapshotCommand({
         },
         async (progress, token) => {
           try {
-            // Add cancellation support
-            token.onCancellationRequested(() => {
-              log('Navigation to next snapshot cancelled by user');
-              throw new Error('Navigation cancelled');
-            });
+            // Cancellation is checked at the await boundaries below; see
+            // utils/cancellation.ts for why a throwing listener cannot work.
+            throwIfCancelled(token);
 
             // Begin smooth transition
             progress.report({
@@ -1468,10 +1455,7 @@ function registerNextSnapshotCommand({
                 }
               });
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Navigation cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Navigation to next snapshot cancelled',
               );
