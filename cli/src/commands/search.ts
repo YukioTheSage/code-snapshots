@@ -2,7 +2,7 @@
 import { UnifiedClient } from '../unifiedClient';
 
 export class SearchCommands {
-  constructor(private client: UnifiedClient) { }
+  constructor(private client: UnifiedClient) {}
 
   async query(query: string, options: any): Promise<void> {
     // Enhanced search options with backward compatibility
@@ -201,9 +201,10 @@ export class SearchCommands {
         queries = JSON.parse(fileContent);
       } catch (parseError) {
         throw new Error(
-          `Invalid JSON format: ${parseError instanceof Error
-            ? parseError.message
-            : String(parseError)
+          `Invalid JSON format: ${
+            parseError instanceof Error
+              ? parseError.message
+              : String(parseError)
           }`,
         );
       }

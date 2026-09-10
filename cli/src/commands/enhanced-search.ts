@@ -2,7 +2,7 @@
 import { UnifiedClient } from '../unifiedClient';
 
 export class EnhancedSearchCommands {
-  constructor(private client: UnifiedClient) { }
+  constructor(private client: UnifiedClient) {}
 
   async enhanced(query: string, options: any): Promise<void> {
     const searchOpts = {

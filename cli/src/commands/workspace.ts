@@ -2,7 +2,7 @@
 import { UnifiedClient } from '../unifiedClient';
 
 export class WorkspaceCommands {
-  constructor(private client: UnifiedClient) { }
+  constructor(private client: UnifiedClient) {}
 
   async info(options: any): Promise<void> {
     try {

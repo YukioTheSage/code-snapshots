@@ -501,7 +501,8 @@ export class StandaloneHandler {
     // Create commit
     const message =
       options.commitMessage ||
-      `Snapshot ${options.snapshotId}: ${snapshot.description || 'No description'
+      `Snapshot ${options.snapshotId}: ${
+        snapshot.description || 'No description'
       }`;
 
     return git.createCommit(message);
@@ -542,12 +543,12 @@ export class StandaloneHandler {
     filePathOrOptions:
       | string
       | {
-        filePath: string;
-        limit?: number;
-        since?: string;
-        includeContent?: boolean;
-        sortOrder?: string;
-      },
+          filePath: string;
+          limit?: number;
+          since?: string;
+          includeContent?: boolean;
+          sortOrder?: string;
+        },
   ): Promise<Record<string, unknown>> {
     if (!this.snapshotManager) {
       throw new Error('Handler not initialized');
@@ -578,10 +579,10 @@ export class StandaloneHandler {
         const status = fileData.deleted
           ? 'deleted'
           : fileData.diff
-            ? 'modified'
-            : !fileData.baseSnapshotId
-              ? 'added'
-              : 'unchanged';
+          ? 'modified'
+          : !fileData.baseSnapshotId
+          ? 'added'
+          : 'unchanged';
 
         const entry: any = {
           snapshot: {
@@ -681,10 +682,10 @@ export class StandaloneHandler {
       const status = fileData.deleted
         ? 'deleted'
         : fileData.diff
-          ? 'modified'
-          : !fileData.baseSnapshotId
-            ? 'added'
-            : 'unchanged';
+        ? 'modified'
+        : !fileData.baseSnapshotId
+        ? 'added'
+        : 'unchanged';
 
       // Calculate size from content if available
       let size = 0;
@@ -767,10 +768,10 @@ export class StandaloneHandler {
     const status = fileData.deleted
       ? 'deleted'
       : fileData.diff
-        ? 'modified'
-        : !fileData.baseSnapshotId
-          ? 'added'
-          : 'unchanged';
+      ? 'modified'
+      : !fileData.baseSnapshotId
+      ? 'added'
+      : 'unchanged';
 
     // Calculate size from content if available
     let size = 0;
@@ -1021,8 +1022,8 @@ export class StandaloneHandler {
           status: fileData?.deleted
             ? 'deleted'
             : fileData?.diff
-              ? 'modified'
-              : 'unchanged',
+            ? 'modified'
+            : 'unchanged',
         },
       };
 

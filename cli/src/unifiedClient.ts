@@ -51,8 +51,8 @@ export class UnifiedClient {
       const schema = this.isRecord(result?.schema) ? result.schema : {};
       const availableKeys = Array.isArray(result?.availableKeys)
         ? result.availableKeys.filter(
-          (key: unknown): key is string => typeof key === 'string',
-        )
+            (key: unknown): key is string => typeof key === 'string',
+          )
         : Object.keys(schema);
       return { schema, availableKeys };
     }
@@ -244,9 +244,9 @@ export class UnifiedClient {
       // Map createBackupSnapshot to backup for standalone handler
       const standaloneOptions = options
         ? {
-          backup: options.backup ?? options.createBackupSnapshot,
-          selectedFiles: options.selectedFiles,
-        }
+            backup: options.backup ?? options.createBackupSnapshot,
+            selectedFiles: options.selectedFiles,
+          }
         : undefined;
       await this.standaloneHandler.restoreSnapshot(
         snapshotId,
@@ -748,7 +748,10 @@ export class UnifiedClient {
     throw new Error('executeCommand is only available in IPC mode');
   }
 
-  public async watchEvents(eventTypes: string[], callback: (event: any) => void): Promise<void> {
+  public async watchEvents(
+    eventTypes: string[],
+    callback: (event: any) => void,
+  ): Promise<void> {
     if (this.activeMode === 'ipc') {
       await this.ipcClient.watchEvents(eventTypes, callback);
     }

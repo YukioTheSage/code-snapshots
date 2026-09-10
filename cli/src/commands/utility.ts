@@ -2,7 +2,7 @@
 import { UnifiedClient } from '../unifiedClient';
 
 export class UtilityCommands {
-  constructor(private client: UnifiedClient) { }
+  constructor(private client: UnifiedClient) {}
 
   async validate(id: string, options: any): Promise<void> {
     try {

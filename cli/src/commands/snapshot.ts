@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import { UnifiedClient } from '../unifiedClient';
 
 export class SnapshotCommands {
-  constructor(private client: UnifiedClient) { }
+  constructor(private client: UnifiedClient) {}
 
   private getSnapshotSummary(snapshot: any) {
     return {

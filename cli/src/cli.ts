@@ -3,7 +3,10 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { UnifiedClient as CodeLapseClient } from './unifiedClient';
+import { inheritGlobalOptions } from './globalOptions';
 import { SnapshotCommands } from './commands/snapshot';
 import { SearchCommands } from './commands/search';
 import { WorkspaceCommands } from './commands/workspace';
@@ -25,22 +28,45 @@ async function main() {
       // Read from package.json rather than hardcoding: the literal here said
       // 1.0.0 while package.json said 2.0.0, so `codelapse --version`
       // (documented at cli/README.md:131) reported the wrong number.
-      (require('../package.json') as { version: string }).version,
+      //
+      // Read via fs rather than `require` so it resolves relative to the
+      // compiled output (dist/cli.js -> ../package.json); a `require` here also
+      // trips @typescript-eslint/no-var-requires.
+      (
+        JSON.parse(
+          readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
+        ) as { version: string }
+      ).version,
     );
 
   // Global options
+  //
+  // NOTE: a global `--mode` is deliberately absent even though `cli/API.md`
+  // documents one. Commander resolves an option to the first command in the
+  // chain declaring it, so a program-level `--mode` would *shadow* the
+  // `-m, --mode` that `search query` and `search-enhanced query` declare for
+  // search strategy, silently resetting it to the default. Verified by probe.
+  // Selecting a client mode is therefore not reachable from the CLI at all:
+  // `UnifiedClient` defaults to 'auto'.
   program
     .option('--json', 'Output in JSON format (AI-friendly)')
     .option('--silent', 'Silent mode - no user prompts or status messages')
     .option('--verbose', 'Verbose output for debugging')
     .option('--timeout <ms>', 'Connection timeout in milliseconds', '5000');
 
+  // Copies the globals above down onto each command before its action runs, so
+  // `options.json` is populated inside subcommand handlers. See
+  // `globalOptions.ts` for why Commander does not do this for us.
+  program.hook('preAction', inheritGlobalOptions);
+
   // Lazily created and initialised. The client was previously constructed and
   // initialised here, before the command tree existed and before parseAsync()
   // had decided which command was even being run. In standalone mode that made
-  // `--help`, `--version` and an invalid `--mode` perform a full
-  // snapshot-store scan first, printing "Snapshot file not found" warnings to
-  // stdout and corrupting machine-readable output.
+  // `--help` and `--version` perform a full snapshot-store scan first, printing
+  // one "Snapshot file not found" warning per unreadable snapshot.
+  //
+  // Those warnings go to stderr, so JSON on stdout stayed parseable, but they
+  // made `codelapse --help` slow and noisy for no reason.
   //
   // Initialisation is still required before any real command runs, because it
   // selects standalone vs IPC and constructs the standalone handler. So it is
@@ -51,7 +77,12 @@ async function main() {
 
   const getClientReady = (): Promise<CodeLapseClient> => {
     if (!clientInstance) {
-      clientInstance = new CodeLapseClient();
+      // Read after parsing, not at module load: `--verbose` is only populated
+      // once Commander has parsed argv.
+      const opts = program.opts() as { verbose?: boolean };
+      // Mode is always 'auto' (standalone first, IPC fallback) because the CLI
+      // exposes no way to override it. See the note on the global options above.
+      clientInstance = new CodeLapseClient('auto', opts.verbose === true);
     }
     if (!clientReady) {
       clientReady = clientInstance.initialize().then(() => clientInstance!);
@@ -686,7 +717,10 @@ async function main() {
   gitCmd
     .command('commit <snapshot-id>')
     .description('Create a Git commit from a snapshot')
-    .option('-m, --message <message>', 'Commit message (auto-generated if omitted)')
+    .option(
+      '-m, --message <message>',
+      'Commit message (auto-generated if omitted)',
+    )
     .option('-b, --branch <name>', 'Create a new branch for the commit')
     .option('-u, --include-untracked', 'Include untracked files', false)
     .option('-p, --push', 'Push commit to remote', false)

@@ -45,6 +45,12 @@ jobs:
           node-version: '20'
       - name: Install dependencies
         run: npm ci
+      - name: Lint
+        # Added alongside the formatting fix: cli/ had 43 eslint errors that no
+        # gate ever caught, because this job only type-checked, tested and built.
+        run: npm run lint
+      - name: Format check
+        run: npm run format -- --check
       - name: Type-check sources
         run: npm run check-types
       - name: Type-check tests

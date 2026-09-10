@@ -2,7 +2,7 @@
 import { UnifiedClient } from '../unifiedClient';
 
 export class AnalysisCommands {
-  constructor(private client: UnifiedClient) { }
+  constructor(private client: UnifiedClient) {}
 
   async chunk(chunkId: string, options: any): Promise<void> {
     const analysisOpts = {

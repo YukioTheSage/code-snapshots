@@ -86,7 +86,7 @@ interface WatchEvent {
 }
 
 export class DiagnosticsCommands {
-  constructor(private client: UnifiedClient) { }
+  constructor(private client: UnifiedClient) {}
 
   async run(options: DiagnosticsOptions = {}): Promise<void> {
     try {
@@ -323,7 +323,8 @@ export class DiagnosticsCommands {
       console.log(`  Workspace: ${systemInfo.workspace || 'None'}`);
       console.log(`  Total Snapshots: ${systemInfo.totalSnapshots}`);
       console.log(
-        `  Git Repository: ${systemInfo.gitRepository ? chalk.green('Yes') : chalk.red('No')
+        `  Git Repository: ${
+          systemInfo.gitRepository ? chalk.green('Yes') : chalk.red('No')
         }`,
       );
       console.log('');
@@ -382,7 +383,8 @@ export class DiagnosticsCommands {
     );
     console.log(`${chalk.cyan('Disk Usage:')} ${systemInfo.diskUsage}`);
     console.log(
-      `${chalk.cyan('Git Repository:')} ${systemInfo.gitRepository ? chalk.green('Yes') : chalk.red('No')
+      `${chalk.cyan('Git Repository:')} ${
+        systemInfo.gitRepository ? chalk.green('Yes') : chalk.red('No')
       }`,
     );
 
@@ -392,7 +394,8 @@ export class DiagnosticsCommands {
 
     console.log(`${chalk.cyan('Node.js Version:')} ${systemInfo.nodeVersion}`);
     console.log(
-      `${chalk.cyan('Platform:')} ${systemInfo.platform} ${systemInfo.architecture
+      `${chalk.cyan('Platform:')} ${systemInfo.platform} ${
+        systemInfo.architecture
       }`,
     );
   }
@@ -482,7 +485,8 @@ export class DiagnosticsCommands {
       history.slice(-10).forEach((entry) => {
         const timestamp = new Date(entry.timestamp).toLocaleTimeString();
         console.log(
-          `  ${chalk.gray(timestamp)} - Snapshot: ${entry.snapshotTime
+          `  ${chalk.gray(timestamp)} - Snapshot: ${
+            entry.snapshotTime
           }ms, Search: ${entry.searchTime}ms`,
         );
       });
