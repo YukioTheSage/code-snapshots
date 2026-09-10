@@ -26,7 +26,11 @@ function validateSnapshotFileEntry(value: unknown, fieldName: string): void {
   ) {
     throw new Error(`${fieldName}.content must be a string or null`);
   }
-  if ('diff' in value && value.diff !== undefined && typeof value.diff !== 'string') {
+  if (
+    'diff' in value &&
+    value.diff !== undefined &&
+    typeof value.diff !== 'string'
+  ) {
     throw new Error(`${fieldName}.diff must be a string`);
   }
   if ('baseSnapshotId' in value && value.baseSnapshotId !== undefined) {

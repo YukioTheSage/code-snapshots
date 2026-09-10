@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  extension:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -19,7 +19,40 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
+      # Kept deliberately: the three files that fail eslint are the same three
+      # that fail prettier --check, so this step is currently the only gate
+      # catching them. Do not remove it when adding the test steps below.
       - name: Format check
         run: npm run format -- --check
       - name: Compile
         run: npm run compile
+      - name: Test
+        # --runInBand: the forked-worker pool fails with EPERM in restricted
+        # environments. --forceExit: the suite reports leaked handles and does
+        # not exit on its own (CliConnectorService never closes its server).
+        run: npx jest --runInBand --ci --forceExit
+
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check sources
+        run: npm run check-types
+      - name: Type-check tests
+        # cli/tsconfig.json excludes **/*.test.ts so tests are not emitted to
+        # dist/. That exclusion is why four suites could fail to compile while
+        # `tsc --noEmit` still exited 0. This step checks them.
+        run: npm run check-types:test
+      - name: Test
+        run: npm run test:ci
+      - name: Build
+        run: npm run build

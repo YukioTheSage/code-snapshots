@@ -59,10 +59,7 @@ export class MarkdownString {
 }
 
 export class ThemeIcon {
-  constructor(
-    public readonly id: string,
-    public readonly color?: unknown,
-  ) {}
+  constructor(public readonly id: string, public readonly color?: unknown) {}
 }
 
 export class ThemeColor {
@@ -96,10 +93,7 @@ export class WorkspaceEdit {
 }
 
 export class RelativePattern {
-  constructor(
-    public readonly base: unknown,
-    public readonly pattern: string,
-  ) {}
+  constructor(public readonly base: unknown, public readonly pattern: string) {}
 }
 
 export class Selection {
@@ -269,7 +263,9 @@ export class Uri {
   }
 
   static parse(value: string): Uri {
-    const match = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)([^?#]*)/.exec(value);
+    const match = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)([^?#]*)/.exec(
+      value,
+    );
     if (!match) {
       return new Uri('file', '', value);
     }
@@ -307,10 +303,7 @@ export class Uri {
 }
 
 export class Range {
-  constructor(
-    public readonly start: unknown,
-    public readonly end: unknown,
-  ) {}
+  constructor(public readonly start: unknown, public readonly end: unknown) {}
 
   get startLine(): number {
     return (this.start as { line?: number })?.line ?? 0;
@@ -343,10 +336,7 @@ export class Position {
 }
 
 export class Location {
-  constructor(
-    public readonly uri: Uri,
-    public readonly range: Range,
-  ) {}
+  constructor(public readonly uri: Uri, public readonly range: Range) {}
 }
 
 export class Diagnostic {

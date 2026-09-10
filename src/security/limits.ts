@@ -38,7 +38,9 @@ export function assertBufferSizeWithinLimit(
 
 async function findExistingAncestor(startPath: string): Promise<string> {
   let current = path.resolve(startPath);
-  while (true) {
+  // `for (;;)` rather than `while (true)`: identical semantics, but it does not
+  // trip `no-constant-condition`, which is an error in this project's config.
+  for (;;) {
     try {
       const stats = await fsPromises.lstat(current);
       if (stats.isSymbolicLink()) {

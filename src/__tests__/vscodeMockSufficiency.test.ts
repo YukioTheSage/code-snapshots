@@ -70,11 +70,7 @@ describe('vscode mock surface', () => {
   });
 
   it('parses and joins Uris', () => {
-    const joined = vscode.Uri.joinPath(
-      vscode.Uri.file('/work'),
-      'src',
-      'a.ts',
-    );
+    const joined = vscode.Uri.joinPath(vscode.Uri.file('/work'), 'src', 'a.ts');
     expect(joined.fsPath).toBe('/work/src/a.ts');
 
     const parsed = vscode.Uri.parse('snapshot-diff://snap-a/src/a.ts?nonce=1');

@@ -20,7 +20,7 @@ jest.mock('../enhancedCodeChunker', () => {
             semanticType: 'function',
             complexityScore: 10,
             securityConcerns: [],
-            designPatterns: []
+            designPatterns: [],
           },
           relationships: [],
         },
