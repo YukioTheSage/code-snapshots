@@ -10,11 +10,11 @@ import {
  * `hasTests` and `hasErrorHandling` conditions can both fire -- Task 3 depends
  * on that.
  *
- * The metric values are the 0-1 values `calculateQualityScore` reads as ratios
- * *today*, because this task lands before Task 2. Task 2 Step 11 converts this
- * fixture to the documented 0-100 contract (70 / 30 / 20); until then, writing
- * 70 here would clamp every composite to 1.0 and the RED below would have to be
- * simulated rather than observed.
+ * The metric values are the documented 0-100 contract values. They were
+ * written here as 0-1 (0.7 / 0.3 / 0.2) while `calculateQualityScore` read
+ * them as ratios; Task 2 converted that reader to `toRatio` and moved this
+ * fixture to 70 / 30 / 20, which is the same quality term as before, so the
+ * composite arithmetic below is unchanged.
  */
 function makeResult(
   filePath: string,
@@ -32,12 +32,12 @@ function makeResult(
     rankingScore: undefined,
     qualityMetrics: {
       overallScore: 70,
-      readabilityScore: 0.7,
+      readabilityScore: 70,
       testCoverage: undefined,
       documentationRatio: 0.5,
-      duplicationRisk: 0.3,
-      performanceRisk: 0.2,
-      securityRisk: 0.15,
+      duplicationRisk: 30,
+      performanceRisk: 20,
+      securityRisk: 15,
       maintainabilityScore: 75,
       technicalDebt: {
         estimatedFixTime: 2,
@@ -159,9 +159,10 @@ describe('rankResults minimum score threshold', () => {
     hopeless.qualityMetrics.documentationRatio = 0;
     // The maximum in the same scale as the rest of the fixture, so the quality
     // term is exactly 0 and the floor drops this on the arithmetic rather than
-    // on the [0, 1] clamp in applyBoostAndPenaltyFactors.
-    hopeless.qualityMetrics.duplicationRisk = 1;
-    hopeless.qualityMetrics.performanceRisk = 1;
+    // on the [0, 1] clamp in applyBoostAndPenaltyFactors. Risk fields are 0-100
+    // in the contract, so the maximum is 100.
+    hopeless.qualityMetrics.duplicationRisk = 100;
+    hopeless.qualityMetrics.performanceRisk = 100;
     hopeless.enhancedMetadata!.usageFrequency = 0;
     hopeless.enhancedMetadata!.complexityMetrics!.cyclomaticComplexity = 50;
 

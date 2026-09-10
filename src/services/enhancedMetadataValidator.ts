@@ -518,8 +518,12 @@ export class EnhancedMetadataValidator {
       this.validateTechnicalDebt(metrics.technicalDebt, errors, warnings);
     }
 
-    // Warnings for concerning metrics
-    if (metrics.securityRisk > 70) {
+    // Warnings for concerning metrics. These thresholds are on the 0-100 scale
+    // the contract documents for the risk fields, so they are named rather than
+    // written inline -- a bare `> 70` next to a 0-1 threshold reads as the bug
+    // this constant exists to rule out.
+    const HIGH_RISK_THRESHOLD = 70;
+    if (metrics.securityRisk > HIGH_RISK_THRESHOLD) {
       warnings.push({
         code: 'HIGH_SECURITY_RISK',
         message: 'Chunk has high security risk',
@@ -528,7 +532,7 @@ export class EnhancedMetadataValidator {
       });
     }
 
-    if (metrics.performanceRisk > 70) {
+    if (metrics.performanceRisk > HIGH_RISK_THRESHOLD) {
       warnings.push({
         code: 'HIGH_PERFORMANCE_RISK',
         message: 'Chunk has high performance risk',

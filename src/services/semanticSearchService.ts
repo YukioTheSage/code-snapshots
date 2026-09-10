@@ -28,6 +28,7 @@ import {
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
 import { QualityMetricsCalculator } from './qualityMetricsCalculator';
+import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
 import { RelationshipAnalyzer } from './relationshipAnalyzer';
 import { QueryProcessor, QueryContext } from './queryProcessor';
 import { ResultManager } from './resultManager';
@@ -1205,23 +1206,7 @@ export class SemanticSearchService implements vscode.Disposable {
    * Get default quality metrics
    */
   private getDefaultQualityMetrics() {
-    return {
-      overallScore: 70,
-      readabilityScore: 0.7,
-      testCoverage: 0,
-      documentationRatio: 0.5,
-      duplicationRisk: 0.3,
-      performanceRisk: 0.2,
-      securityRisk: 0.2,
-      maintainabilityScore: 70,
-      technicalDebt: {
-        estimatedFixTime: 0,
-        severity: 'low' as const,
-        categories: [],
-        issues: [],
-      },
-      styleComplianceScore: 80,
-    };
+    return { ...DEFAULT_QUALITY_METRICS };
   }
 
   /**
@@ -1312,7 +1297,7 @@ export class SemanticSearchService implements vscode.Disposable {
     const suggestions: ActionableSuggestion[] = [];
 
     // Quality-based suggestions
-    if (qualityMetrics.readabilityScore < 0.6) {
+    if (toRatio(qualityMetrics.readabilityScore) < 0.6) {
       suggestions.push({
         type: 'improvement',
         description:
@@ -1324,7 +1309,10 @@ export class SemanticSearchService implements vscode.Disposable {
       });
     }
 
-    if (qualityMetrics.testCoverage === 0) {
+    // `testCoverage` is a 0-100 field. This asks whether coverage was measured
+    // at all, and both `undefined` and `0` mean it was not, so a falsy test
+    // states the intent without introducing a scale question.
+    if (!qualityMetrics.testCoverage) {
       suggestions.push({
         type: 'testing',
         description: 'Add unit tests to improve code reliability',
@@ -1394,7 +1382,11 @@ export class SemanticSearchService implements vscode.Disposable {
         cognitiveComplexity: this.calculateCognitiveComplexity(content),
         linesOfCode: content.split('\n').length,
         nestingDepth: this.calculateNestingDepth(content),
-        maintainabilityIndex: qualityMetrics.readabilityScore * 100,
+        // `readabilityScore` is 0-100 in the contract and
+        // `maintainabilityIndex` is a 0-100 field, so no conversion is needed
+        // here. The `* 100` that used to be here belonged to the old 0-1
+        // manufacturing and would report a readability of 70 as 7000.
+        maintainabilityIndex: qualityMetrics.readabilityScore,
       },
       securityConsiderations: this.analyzeSecurityConsiderations(content),
     };
@@ -1600,7 +1592,8 @@ export class SemanticSearchService implements vscode.Disposable {
       // Quality threshold filter
       if (
         filters.qualityThreshold &&
-        result.qualityMetrics.readabilityScore < filters.qualityThreshold
+        toRatio(result.qualityMetrics.readabilityScore) <
+          filters.qualityThreshold
       ) {
         return false;
       }

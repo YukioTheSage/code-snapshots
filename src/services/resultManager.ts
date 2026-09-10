@@ -25,6 +25,7 @@ import {
 } from '../types/enhancedSearch';
 import { SemanticSearchResult } from './semanticSearchService';
 import { QualityMetrics, ContextInfo } from '../types/enhancedChunking';
+import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
 
 /**
  * Ranking configuration for multi-criteria ranking
@@ -446,24 +447,11 @@ export class ResultManager {
   ): Promise<EnhancedSemanticSearchResult[]> {
     return Promise.all(
       results.map(async (result) => {
-        // Create default quality metrics
-        const qualityMetrics: QualityMetrics = {
-          overallScore: 70,
-          readabilityScore: 0.7,
-          testCoverage: undefined,
-          documentationRatio: 0.5,
-          duplicationRisk: 0.3,
-          performanceRisk: 0.2,
-          securityRisk: 0.15,
-          maintainabilityScore: 75,
-          technicalDebt: {
-            estimatedFixTime: 2,
-            severity: 'low',
-            categories: [],
-            issues: [],
-          },
-          styleComplianceScore: 80,
-        };
+        // The pipeline's internal decisions are all ratios, but the metric
+        // itself is not: see qualityScale.ts. `DEFAULT_QUALITY_METRICS` is the
+        // one copy, and it is what every result is ranked with until the search
+        // path produces real metrics.
+        const qualityMetrics: QualityMetrics = { ...DEFAULT_QUALITY_METRICS };
 
         // Create default context info
         const contextInfo: ContextInfo = {
@@ -579,7 +567,8 @@ export class ResultManager {
       // Quality threshold filter
       if (
         criteria.qualityThreshold &&
-        result.qualityMetrics.readabilityScore < criteria.qualityThreshold
+        toRatio(result.qualityMetrics.readabilityScore) <
+          criteria.qualityThreshold
       ) {
         return false;
       }
@@ -763,25 +752,26 @@ export class ResultManager {
     let score = 0;
     let factors = 0;
 
-    // Readability score
-    score += metrics.readabilityScore;
+    // Readability score (0-100 in the contract, ratio internally)
+    score += toRatio(metrics.readabilityScore);
     factors++;
 
     // Test coverage (if available)
     if (metrics.testCoverage !== undefined) {
-      score += metrics.testCoverage;
+      score += toRatio(metrics.testCoverage);
       factors++;
     }
 
-    // Documentation ratio
+    // Documentation ratio (already a ratio)
     score += metrics.documentationRatio;
     factors++;
 
-    // Invert risk scores (lower risk = higher quality)
-    score += 1 - metrics.duplicationRisk;
+    // Invert risk scores (lower risk = higher quality). Both are 0-100 in the
+    // contract, so they must be converted before inversion -- `1 - 30` is -29.
+    score += 1 - toRatio(metrics.duplicationRisk);
     factors++;
 
-    score += 1 - metrics.performanceRisk;
+    score += 1 - toRatio(metrics.performanceRisk);
     factors++;
 
     return factors > 0 ? score / factors : 0.5;
@@ -889,7 +879,7 @@ export class ResultManager {
           result.content.includes('spec')
         );
       case 'highQualityScore':
-        return result.qualityMetrics.readabilityScore > 0.8;
+        return toRatio(result.qualityMetrics.readabilityScore) > 0.8;
       case 'hasErrorHandling':
         return (
           result.content.includes('try') ||
@@ -900,6 +890,7 @@ export class ResultManager {
         // Placeholder - would need actual code smell detection
         return false;
       case 'noDocumentation':
+        // documentationRatio is the one ratio field: no conversion.
         return result.qualityMetrics.documentationRatio < 0.2;
       default:
         return false;
@@ -954,7 +945,9 @@ export class ResultManager {
         factor: 'Quality Score',
         weight: 0.3,
         description: 'Code quality metrics',
-        value: result.qualityMetrics.readabilityScore,
+        // The other factors in this array are 0-1 (score, documentationRatio),
+        // so the metric is converted to match.
+        value: toRatio(result.qualityMetrics.readabilityScore),
       },
       {
         factor: 'Relevance Rank',
@@ -1003,7 +996,7 @@ export class ResultManager {
     const suggestions: ActionableSuggestion[] = [];
 
     // Quality improvement suggestions
-    if (result.qualityMetrics.readabilityScore < 0.6) {
+    if (toRatio(result.qualityMetrics.readabilityScore) < 0.6) {
       suggestions.push({
         type: 'improvement',
         description: 'Consider refactoring for better readability',
@@ -1103,7 +1096,7 @@ export class ResultManager {
   }
 
   private getComplexityLevel(qualityMetrics: QualityMetrics): string {
-    const readability = qualityMetrics.readabilityScore;
+    const readability = toRatio(qualityMetrics.readabilityScore);
     if (readability > 0.8) return 'simple';
     if (readability > 0.6) return 'moderate';
     if (readability > 0.4) return 'complex';
@@ -1172,8 +1165,11 @@ export class ResultManager {
   ): number {
     if (results.length === 0) return 0;
 
+    // `overallScore` is a 0-100 field, and every other statistic on
+    // `ResultProcessingStats` is a 0-1 ratio (`diversityScore` included), so the
+    // average is reported as a ratio rather than next to them as a 0-100 number.
     const totalQuality = results.reduce(
-      (sum, result) => sum + result.qualityMetrics.overallScore,
+      (sum, result) => sum + toRatio(result.qualityMetrics.overallScore),
       0,
     );
     return totalQuality / results.length;
@@ -1591,8 +1587,8 @@ export class ResultManager {
       );
     }
 
-    const score1 = result1.qualityMetrics.readabilityScore;
-    const score2 = result2.qualityMetrics.readabilityScore;
+    const score1 = toRatio(result1.qualityMetrics.readabilityScore);
+    const score2 = toRatio(result2.qualityMetrics.readabilityScore);
     if (Math.abs(score1 - score2) > 0.2) {
       differences.push(
         `Different quality scores: ${score1.toFixed(2)} vs ${score2.toFixed(
@@ -1608,7 +1604,7 @@ export class ResultManager {
     result: EnhancedSemanticSearchResult,
   ): string {
     const type = result.enhancedMetadata?.semanticType || 'code';
-    const quality = result.qualityMetrics.readabilityScore;
+    const quality = toRatio(result.qualityMetrics.readabilityScore);
 
     let description = `Alternative ${type} implementation`;
 
@@ -1625,8 +1621,10 @@ export class ResultManager {
     original: EnhancedSemanticSearchResult,
     alternative: EnhancedSemanticSearchResult,
   ): string {
-    const originalQuality = original.qualityMetrics.readabilityScore;
-    const alternativeQuality = alternative.qualityMetrics.readabilityScore;
+    const originalQuality = toRatio(original.qualityMetrics.readabilityScore);
+    const alternativeQuality = toRatio(
+      alternative.qualityMetrics.readabilityScore,
+    );
 
     if (alternativeQuality > originalQuality + 0.1) {
       return 'When higher code quality is preferred';

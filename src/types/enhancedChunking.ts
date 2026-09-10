@@ -172,7 +172,17 @@ export interface RelationshipMetadata {
 // ============================================================================
 
 /**
- * Comprehensive quality metrics for code chunks
+ * Comprehensive quality metrics for code chunks.
+ *
+ * TWO UNITS, and the field names say which:
+ *   - `overallScore`, `readabilityScore`, `testCoverage`, `duplicationRisk`,
+ *     `performanceRisk`, `securityRisk`, `maintainabilityScore` and
+ *     `styleComplianceScore` are 0-100.
+ *   - `documentationRatio` is 0-1.
+ *
+ * Comparisons must convert explicitly with `toRatio`/`fromRatio` from
+ * `services/qualityScale.ts`; comparing a 0-100 field against a 0-1 literal is
+ * the defect that module exists to prevent.
  */
 export interface QualityMetrics {
   /** Overall quality score (0-100, higher = better quality) */

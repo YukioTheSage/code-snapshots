@@ -26,6 +26,7 @@ import {
 } from '../../types/enhancedSearch';
 import { SemanticSearchResult } from '../semanticSearchService';
 import { QualityMetrics, ContextInfo } from '../../types/enhancedChunking';
+import { toRatio } from '../qualityScale';
 
 describe('ResultManager', () => {
   let resultManager: ResultManager;
@@ -211,6 +212,29 @@ describe('ResultManager', () => {
       expect(stats.averageQualityScore).toBeGreaterThanOrEqual(0);
     });
 
+    it('ranks the manufactured defaults exactly as it did before the scale fix', async () => {
+      // The defaults used to be written on the 0-1 scale in 0-100 fields
+      // (readabilityScore 0.7, duplicationRisk 0.3, ...). Converting them to
+      // the documented contract while converting every consumer must leave the
+      // composite identical: (0.7 + 0.5 + 0.7 + 0.8) / 4 either way.
+      const { results, stats } = await resultManager.processResults(
+        mockBaseResults,
+        mockProcessedQuery,
+        { ...mockOptions, filterCriteria: {}, limit: 10 },
+      );
+
+      expect(results.length).toBeGreaterThan(0);
+      for (const result of results) {
+        expect(result.qualityMetrics.readabilityScore).toBe(70);
+        expect(result.qualityMetrics.duplicationRisk).toBe(30);
+      }
+      // `averageQualityScore` averages `overallScore` (70, a 0-100 field) and is
+      // reported on the 0-1 statistic scale, so it is 0.7 -- not 70, and not the
+      // 0.675 quality term, which is a different quantity.
+      expect(stats.averageQualityScore).toBeCloseTo(0.7);
+      expect(stats.averageQualityScore).toBeGreaterThan(0);
+    });
+
     it('should handle empty results gracefully', async () => {
       const { results, stats } = await resultManager.processResults(
         [],
@@ -231,7 +255,10 @@ describe('ResultManager', () => {
       //
       // The default score is read from an unfiltered run rather than
       // hardcoded, so this asserts the filtering boundary without depending on
-      // the 0-1 versus 0-100 scale mismatch recorded in docs/KNOWN_ISSUES.md.
+      // the absolute value of the default. The metric is converted to the
+      // threshold's 0-1 units, because the threshold is a ratio-scale filter
+      // input -- `queryProcessor.ts` sets 0.7 -- while the metric is a 0-100
+      // contract field.
       const unfiltered = await resultManager.processResults(
         mockBaseResults,
         mockProcessedQuery,
@@ -239,9 +266,10 @@ describe('ResultManager', () => {
       );
 
       expect(unfiltered.results.length).toBeGreaterThan(0);
-      const defaultScore =
-        unfiltered.results[0].qualityMetrics.readabilityScore;
-      expect(typeof defaultScore).toBe('number');
+      const defaultRatio = toRatio(
+        unfiltered.results[0].qualityMetrics.readabilityScore,
+      );
+      expect(typeof defaultRatio).toBe('number');
 
       // A threshold at the default keeps everything...
       const atThreshold = await resultManager.processResults(
@@ -249,7 +277,7 @@ describe('ResultManager', () => {
         mockProcessedQuery,
         {
           ...mockOptions,
-          filterCriteria: { qualityThreshold: defaultScore },
+          filterCriteria: { qualityThreshold: defaultRatio },
           limit: 10,
         },
       );
@@ -262,7 +290,7 @@ describe('ResultManager', () => {
         mockProcessedQuery,
         {
           ...mockOptions,
-          filterCriteria: { qualityThreshold: defaultScore + 0.1 },
+          filterCriteria: { qualityThreshold: defaultRatio + 0.1 },
           limit: 10,
         },
       );
