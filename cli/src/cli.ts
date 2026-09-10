@@ -9,6 +9,7 @@ import { UnifiedClient as CodeLapseClient } from './unifiedClient';
 import { inheritGlobalOptions, parseTimeout } from './globalOptions';
 import { getFailure, setFailure } from './exitState';
 import { printResult } from './commands/output';
+import { batchExecute } from './commands/batch';
 import { SnapshotCommands } from './commands/snapshot';
 import { SearchCommands } from './commands/search';
 import { WorkspaceCommands } from './commands/workspace';
@@ -979,31 +980,30 @@ export function buildProgram(): Command {
     .command('batch <file>')
     .description('Execute batch commands from JSON file (AI-friendly)')
     .action(async (file, options) => {
+      // The file read and the validation both live inside the try, so a missing
+      // file, malformed JSON or a disallowed method all report a failure payload
+      // and exit 1 rather than throwing a stack trace.
       try {
         const fs = await import('fs');
-        const batchCommands = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
 
-        const results = [];
-        for (const cmd of batchCommands) {
-          try {
-            const result = await getClient().executeCommand(cmd);
-            results.push({ success: true, command: cmd, result });
-          } catch (error) {
-            results.push({
-              success: false,
-              command: cmd,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
+        const results = await batchExecute(raw, await getClientReady());
+        const failed = results.filter((r) => !r.success).length;
 
-        console.log(JSON.stringify({ success: true, results }));
+        // `success` reflects whether every command succeeded. It previously said
+        // `true` unconditionally, so a batch in which every command failed still
+        // reported success.
+        printResult(
+          { success: failed === 0, total: results.length, failed, results },
+          options,
+        );
       } catch (error) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: false,
             error: error instanceof Error ? error.message : String(error),
-          }),
+          },
+          options,
         );
       }
     });

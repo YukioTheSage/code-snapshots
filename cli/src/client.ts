@@ -93,17 +93,21 @@ export class CodeLapseClient extends EventEmitter {
   }
 
   /**
-   * Execute a batch command
+   * Not supported. Use `callApi(method, data)` or `batchExecute` instead.
+   *
+   * This previously returned a fabricated
+   * `{ command, result: 'success', timestamp }` **without sending anything**,
+   * which made `codelapse batch` report success for commands it never ran. It
+   * now refuses rather than inventing a result, so it cannot be mistaken for a
+   * working call again.
    */
   async executeCommand(command: any): Promise<any> {
-    await this.ensureConnection();
-
-    // This would execute the command via the extension API
-    return {
-      command,
-      result: 'success',
-      timestamp: new Date().toISOString(),
-    };
+    throw new Error(
+      `executeCommand is not supported: it would fabricate a result without sending anything. ` +
+        `Use callApi(method, data) or batchExecute() instead. Received: ${JSON.stringify(
+          command,
+        )}`,
+    );
   }
 
   /**
