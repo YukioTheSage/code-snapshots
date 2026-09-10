@@ -60,6 +60,58 @@ export interface RestoreResult {
   deleted: string[];
 }
 
+/**
+ * Chooses which snapshots can be pruned without making any surviving snapshot
+ * unreadable. Snapshots are deltas: an entry with only a `baseSnapshotId` is
+ * reconstructable solely while that base still exists, so removing a referenced
+ * snapshot silently destroys data in its dependants. This is the mechanism that
+ * produced the 4,942 directly-unrecoverable files in this repository's store.
+ *
+ * The candidate set is the `excess` oldest snapshots. References are evaluated
+ * against the *projected remainder* -- the snapshots that would still exist
+ * afterwards -- so a reference held only by another snapshot that is itself
+ * being pruned does not block its base. If the full set would leave a dangling
+ * reference, the newest candidate is dropped and the check repeats, so the
+ * result is always a prefix of the oldest-first order and the store simply
+ * keeps more snapshots than the configured maximum rather than losing data.
+ *
+ * Note on ordering: pruning must always take from the *oldest* end. A revision
+ * of this function that skipped referenced candidates and carried on down the
+ * list selected the newest snapshots instead -- discarding the user's most
+ * recent history while keeping ancient ones. It also fails three of this
+ * function's own tests; see the commit message.
+ */
+export function selectPrunableSnapshots(
+  allSnapshots: Snapshot[],
+  maxSnapshots: number,
+): string[] {
+  const excess = allSnapshots.length - maxSnapshots;
+  if (excess <= 0) {
+    return [];
+  }
+
+  const byAge = [...allSnapshots].sort((a, b) => a.timestamp - b.timestamp);
+  const selected = byAge.slice(0, excess);
+
+  while (selected.length > 0) {
+    const pruned = new Set(selected.map((s) => s.id));
+    const danglingReference = byAge.some(
+      (snapshot) =>
+        !pruned.has(snapshot.id) &&
+        Object.values(snapshot.files).some(
+          (fileData) =>
+            !!fileData.baseSnapshotId && pruned.has(fileData.baseSnapshotId),
+        ),
+    );
+    if (!danglingReference) {
+      break;
+    }
+    selected.pop();
+  }
+
+  return selected.map((s) => s.id);
+}
+
 export class SnapshotManager {
   private snapshots: Snapshot[] = [];
   private currentSnapshotIndex = -1;
@@ -1341,28 +1393,38 @@ export class SnapshotManager {
       return; // Limit not exceeded
     }
 
-    log(
-      `Snapshot limit (${maxSnapshots}) exceeded. Removing oldest snapshots.`,
-    );
-    // Remove oldest snapshots from the beginning of the array
-    const toRemoveCount = this.snapshots.length - maxSnapshots;
-    const removedSnapshots = this.snapshots.splice(0, toRemoveCount);
+    const removableIds = selectPrunableSnapshots(this.snapshots, maxSnapshots);
 
-    // Adjust current index since we removed items from the beginning
-    this.currentSnapshotIndex = Math.max(
-      -1,
-      this.currentSnapshotIndex - toRemoveCount,
-    );
-    log(
-      `Removed ${toRemoveCount} oldest snapshots. New current index: ${this.currentSnapshotIndex}`,
-    );
+    if (removableIds.length === 0) {
+      log(
+        `Snapshot limit (${maxSnapshots}) exceeded but no snapshot is safe to prune: every candidate is referenced by a snapshot that would survive. Keeping ${this.snapshots.length} snapshots.`,
+      );
+      return;
+    }
+
+    const requested = this.snapshots.length - maxSnapshots;
+    if (removableIds.length < requested) {
+      log(
+        `Snapshot limit (${maxSnapshots}) exceeded by ${requested} but only ${removableIds.length} snapshot(s) are safe to prune. Keeping the rest to preserve referential integrity.`,
+      );
+    }
+
+    const removable = new Set(removableIds);
+    const removedSnapshots = this.snapshots.filter((s) => removable.has(s.id));
+
+    this.snapshots = this.snapshots.filter((s) => !removable.has(s.id));
+
+    // Recompute rather than decrementing arithmetically. The old
+    // `currentSnapshotIndex - toRemoveCount` was only correct because the
+    // removed set was always a prefix of the array; it no longer is. The field
+    // means "newest" today, so recomputing preserves that semantics for a
+    // non-prefix removal set. Its meaning is reworked properly in Plan 06.
+    this.currentSnapshotIndex = this.snapshots.length - 1;
 
     // Delete snapshot data using storage
-    // Add await inside map function
-    const deletePromises = removedSnapshots.map(
-      async (snapshot) => await this.storage.deleteSnapshotData(snapshot.id),
-    );
-    await Promise.all(deletePromises); // Wait for all deletions
+    for (const snapshot of removedSnapshots) {
+      await this.storage.deleteSnapshotData(snapshot.id);
+    }
 
     // Update index since snapshots were removed
     await this.saveSnapshotIndex();
@@ -1370,7 +1432,9 @@ export class SnapshotManager {
     // Emit event if snapshots were actually removed
     if (removedSnapshots.length > 0) {
       this._onDidChangeSnapshots.fire();
-      log('Fired onDidChangeSnapshots event after enforceSnapshotLimit');
+      log(
+        `Pruned ${removedSnapshots.length} snapshot(s); ${this.snapshots.length} remain. Fired onDidChangeSnapshots event after enforceSnapshotLimit`,
+      );
     }
   }
 
