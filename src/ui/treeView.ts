@@ -515,19 +515,17 @@ export class SnapshotTreeDataProvider
 
       // --- Get Children of a Group Item (Snapshots) ---
       if (element.contextValue === 'snapshotGroup' && element.groupSnapshots) {
-        const currentIndex = this.snapshotManager.getCurrentSnapshotIndex();
         // Snapshots within the group are already filtered, just need to sort and map
         const sortedSnapshots = [...element.groupSnapshots].sort(
           (a, b) => b.timestamp - a.timestamp, // Newest first within group
         );
 
         const snapshotItems = sortedSnapshots.map((snapshot) => {
-          const index = this.snapshotManager
-            .getSnapshots()
-            .findIndex((s) => s.id === snapshot.id);
           return new SnapshotTreeItem(
             snapshot,
-            index === currentIndex, // Check if this snapshot is the globally current one
+            // Identity, not position: the list is pruned and re-sorted, so an
+            // index captured earlier can name a different snapshot later.
+            this.snapshotManager.isSnapshotActive(snapshot.id),
             this.snapshotManager,
           );
         });

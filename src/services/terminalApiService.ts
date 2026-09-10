@@ -50,7 +50,7 @@ export class TerminalApiService implements TerminalApiInterface {
         )}`,
       );
 
-      const snapshot = await this.snapshotManager.takeSnapshot(
+      const outcome = await this.snapshotManager.takeSnapshot(
         options.description || `CLI snapshot at ${new Date().toISOString()}`,
         {
           tags: options.tags,
@@ -61,6 +61,24 @@ export class TerminalApiService implements TerminalApiInterface {
           selectedFiles: options.selectedFiles,
         },
       );
+
+      if (!outcome.created) {
+        // No snapshot was recorded, so there is nothing to describe. Reporting
+        // `success: true` with the previous snapshot -- which is what this
+        // returned before -- told the caller a snapshot had been created when
+        // the store was unchanged.
+        log(
+          'TerminalApiService: no snapshot created; the workspace is unchanged.',
+        );
+        return {
+          success: false,
+          noChanges: true,
+          error:
+            'Nothing to snapshot: the workspace is unchanged since the previous snapshot.',
+        };
+      }
+
+      const { snapshot } = outcome;
 
       // Calculate statistics
       const changes = this.snapshotManager.getSnapshotChangeSummary(

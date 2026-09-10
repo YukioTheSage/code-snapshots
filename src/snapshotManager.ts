@@ -10,6 +10,12 @@ import { createDiff } from './snapshotDiff'; // Removed unused applyDiff import
 import { SnapshotStorage } from './snapshotStorage';
 import { API as GitAPI } from './types/git'; // Import Git API type
 import { assertNoSymlinkPath, ensureWithinDirectory } from './pathSecurity';
+import {
+  ACTIVE_NONE,
+  resolveActiveIndex,
+  resolveNavigationTarget,
+  type NavigationDirection,
+} from './snapshotSelection';
 import { MAX_FILE_SIZE_BYTES } from './security/limits';
 import {
   getUnrecoverableFiles,
@@ -63,6 +69,17 @@ export interface RestoreResult {
   /** Relative paths deleted from the workspace. */
   deleted: string[];
 }
+
+/**
+ * What a call to `takeSnapshot` actually did.
+ *
+ * A snapshot is skipped when an auto-snapshot finds nothing has changed, so
+ * "a snapshot exists afterwards" is not the same as "this call created one".
+ * Callers must narrow on `created` before reading `snapshot`.
+ */
+export type TakeSnapshotOutcome =
+  | { created: true; snapshot: Snapshot }
+  | { created: false; reason: 'no-changes' };
 
 /**
  * Chooses which snapshots can be pruned without making any surviving snapshot
@@ -130,7 +147,20 @@ export class SnapshotManager {
     unrecoverableFileCount: 0,
     perSnapshot: {},
   };
-  private currentSnapshotIndex = -1;
+  /**
+   * The snapshot the workspace currently reflects, or `null` when the
+   * workspace does not correspond to any snapshot.
+   *
+   * This is the single source of truth for "which snapshot am I on". The field
+   * it replaces (`currentSnapshotIndex`) was written as "the newest snapshot"
+   * on load and after every take, but read as "the snapshot the workspace
+   * reflects" by the status bar, the tree highlight, the quick pick and the
+   * diff base for new snapshots. The two meanings are indistinguishable when
+   * they are stored as one position, which is how a fresh window came to
+   * report "Viewing snapshot 54/54". Identity is stored; the index is derived.
+   * See `snapshotSelection.ts`.
+   */
+  private activeSnapshotId: string | null = null;
   private storage: SnapshotStorage;
   private gitApi: GitAPI | null; // Store Git API instance
   private writeLock: Promise<void> = Promise.resolve();
@@ -168,14 +198,29 @@ export class SnapshotManager {
 
     if (loadedState) {
       this.snapshots = loadedState.snapshots;
-      this.currentSnapshotIndex = loadedState.currentIndex;
+      if (typeof loadedState.activeSnapshotId === 'string') {
+        // New shape: the field is authoritative, and null means detached.
+        this.activeSnapshotId = loadedState.activeSnapshotId;
+      } else {
+        // Legacy index.json: `currentIndex` meant "newest", never "active".
+        // A legacy store has no evidence that the workspace corresponds to any
+        // snapshot, so start detached and let the user navigate deliberately.
+        // Mapping that position to an id instead would leave the workspace
+        // claiming to be at snapshot N/N -- the bug this task exists to remove.
+        log(
+          'Legacy snapshot index detected (no activeSnapshotId); starting detached.',
+        );
+        this.activeSnapshotId = null;
+      }
       log(
-        `Loaded ${this.snapshots.length} snapshots, current index: ${this.currentSnapshotIndex}`,
+        `Loaded ${this.snapshots.length} snapshots, active snapshot: ${
+          this.activeSnapshotId ?? 'none'
+        }`,
       );
     } else {
       // Handle case where loading failed critically (should be logged by storage)
       this.snapshots = [];
-      this.currentSnapshotIndex = -1;
+      this.activeSnapshotId = null;
       log('Snapshot loading failed or returned null state.');
     }
     // No need to sort here, assuming storage returns them sorted
@@ -190,8 +235,26 @@ export class SnapshotManager {
     // No await needed here as saveSnapshotIndex in storage is already async
     await this.storage.saveSnapshotIndex(
       this.snapshots,
-      this.currentSnapshotIndex,
+      this.getCurrentSnapshotIndex(),
+      this.activeSnapshotId,
     );
+  }
+
+  /**
+   * Drops the active-snapshot reference when the snapshot it named no longer
+   * exists. Every path that removes snapshots from the list must call this:
+   * the workspace cannot still be at a snapshot that has been deleted.
+   */
+  private detachIfActiveSnapshotRemoved(): void {
+    if (
+      this.activeSnapshotId &&
+      !this.snapshots.some((s) => s.id === this.activeSnapshotId)
+    ) {
+      log(
+        `Active snapshot ${this.activeSnapshotId} was removed; the workspace no longer corresponds to a snapshot.`,
+      );
+      this.activeSnapshotId = null;
+    }
   }
 
   private async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -223,7 +286,7 @@ export class SnapshotManager {
       isSelective?: boolean;
       selectedFiles?: string[];
     } = {},
-  ): Promise<Snapshot> {
+  ): Promise<TakeSnapshotOutcome> {
     return await this.withWriteLock(() =>
       this.takeSnapshotInternal(description, contextOptions),
     );
@@ -239,7 +302,7 @@ export class SnapshotManager {
       isSelective?: boolean;
       selectedFiles?: string[];
     } = {},
-  ): Promise<Snapshot> {
+  ): Promise<TakeSnapshotOutcome> {
     const workspaceRoot = this.storage.getWorkspaceRoot();
     if (!workspaceRoot) {
       throw new Error('No workspace folder open');
@@ -383,10 +446,9 @@ export class SnapshotManager {
     // --- End: New File Filtering Logic ---
 
     // Find the previous snapshot to base diffs on - MOVED UP BEFORE IT'S USED
-    const baseSnapshot =
-      this.currentSnapshotIndex >= 0
-        ? this.snapshots[this.currentSnapshotIndex]
-        : undefined;
+    // The base is the snapshot the workspace reflects; when none is active it
+    // is the newest snapshot.
+    const baseSnapshot = this.getDiffBaseSnapshot();
 
     if (finalFiles.length > 0) {
       // Check for suspicious files - those that might be binary but weren't caught by extension check
@@ -560,13 +622,23 @@ export class SnapshotManager {
       );
       if (!hasChange) {
         log('Skipping auto snapshot: no changes detected since last snapshot');
-        return this.snapshots[this.currentSnapshotIndex];
+        // An explicit outcome, not the previous snapshot: returning an
+        // existing Snapshot made "created" and "skipped" indistinguishable to
+        // every caller, which is how the UI came to report a snapshot that was
+        // never taken -- and, with no active snapshot, to return `undefined`
+        // from a method whose signature promised a Snapshot.
+        return { created: false, reason: 'no-changes' };
       }
     }
 
     // Add to our in-memory list first, so the index write below includes it.
+    // A new snapshot describes the workspace, so it also becomes the active
+    // one; that is deliberate, and it is recorded as identity so the index
+    // cannot drift from the list. The previous value is kept so the rollback
+    // paths below can restore exactly what the workspace reflected before.
+    const previousActiveSnapshotId = this.activeSnapshotId;
     this.snapshots.push(snapshot);
-    this.currentSnapshotIndex = this.snapshots.length - 1;
+    this.activeSnapshotId = snapshot.id;
 
     // Write the index BEFORE the snapshot data, and surface failure.
     //
@@ -580,7 +652,7 @@ export class SnapshotManager {
       await this.saveSnapshotIndex();
     } catch (indexError) {
       this.snapshots.pop();
-      this.currentSnapshotIndex = this.snapshots.length - 1;
+      this.activeSnapshotId = previousActiveSnapshotId;
       this.refreshIntegrityReport();
       log(
         `Failed to persist the snapshot index after taking a snapshot: ${indexError}`,
@@ -600,7 +672,7 @@ export class SnapshotManager {
       await this.storage.saveSnapshotData(snapshot);
     } catch (error) {
       this.snapshots = this.snapshots.filter((s) => s.id !== snapshot.id);
-      this.currentSnapshotIndex = this.snapshots.length - 1;
+      this.activeSnapshotId = previousActiveSnapshotId;
       this.refreshIntegrityReport();
 
       // Remove anything the failed write left behind, so the recovery scan
@@ -641,7 +713,7 @@ export class SnapshotManager {
     this._onDidChangeSnapshots.fire();
     log('Fired onDidChangeSnapshots event after takeSnapshot');
 
-    return snapshot;
+    return { created: true, snapshot };
   }
 
   /**
@@ -1128,8 +1200,8 @@ export class SnapshotManager {
     // --- UI Summary Message REMOVED ---
     // This will be handled by the command handler
 
-    // Update current snapshot index
-    this.currentSnapshotIndex = index;
+    // Update which snapshot the workspace now reflects
+    this.activeSnapshotId = snapshot.id;
     await this.saveSnapshotIndex();
 
     // Refresh open editors to reflect changes
@@ -1144,39 +1216,55 @@ export class SnapshotManager {
 
   /**
    * Navigate to previous snapshot (Uses applySnapshotRestore internally)
+   *
+   * Detach-tolerant: with no active snapshot this moves to the newest one
+   * rather than reporting that no history exists. See `resolveNavigationTarget`.
    */
   public async navigateToPreviousSnapshot(): Promise<boolean> {
-    if (this.currentSnapshotIndex <= 0) {
-      log('No previous snapshot available to navigate to.');
-      return false; // No previous snapshot
-    }
-
-    const prevSnapshotId = this.snapshots[this.currentSnapshotIndex - 1].id;
-    log(`Navigating to previous snapshot: ${prevSnapshotId}`);
-    // Note: applySnapshotRestore doesn't handle UI/confirmation,
-    // so this direct call bypasses that. The command handler for
-    // 'previousSnapshot' should orchestrate the full flow if needed.
-    // For now, assume direct application is intended for nav commands.
-    // Consider if nav commands should also have preview/confirm.
-    // `applySnapshotRestore` returns a RestoreResult; navigation only reports
-    // whether the restore succeeded, and Plan 06 owns the detach-tolerant
-    // index semantics for these two methods.
-    return (await this.applySnapshotRestore(prevSnapshotId)).success;
+    return await this.navigateByDirection('previous');
   }
 
   /**
    * Navigate to next snapshot (Uses applySnapshotRestore internally)
    */
   public async navigateToNextSnapshot(): Promise<boolean> {
-    if (this.currentSnapshotIndex >= this.snapshots.length - 1) {
-      log('No next snapshot available to navigate to.');
-      return false; // No next snapshot
+    return await this.navigateByDirection('next');
+  }
+
+  private async navigateByDirection(
+    direction: NavigationDirection,
+  ): Promise<boolean> {
+    const targetIndex = this.getNavigationTargetIndex(direction);
+    if (targetIndex === ACTIVE_NONE) {
+      log(`No ${direction} snapshot available to navigate to.`);
+      return false; // Nothing to navigate to
     }
 
-    const nextSnapshotId = this.snapshots[this.currentSnapshotIndex + 1].id;
-    log(`Navigating to next snapshot: ${nextSnapshotId}`);
-    // See note in navigateToPreviousSnapshot regarding UI/confirmation bypass.
-    return (await this.applySnapshotRestore(nextSnapshotId)).success;
+    const targetSnapshotId = this.snapshots[targetIndex].id;
+    log(`Navigating to ${direction} snapshot: ${targetSnapshotId}`);
+    // Note: applySnapshotRestore doesn't handle UI/confirmation,
+    // so this direct call bypasses that. The command handler for
+    // 'previousSnapshot' should orchestrate the full flow if needed.
+    // For now, assume direct application is intended for nav commands.
+    // Consider if nav commands should also have preview/confirm.
+    // `applySnapshotRestore` returns a RestoreResult; navigation only reports
+    // whether the restore succeeded.
+    return (await this.applySnapshotRestore(targetSnapshotId)).success;
+  }
+
+  /**
+   * Where a previous/next navigation would land, or `ACTIVE_NONE`.
+   *
+   * Public so the commands that report which snapshot they are moving to use
+   * the same answer the navigation itself will use; computing it twice is how
+   * a progress title ends up naming a snapshot the command never restores.
+   */
+  public getNavigationTargetIndex(direction: NavigationDirection): number {
+    return resolveNavigationTarget(
+      this.snapshots,
+      this.getCurrentSnapshotIndex(),
+      direction,
+    );
   }
 
   /**
@@ -1190,7 +1278,61 @@ export class SnapshotManager {
    * Get current snapshot index
    */
   public getCurrentSnapshotIndex(): number {
-    return this.currentSnapshotIndex;
+    return resolveActiveIndex(this.snapshots, this.activeSnapshotId);
+  }
+
+  /**
+   * The snapshot the workspace currently reflects, or undefined when the
+   * workspace is not at a snapshot.
+   *
+   * Previously `currentSnapshotIndex` was initialised to the newest snapshot
+   * on load and after every takeSnapshot, so the status bar reported
+   * "Viewing snapshot 54/54" on a fresh window and the tree marked the newest
+   * snapshot as current even though nothing had been restored.
+   */
+  public getActiveSnapshot(): Snapshot | undefined {
+    const index = this.getCurrentSnapshotIndex();
+    return index === ACTIVE_NONE ? undefined : this.snapshots[index];
+  }
+
+  /**
+   * Whether the workspace currently reflects the given snapshot.
+   *
+   * Callers that highlight or mark a snapshot must use this rather than
+   * comparing array positions: the list is pruned and re-sorted, so a position
+   * captured earlier can name a different snapshot later.
+   */
+  public isSnapshotActive(snapshotId: string): boolean {
+    return this.activeSnapshotId === snapshotId;
+  }
+
+  /**
+   * Forgets which snapshot the workspace reflects, without touching the
+   * workspace itself. The store keeps every snapshot; only the claim that the
+   * workspace corresponds to one is dropped.
+   */
+  public async clearActiveSnapshot(): Promise<void> {
+    this.activeSnapshotId = null;
+    await this.saveSnapshotIndex();
+    this._onDidChangeSnapshots.fire();
+  }
+
+  /**
+   * The snapshot a new snapshot should diff against.
+   *
+   * That is the snapshot the workspace reflects. When nothing is active the
+   * base is the newest snapshot, which is the right default: a fresh window
+   * holds the newest state. The two cases were previously indistinguishable
+   * because both were read from the same stored position.
+   */
+  private getDiffBaseSnapshot(): Snapshot | undefined {
+    const active = this.getActiveSnapshot();
+    if (active) {
+      return active;
+    }
+    return this.snapshots.length > 0
+      ? this.snapshots[this.snapshots.length - 1]
+      : undefined;
   }
 
   /**
@@ -1266,15 +1408,7 @@ export class SnapshotManager {
       this.snapshots.splice(lockedIndex, 1);
       log(`Removed snapshot ${snapshotId} from in-memory list.`);
 
-      if (this.snapshots.length === 0) {
-        this.currentSnapshotIndex = -1;
-        log('No snapshots left, resetting current index.');
-      } else if (lockedIndex <= this.currentSnapshotIndex) {
-        this.currentSnapshotIndex = Math.max(-1, this.currentSnapshotIndex - 1);
-        log(
-          `Adjusted current index due to deletion: ${this.currentSnapshotIndex}`,
-        );
-      }
+      this.detachIfActiveSnapshotRemoved();
 
       await this.saveSnapshotIndex();
       log(`Snapshot index saved after deleting ${snapshotId}.`);
@@ -1567,12 +1701,11 @@ export class SnapshotManager {
 
     this.snapshots = this.snapshots.filter((s) => !removable.has(s.id));
 
-    // Recompute rather than decrementing arithmetically. The old
-    // `currentSnapshotIndex - toRemoveCount` was only correct because the
-    // removed set was always a prefix of the array; it no longer is. The field
-    // means "newest" today, so recomputing preserves that semantics for a
-    // non-prefix removal set. Its meaning is reworked properly in Plan 06.
-    this.currentSnapshotIndex = this.snapshots.length - 1;
+    // Pruning takes from the oldest end, so it can remove the snapshot the
+    // workspace reflects. Identity survives reordering, which is why the
+    // reference is stored as an id: the old arithmetic adjustment of a stored
+    // position was only correct while the removed set was a prefix.
+    this.detachIfActiveSnapshotRemoved();
 
     // Delete snapshot data using storage
     for (const snapshot of removedSnapshots) {

@@ -2,6 +2,7 @@ import { getUxSettings } from '../config';
 import { WelcomeView } from '../ui/welcomeView';
 import { AnimationHelpers } from '../utils';
 import { registerCommands } from '../commands';
+import { resolveNavigationTarget } from '../snapshotSelection';
 import * as vscode from 'vscode';
 import * as path from 'path';
 
@@ -119,12 +120,19 @@ describe('ux.useAnimations is wired to the transition indicator', () => {
           ),
       );
 
+    const snapshotList = [
+      { id: 's1', timestamp: 1000, description: 'one', files: {} },
+      { id: 's2', timestamp: 2000, description: 'two', files: {} },
+    ];
+    const activeIndex = 1;
+
     const snapshotManager = {
-      getSnapshots: () => [
-        { id: 's1', timestamp: 1000, description: 'one' },
-        { id: 's2', timestamp: 2000, description: 'two' },
-      ],
-      getCurrentSnapshotIndex: () => 1,
+      getSnapshots: () => snapshotList,
+      getCurrentSnapshotIndex: () => activeIndex,
+      // Delegates to the real resolver rather than restating its arithmetic,
+      // so this harness cannot drift from the manager it stands in for.
+      getNavigationTargetIndex: (direction: 'previous' | 'next') =>
+        resolveNavigationTarget(snapshotList, activeIndex, direction),
       navigateToPreviousSnapshot: async () => true,
       navigateToNextSnapshot: async () => true,
     };

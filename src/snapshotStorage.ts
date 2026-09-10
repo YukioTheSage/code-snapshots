@@ -25,6 +25,15 @@ import {
 interface SnapshotIndex {
   snapshots: Array<{ id: string; timestamp: number; description: string }>;
   currentIndex: number;
+  /**
+   * Which snapshot the workspace reflects, or `null` when it reflects none.
+   *
+   * Optional because an index written before this field existed meant
+   * something else by `currentIndex`: "the newest snapshot", not "the snapshot
+   * the workspace is at". Its absence is how the loader tells the two apart;
+   * see `SnapshotManager.loadSnapshots`.
+   */
+  activeSnapshotId?: string | null;
 }
 
 export class SnapshotStorage {
@@ -241,10 +250,15 @@ export class SnapshotStorage {
   /**
    * Loads the snapshot index and metadata asynchronously.
    * Returns the list of snapshots and the current index, or null if loading fails.
+   *
+   * `activeSnapshotId` is `undefined` for an index written before that field
+   * existed -- not the same thing as `null`, which means "deliberately
+   * detached". The caller must distinguish them; see `loadSnapshots`.
    */
   public async loadSnapshotIndexAndMetadata(): Promise<{
     snapshots: Snapshot[];
     currentIndex: number;
+    activeSnapshotId?: string | null;
   } | null> {
     if (!this.snapshotDirectory) {
       log('Cannot load snapshots, storage directory not initialized.');
@@ -339,7 +353,14 @@ export class SnapshotStorage {
           log(
             `Recovery successful. Found ${loadedSnapshots.length} snapshots. Setting index to ${currentSnapshotIndex}.`,
           );
-          await this.saveSnapshotIndex(loadedSnapshots, currentSnapshotIndex);
+          // A recovery scan has no evidence that the workspace corresponds to
+          // any of the snapshots it resurrected, so the index it writes says
+          // "detached" explicitly rather than "legacy".
+          await this.saveSnapshotIndex(
+            loadedSnapshots,
+            currentSnapshotIndex,
+            null,
+          );
           vscode.window.showInformationMessage(
             `Recovered ${loadedSnapshots.length} snapshots.`,
           );
@@ -371,10 +392,20 @@ export class SnapshotStorage {
     }
 
     log(
-      `Final loaded snapshot count: ${loadedSnapshots.length}, Current Index: ${currentSnapshotIndex}`,
+      `Final loaded snapshot count: ${
+        loadedSnapshots.length
+      }, Current Index: ${currentSnapshotIndex}, Active: ${
+        indexData?.activeSnapshotId ?? 'none recorded'
+      }`,
     );
     this.contentCache.clear(); // Clear cache on load/reload
-    return { snapshots: loadedSnapshots, currentIndex: currentSnapshotIndex };
+    return {
+      snapshots: loadedSnapshots,
+      currentIndex: currentSnapshotIndex,
+      // Deliberately forwarded as `undefined` when absent, so the migration in
+      // SnapshotManager can still tell a legacy index from a detached one.
+      activeSnapshotId: indexData?.activeSnapshotId,
+    };
   }
 
   /**
@@ -491,6 +522,7 @@ export class SnapshotStorage {
   public async saveSnapshotIndex(
     snapshots: Snapshot[],
     currentIndex: number,
+    activeSnapshotId: string | null = null,
   ): Promise<void> {
     if (!this.snapshotDirectory) {
       throw new Error('Snapshot storage directory not initialized.');
@@ -504,6 +536,7 @@ export class SnapshotStorage {
         description: s.description,
       })),
       currentIndex: currentIndex,
+      activeSnapshotId: activeSnapshotId,
     };
 
     // Validate before touching the filesystem, so an invalid payload cannot

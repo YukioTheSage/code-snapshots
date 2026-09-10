@@ -15,7 +15,7 @@ export class SnapshotQuickPick {
    */
   public async show(): Promise<string | undefined> {
     const snapshots = this.snapshotManager.getSnapshots();
-    const currentIndex = this.snapshotManager.getCurrentSnapshotIndex();
+    const activeId = this.snapshotManager.getActiveSnapshot()?.id;
 
     if (snapshots.length === 0) {
       vscode.window.showInformationMessage('No snapshots available');
@@ -23,7 +23,7 @@ export class SnapshotQuickPick {
     }
 
     // Format snapshots for quick pick with enhanced context
-    const items = snapshots.map((snapshot, index) => {
+    const items = snapshots.map((snapshot) => {
       const date = new Date(snapshot.timestamp);
       const formattedDate = date.toLocaleString();
 
@@ -31,7 +31,10 @@ export class SnapshotQuickPick {
       const summary = this.snapshotManager.getSnapshotChangeSummary(
         snapshot.id,
       );
-      const changeSummary = `+${summary.added} ~${summary.modified} -${summary.deleted}`;
+      // These counts describe what changed when the snapshot was TAKEN. They
+      // are not a preview of what restoring would do now, so they are
+      // labelled as a summary rather than left to imply a diff.
+      const changeSummary = `at capture: +${summary.added} ~${summary.modified} -${summary.deleted}`;
 
       // Build rich description with context
       let description = snapshot.description || 'No description';
@@ -71,7 +74,7 @@ export class SnapshotQuickPick {
 
       return {
         label: `${favoritePrefix}${
-          index === currentIndex ? '● ' : ''
+          snapshot.id === activeId ? '● ' : ''
         }${formattedDate}`,
         description,
         detail,
@@ -82,7 +85,7 @@ export class SnapshotQuickPick {
     // Show quick pick
     const selected = await vscode.window.showQuickPick(items.reverse(), {
       // Show newest first
-      placeHolder: 'Select a snapshot to restore',
+      placeHolder: 'Select a snapshot to restore the workspace to',
       matchOnDescription: true,
       matchOnDetail: true,
     });

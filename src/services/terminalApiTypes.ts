@@ -72,6 +72,15 @@ export interface SnapshotResponse {
   success: boolean;
   snapshot?: Snapshot;
   error?: string;
+  /**
+   * True when nothing was recorded because the workspace was unchanged since
+   * the base snapshot.
+   *
+   * This is a refusal, not a failure: `success` is false because no snapshot
+   * exists to return, but a caller that only wants to know whether the store
+   * moved can tell it apart from a genuine error.
+   */
+  noChanges?: boolean;
   statistics?: {
     filesProcessed: number;
     filesChanged: number;

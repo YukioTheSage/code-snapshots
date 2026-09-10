@@ -160,9 +160,11 @@ describe('takeSnapshot rollback keeps the claim and the disk in agreement', () =
   });
 
   it('keeps the snapshot when both writes succeed', async () => {
-    const created = await manager.takeSnapshot('keeper');
+    const outcome = await manager.takeSnapshot('keeper');
 
-    expect(created.id).toBeTruthy();
+    expect(outcome.created).toBe(true);
+    expect(outcome.created && outcome.snapshot.id).toBeTruthy();
+    expect(outcome.created && outcome.snapshot.description).toBe('keeper');
     expect(storage.saveSnapshotData).toHaveBeenCalledTimes(1);
     expect((manager as any).snapshots).toHaveLength(1);
     expect((manager as any).snapshots[0].description).toBe('keeper');

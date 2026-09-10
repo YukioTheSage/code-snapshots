@@ -59,37 +59,48 @@ export class StatusBarController implements vscode.Disposable {
    */
   private updateStatusBar(): void {
     const snapshots = this.snapshotManager.getSnapshots();
-    const currentIndex = this.snapshotManager.getCurrentSnapshotIndex();
     const totalSnapshots = snapshots.length;
 
     if (totalSnapshots === 0) {
       this.statusBarItem.text = '$(history) No Snapshots';
       this.statusBarItem.tooltip =
-        'No snapshots taken yet.\nClick to view snapshots (if any appear).';
+        'No snapshots taken yet.\nClick to take or view snapshots.';
+      this.statusBarItem.accessibilityInformation = {
+        label: 'CodeLapse: no snapshots',
+      };
       return;
     }
 
     const lastSnapshot = snapshots[totalSnapshots - 1];
     const timeAgo = formatTimeAgo(lastSnapshot.timestamp);
+    const active = this.snapshotManager.getActiveSnapshot();
 
-    const currentSnapshot = currentIndex >= 0 ? snapshots[currentIndex] : null;
-
-    if (currentSnapshot) {
-      // Currently viewing a specific snapshot
-      const currentTimestamp = new Date(currentSnapshot.timestamp);
-      const formattedTime = currentTimestamp.toLocaleTimeString();
-      this.statusBarItem.text = `$(history) ${timeAgo} | ${
-        currentIndex + 1
+    if (active) {
+      const index = snapshots.findIndex((s) => s.id === active.id);
+      this.statusBarItem.text = `$(history) ${timeAgo} | snapshot ${
+        index + 1
       }/${totalSnapshots}`;
-      this.statusBarItem.tooltip = `Last snapshot: ${timeAgo}\nViewing snapshot ${
-        currentIndex + 1
-      }/${totalSnapshots} (taken at ${formattedTime})\n${
-        currentSnapshot.description || 'No description'
+      this.statusBarItem.tooltip = `Last snapshot: ${timeAgo}\nWorkspace is at snapshot ${
+        index + 1
+      }/${totalSnapshots} (taken at ${new Date(
+        active.timestamp,
+      ).toLocaleTimeString()})\n${
+        active.description || 'No description'
       }\nClick to view all snapshots`;
+      this.statusBarItem.accessibilityInformation = {
+        label: `CodeLapse: workspace is at snapshot ${
+          index + 1
+        } of ${totalSnapshots}, last snapshot ${timeAgo}`,
+      };
     } else {
-      // Not viewing a specific snapshot (index is -1)
-      this.statusBarItem.text = `$(history) ${timeAgo} | ${totalSnapshots} Snapshots`;
-      this.statusBarItem.tooltip = `Last snapshot taken ${timeAgo}\nTotal snapshots: ${totalSnapshots}\nClick to view all snapshots`;
+      // Detached: snapshots exist, but the workspace does not correspond to
+      // one of them. This is the state a fresh window is in, and the state
+      // after the active snapshot is deleted or pruned.
+      this.statusBarItem.text = `$(history) ${timeAgo} | ${totalSnapshots} snapshots`;
+      this.statusBarItem.tooltip = `Last snapshot taken ${timeAgo}\nWorkspace is not at any snapshot (${totalSnapshots} available)\nClick to view all snapshots`;
+      this.statusBarItem.accessibilityInformation = {
+        label: `CodeLapse: workspace is not at a snapshot, ${totalSnapshots} snapshots available, last taken ${timeAgo}`,
+      };
     }
   }
 

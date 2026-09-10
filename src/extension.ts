@@ -271,29 +271,17 @@ export async function activate(context: vscode.ExtensionContext) {
         autoSnapshotTimer = setInterval(async () => {
           try {
             log('Auto-snapshot triggered by timer');
-            const lastIdx = snapshotManager.getCurrentSnapshotIndex();
-            if (lastIdx >= 0) {
-              const lastSnapshot = snapshotManager.getSnapshots()[lastIdx];
-              const workspaceRoot = snapshotManager.getWorkspaceRoot();
-              if (workspaceRoot) {
-                const changes = await snapshotManager.calculateRestoreChanges(
-                  lastSnapshot,
-                  workspaceRoot,
-                );
-                if (changes.length === 0) {
-                  log(
-                    'Skipping timer-based auto snapshot: no changes detected since last snapshot',
-                  );
-                  return;
-                }
-              }
-            }
-            // Take snapshot with enhanced context information
+
+            // Take snapshot with enhanced context information. The manager
+            // decides whether there is anything to record -- the change check
+            // that used to live here asked a different question (it compared
+            // against the newest snapshot) and the two could disagree, so a
+            // "no changes" verdict here could contradict the manager's.
             const now = new Date();
             const formattedTime = now.toLocaleTimeString();
             const formattedDate = now.toLocaleDateString();
 
-            await snapshotManager.takeSnapshot(
+            const outcome = await snapshotManager.takeSnapshot(
               `Auto snapshot at ${formattedTime}`,
               {
                 tags: ['auto', 'timed', 'scheduled'],
@@ -302,7 +290,11 @@ export async function activate(context: vscode.ExtensionContext) {
               },
             );
 
-            log('Time-based auto-snapshot completed successfully');
+            if (outcome.created) {
+              log('Time-based auto-snapshot completed successfully');
+            } else {
+              log('Time-based auto-snapshot skipped: no changes detected');
+            }
           } catch (error: unknown) {
             const errMsg =
               error instanceof Error ? error.message : String(error);
@@ -444,10 +436,16 @@ function setupGitCommandInterception(
             try {
               // Take snapshot silently with a descriptive message
               const description = `Auto-snapshot before ${commandId}`;
-              await snapshotManager.takeSnapshot(description, {
+              const outcome = await snapshotManager.takeSnapshot(description, {
                 tags: ['auto', 'git', commandId],
-              }); // Mark as auto for skip logic
-              log(`Auto-snapshot taken successfully before ${commandId}.`);
+              });
+              if (outcome.created) {
+                log(`Auto-snapshot taken successfully before ${commandId}.`);
+              } else {
+                log(
+                  `No snapshot taken before ${commandId}: nothing changed since the last snapshot.`,
+                );
+              }
             } catch (error: unknown) {
               const errMsg =
                 error instanceof Error ? error.message : String(error);

@@ -40,6 +40,22 @@ export class SnapshotCommands {
 
     try {
       const result = await this.client.callApi('takeSnapshot', opts);
+
+      // The extension refuses to record a snapshot when the workspace is
+      // unchanged, and reports that as a failed response with no snapshot.
+      // Printing "created successfully" with an undefined summary is how a
+      // no-op came to look like a success.
+      if (result?.success === false) {
+        printResult(
+          {
+            success: false,
+            error: result.error ?? 'No snapshot was created',
+          },
+          options,
+        );
+        return;
+      }
+
       printResult(
         {
           success: true,

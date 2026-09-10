@@ -11,6 +11,7 @@ import {
 export interface SnapshotIndex {
   snapshots: Array<{ id: string; timestamp: number; description: string }>;
   currentIndex: number;
+  activeSnapshotId?: string | null;
 }
 
 function validateSnapshotFileEntry(value: unknown, fieldName: string): void {
@@ -124,4 +125,9 @@ export function validateSnapshotIndex(
   if (!Number.isInteger(value.currentIndex) || value.currentIndex < -1) {
     throw new Error('snapshotIndex.currentIndex must be an integer >= -1');
   }
+
+  // `activeSnapshotId` is deliberately not asserted. A wrong-typed value here
+  // is not worth quarantining the whole index -- and with it the entire
+  // snapshot list -- for: `SnapshotManager.loadSnapshots` only trusts a string
+  // and treats anything else as "detached", which is the safe reading.
 }
