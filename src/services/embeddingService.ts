@@ -1,11 +1,23 @@
 import { GoogleGenAI } from '@google/genai';
+import * as vscode from 'vscode';
 import { log, logVerbose } from '../logger';
 import { CredentialsManager } from './credentialsManager';
 import { CodeChunk } from './codeChunker';
 import path = require('path');
 
 export class EmbeddingService {
-  private readonly EMBEDDING_MODEL = 'gemini-embedding-exp-03-07'; // Update as needed
+  /**
+   * Model ids are read through getModelId rather than captured in a field: a
+   * hardcoded id is what made the previous experimental model's retirement
+   * (2025-10-30) unrecoverable without shipping a new version.
+   *
+   * `gemini-embedding-2` is the current GA embedding model and Google's
+   * documented replacement for `gemini-embedding-exp-03-07`; see
+   * https://ai.google.dev/gemini-api/docs/deprecations
+   */
+  private static readonly DEFAULT_MODEL = 'gemini-embedding-2';
+  private static readonly DEFAULT_DIMENSION = 3072;
+
   private readonly MAX_BATCH_SIZE = 10; // Maximum number of chunks to embed at once
   private readonly MAX_RETRY_ATTEMPTS = 3;
   private readonly MAX_INIT_ATTEMPTS = 3;
@@ -14,7 +26,6 @@ export class EmbeddingService {
   private readonly EMBEDDING_CACHE_LIMIT = 1000;
   private credentialsManager: CredentialsManager;
   private aiClient: GoogleGenAI | null = null;
-  private embeddingDimension?: number = 3072;
 
   // Caching to avoid redundant embedding generation
   private embeddingCache: Map<string, number[]> = new Map();
@@ -72,10 +83,41 @@ export class EmbeddingService {
   }
 
   /**
-   * Set desired embedding output dimension. Results will be truncated or zero-padded.
+   * Read at call time rather than cached in the constructor so a settings
+   * change takes effect without reloading the window.
    */
-  public setEmbeddingDimension(dim: number): void {
-    this.embeddingDimension = dim;
+  private config(): vscode.WorkspaceConfiguration {
+    return vscode.workspace.getConfiguration(
+      'vscode-snapshots.semanticSearch',
+    );
+  }
+
+  /**
+   * The embedding model id, from `semanticSearch.embedding.model`.
+   */
+  public getModelId(): string {
+    return this.config().get<string>(
+      'embedding.model',
+      EmbeddingService.DEFAULT_MODEL,
+    );
+  }
+
+  /**
+   * The embedding output dimension, from
+   * `semanticSearch.embedding.dimension`.
+   *
+   * A non-numeric or non-positive value falls back to the default rather than
+   * reaching the API: the vector index is dimensioned when it is created, so a
+   * rejected or mismatched vector is worse than a predictable one.
+   */
+  public getDimension(): number {
+    const configured = this.config().get<number>(
+      'embedding.dimension',
+      EmbeddingService.DEFAULT_DIMENSION,
+    );
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : EmbeddingService.DEFAULT_DIMENSION;
   }
 
   /**
@@ -97,12 +139,9 @@ export class EmbeddingService {
         const formattedContent = this.formatChunkForEmbedding(chunk);
 
         const response = await client.models.embedContent({
-          model: this.EMBEDDING_MODEL,
+          model: this.getModelId(),
           contents: [formattedContent],
-          config:
-            this.embeddingDimension != null
-              ? { outputDimensionality: this.embeddingDimension }
-              : undefined,
+          config: { outputDimensionality: this.getDimension() },
         });
 
         const embedding = response.embeddings?.[0]?.values ?? [];
@@ -186,12 +225,9 @@ export class EmbeddingService {
         const enhancedQuery = this.enhanceQueryForEmbedding(query, language);
 
         const response = await client.models.embedContent({
-          model: this.EMBEDDING_MODEL,
+          model: this.getModelId(),
           contents: [enhancedQuery],
-          config:
-            this.embeddingDimension != null
-              ? { outputDimensionality: this.embeddingDimension }
-              : undefined,
+          config: { outputDimensionality: this.getDimension() },
         });
 
         const embedding = response.embeddings?.[0]?.values ?? [];

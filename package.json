@@ -292,6 +292,16 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically index snapshots in the background"
+        },
+        "vscode-snapshots.semanticSearch.embedding.model": {
+          "type": "string",
+          "default": "gemini-embedding-2",
+          "description": "Embedding model id used for indexing and search. Google retires model ids on a published schedule; if indexing starts failing, check https://ai.google.dev/gemini-api/docs/deprecations and update this value."
+        },
+        "vscode-snapshots.semanticSearch.embedding.dimension": {
+          "type": "number",
+          "default": 3072,
+          "description": "Embedding vector dimension. Must match the dimension the vector index was created with; changing it requires clearing and rebuilding the index."
         }
       }
     },
