@@ -1,7 +1,35 @@
 import * as vscode from 'vscode';
 import { log, logVerbose } from '../logger';
 import { SemanticSearchService } from '../services/semanticSearchService';
+import { ensureWithinDirectory } from '../pathSecurity';
 import path = require('path');
+
+/**
+ * Resolves a path sent by the webview to a file inside the workspace.
+ *
+ * `filePath` arrives over the message channel, so it is untrusted: it used to
+ * flow straight into `Uri.joinPath(workspaceRoot, filePath)`, which happily
+ * escapes the workspace for a value like `../../secret`. Returns undefined and
+ * leaves the caller to report when the path is unusable.
+ */
+function resolveRequestedFile(
+  workspaceRoot: string | undefined,
+  filePath: unknown,
+): vscode.Uri | undefined {
+  if (
+    !workspaceRoot ||
+    typeof filePath !== 'string' ||
+    filePath.length === 0
+  ) {
+    return undefined;
+  }
+  try {
+    return vscode.Uri.file(ensureWithinDirectory(workspaceRoot, filePath));
+  } catch (error) {
+    log(`Rejected webview file request outside the workspace: ${filePath}`);
+    return undefined;
+  }
+}
 
 export class SemanticSearchWebview {
   private panel: vscode.WebviewPanel | undefined;
@@ -32,16 +60,19 @@ export class SemanticSearchWebview {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
+        // `media/` does not exist in this extension; the only shipped image is
+        // images/snapshot.png. Pointing at a missing directory meant the icon
+        // never rendered and the resource root permitted nothing.
         localResourceRoots: [
-          vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+          vscode.Uri.joinPath(this.context.extensionUri, 'images'),
         ],
       },
     );
 
     this.panel.iconPath = vscode.Uri.joinPath(
       this.context.extensionUri,
-      'media',
-      'icon.png',
+      'images',
+      'snapshot.png',
     );
 
     this.panel.webview.html = this.getWebviewContent(this.panel.webview);
@@ -119,11 +150,21 @@ export class SemanticSearchWebview {
             break;
 
           case 'openFile':
-            this.openFile(message.filePath, message.snapshotId, message.line);
+            // Awaited so the handler's promise settles only once the work is
+            // done. Fire-and-forget meant a refusal posted after the call
+            // could not be observed, and errors had nowhere to surface.
+            await this.openFile(
+              message.filePath,
+              message.snapshotId,
+              message.line,
+            );
             break;
 
           case 'compareWithCurrent':
-            this.compareFileWithCurrent(message.filePath, message.snapshotId);
+            await this.compareFileWithCurrent(
+              message.filePath,
+              message.snapshotId,
+            );
             break;
         }
       },
@@ -135,8 +176,25 @@ export class SemanticSearchWebview {
   /**
    * Opens a file from search results
    */
-  private async openFile(filePath: string, snapshotId: string, line: number) {
+  private async openFile(
+    filePath: unknown,
+    snapshotId: string,
+    line: unknown,
+  ) {
     try {
+      const fileUri = resolveRequestedFile(
+        this.searchService.getWorkspaceRoot(),
+        filePath,
+      );
+      if (!fileUri) {
+        this.panel?.webview.postMessage({
+          command: 'error',
+          message:
+            'That file is outside the current workspace, so it cannot be opened.',
+        });
+        return;
+      }
+
       const jumpToSnapshot = await vscode.window.showQuickPick(
         [
           {
@@ -165,28 +223,7 @@ export class SemanticSearchWebview {
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
 
-      // Get workspace root
-      const workspaceRoot = this.searchService.getWorkspaceRoot();
-      if (!workspaceRoot) {
-        throw new Error('No workspace folder open');
-      }
-
-      // Open the file
-      const fileUri = vscode.Uri.joinPath(
-        vscode.Uri.file(workspaceRoot),
-        filePath,
-      );
-      const document = await vscode.workspace.openTextDocument(fileUri);
-      const editor = await vscode.window.showTextDocument(document);
-
-      // Move to the specified line (ensure line is within bounds)
-      const validLine = Math.max(0, Math.min(line, document.lineCount - 1));
-      const position = new vscode.Position(validLine, 0);
-      editor.selection = new vscode.Selection(position, position);
-      editor.revealRange(
-        new vscode.Range(position, position),
-        vscode.TextEditorRevealType.InCenter,
-      );
+      await this.openFileAtLine(fileUri, line);
     } catch (error: unknown) {
       const errorMessageText =
         error instanceof Error ? error.message : String(error);
@@ -198,10 +235,51 @@ export class SemanticSearchWebview {
   }
 
   /**
+   * Opens a resolved file and reveals a clamped line.
+   *
+   * The webview sends `parseInt(undefined, 10)` when `data-line` is absent,
+   * which is NaN. `Math.max(0, Math.min(NaN, n))` is NaN, and
+   * `new vscode.Position(NaN, 0)` throws, so the clamp alone is not enough.
+   */
+  private async openFileAtLine(
+    fileUri: vscode.Uri,
+    line: unknown,
+  ): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    const parsed = Number(line);
+    const safeLine = Number.isFinite(parsed)
+      ? Math.max(0, Math.min(parsed, document.lineCount - 1))
+      : 0;
+    const editor = await vscode.window.showTextDocument(document);
+    const position = new vscode.Position(safeLine, 0);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(
+      new vscode.Range(position, position),
+      vscode.TextEditorRevealType.InCenter,
+    );
+  }
+
+  /**
    * Compares a file in a snapshot with the current version
    */
-  private async compareFileWithCurrent(filePath: string, snapshotId: string) {
+  private async compareFileWithCurrent(filePath: unknown, snapshotId: string) {
     try {
+      // Validate before use: this path is forwarded to
+      // compareFileWithWorkspace, which joins it onto the workspace root with
+      // no containment check of its own.
+      const validated = resolveRequestedFile(
+        this.searchService.getWorkspaceRoot(),
+        filePath,
+      );
+      if (!validated) {
+        this.panel?.webview.postMessage({
+          command: 'error',
+          message:
+            'That file is outside the current workspace, so it cannot be compared.',
+        });
+        return;
+      }
+
       // Find the snapshot to get the timestamp
       const snapshot = this.searchService.getSnapshotById(snapshotId);
       if (!snapshot) {
@@ -216,7 +294,7 @@ export class SemanticSearchWebview {
       }
 
       // Use the provided filePath as the relative path within the workspace
-      const relativePath = filePath;
+      const relativePath = filePath as string;
 
       // Create arguments for the compare command
       const args = {
@@ -224,7 +302,7 @@ export class SemanticSearchWebview {
         relativePath,
         contextValue: 'snapshotFile',
         snapshotTimestamp: snapshot.timestamp,
-        label: path.basename(filePath),
+        label: path.basename(relativePath),
       };
 
       // Execute the existing compare command

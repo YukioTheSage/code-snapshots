@@ -9,6 +9,54 @@ import { pathMatchesPattern } from '../utils';
 // --- Helper Functions for Grouping ---
 
 /**
+ * Builds a tree item label.
+ *
+ * `TreeItemLabel` carries no `supportThemeIcons` flag, so `$(name)` sequences
+ * are rendered as literal text in labels and descriptions -- the user saw
+ * "$(star-full) 16:04:22". Icons belong in `TreeItem.iconPath`, which is
+ * already set for every item here (star-full for favorites, filter for
+ * selective), so `favorite` is accepted but deliberately not rendered.
+ */
+export function formatTreeLabel(parts: {
+  favorite?: boolean;
+  selective?: boolean;
+  time: string;
+}): string {
+  let label = parts.time;
+  if (parts.selective) {
+    label += ' (Selective)';
+  }
+  return label;
+}
+
+const CHANGE_TYPE_SUFFIX: Record<string, string> = {
+  added: 'A',
+  modified: 'M',
+  deleted: 'D',
+};
+
+/**
+ * Builds a tree item description.
+ *
+ * Same constraint as `formatTreeLabel`: no codicon rendering here either. The
+ * change type is spelled with a letter rather than `$(diff-modified)`, and the
+ * matching ThemeIcon is still set on the item.
+ */
+export function formatTreeDescription(parts: {
+  directory: string;
+  changeType?: string;
+}): string {
+  const suffix = parts.changeType
+    ? CHANGE_TYPE_SUFFIX[parts.changeType]
+    : undefined;
+  const directory = parts.directory === '.' ? '' : parts.directory;
+  if (!suffix) {
+    return directory;
+  }
+  return directory ? `${directory}  ${suffix}` : suffix;
+}
+
+/**
  * Determines the relative date group (Today, Yesterday, etc.) for a timestamp.
  * @param timestamp The timestamp to group.
  * @returns The name of the date group.
@@ -698,19 +746,28 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       // Set icon and description based on the calculated changeType
       switch (changeType) {
         case 'added':
-          description = `${dirDisplay} $(diff-added)`; // Use standard icons
+          description = formatTreeDescription({
+            directory: dirDisplay,
+            changeType,
+          });
           iconPath = new vscode.ThemeIcon('diff-added');
           break;
         case 'modified':
-          description = `${dirDisplay} $(diff-modified)`;
+          description = formatTreeDescription({
+            directory: dirDisplay,
+            changeType,
+          });
           iconPath = new vscode.ThemeIcon('diff-modified');
           break;
         case 'deleted':
-          description = `${dirDisplay} $(diff-removed)`;
+          description = formatTreeDescription({
+            directory: dirDisplay,
+            changeType,
+          });
           iconPath = new vscode.ThemeIcon('diff-removed');
           break;
         default: // Undefined changeType means unchanged relative to previous
-          description = dirDisplay;
+          description = formatTreeDescription({ directory: dirDisplay });
           iconPath = vscode.ThemeIcon.File;
       }
 
@@ -801,11 +858,14 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       contextValue = 'snapshotItem';
       id = snapshot.id; // Use snapshot ID as the tree item ID
 
-      // Build label with favorite and selective indicators
-      let labelPrefix = '';
-      if (snapshot.isFavorite) labelPrefix += '$(star-full) ';
-      label = `${labelPrefix}${formattedTime}`;
-      if (snapshot.isSelective) label += ' (Selective)';
+      // Build label with the selective indicator as text; the favorite and
+      // current markers are icons (see the icon logic below), so repeating
+      // them as $(name) here would only render as literal text.
+      label = formatTreeLabel({
+        favorite: snapshot.isFavorite,
+        selective: snapshot.isSelective,
+        time: formattedTime,
+      });
 
       // Build description string with various context pieces
       const descParts: string[] = [];
@@ -815,19 +875,22 @@ export class SnapshotTreeItem extends vscode.TreeItem {
         baseDescription = `[${snapshot.taskReference}] ${baseDescription}`;
       descParts.push(baseDescription);
       if (snapshot.tags && snapshot.tags.length > 0) {
-        descParts.push(`$(tag) ${snapshot.tags.length}`); // Show tag count
+        descParts.push(
+          `${snapshot.tags.length} tag${snapshot.tags.length === 1 ? '' : 's'}`,
+        );
       }
       if (snapshot.gitBranch) {
-        descParts.push(`$(git-branch) ${snapshot.gitBranch}`);
+        descParts.push(`on ${snapshot.gitBranch}`);
       }
       // Detection is worthless if it stays in the log: mark snapshots whose
       // history is incomplete so the state is visible before a restore is
-      // attempted, not discovered afterwards.
+      // attempted, not discovered afterwards. Plain text, because a description
+      // renders $(warning) literally.
       const unrecoverable = snapshotManager.getUnrecoverableFilesFor(
         snapshot.id,
       );
       if (unrecoverable.length > 0) {
-        descParts.push(`$(warning) ${unrecoverable.length} unreadable`);
+        descParts.push(`${unrecoverable.length} unreadable`);
       }
       // Join parts with a separator for readability
       description = descParts.join('  |  ');
