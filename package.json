@@ -33,6 +33,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:vscode-snapshots.getApi"
   ],
   "contributes": {

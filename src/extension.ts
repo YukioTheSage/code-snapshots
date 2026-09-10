@@ -348,11 +348,17 @@ export async function activate(context: vscode.ExtensionContext) {
     WelcomeView.showWelcomeExperience(context);
 
     // Add keyboard shortcut hints to status bar for better discoverability
+    //
+    // Gated on `ux.showKeyboardShortcutHints` as well as the one-time flag: the
+    // setting was previously ignored, so turning it off had no effect.
+    const shortcutHintsEnabled = vscode.workspace
+      .getConfiguration('vscode-snapshots')
+      .get<boolean>('ux.showKeyboardShortcutHints', true);
     const takingSnapshotHintShown = context.globalState.get<boolean>(
       'codeSnapshots.takingSnapshotHintShown',
       false,
     );
-    if (!takingSnapshotHintShown) {
+    if (shortcutHintsEnabled && !takingSnapshotHintShown) {
       // Show keyboard shortcut hint after a short delay
       setTimeout(() => {
         vscode.window
