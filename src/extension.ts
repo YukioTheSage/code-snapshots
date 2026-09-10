@@ -419,43 +419,33 @@ function setupGitCommandInterception(
 
         if (autoSnapshotEnabled) {
           log(`Intercepted Git command: ${commandId}.`);
-          const lastIdx = snapshotManager.getCurrentSnapshotIndex();
-          let shouldSnapshot = true;
-          if (lastIdx >= 0) {
-            const lastSnapshot = snapshotManager.getSnapshots()[lastIdx];
-            const { added, modified, deleted } =
-              snapshotManager.getSnapshotChangeSummary(lastSnapshot.id);
-            if (added + modified + deleted === 0) {
-              shouldSnapshot = false;
+
+          // The change check that used to live here asked the wrong question:
+          // it read `getSnapshotChangeSummary(active.id)`, which describes what
+          // changed when that snapshot was *taken*, not whether anything has
+          // changed since. It could therefore skip a snapshot that was needed,
+          // and it could disagree with the manager's own check. The manager
+          // decides, and reports which it did.
+          try {
+            // Take snapshot silently with a descriptive message
+            const description = `Auto-snapshot before ${commandId}`;
+            const outcome = await snapshotManager.takeSnapshot(description, {
+              tags: ['auto', 'git', commandId],
+            });
+            if (outcome.created) {
+              log(`Auto-snapshot taken successfully before ${commandId}.`);
+            } else {
               log(
-                'Skipping git-based auto snapshot: no changes detected since last snapshot',
+                `No snapshot taken before ${commandId}: nothing changed since the last snapshot.`,
               );
             }
-          }
-          if (shouldSnapshot) {
-            try {
-              // Take snapshot silently with a descriptive message
-              const description = `Auto-snapshot before ${commandId}`;
-              const outcome = await snapshotManager.takeSnapshot(description, {
-                tags: ['auto', 'git', commandId],
-              });
-              if (outcome.created) {
-                log(`Auto-snapshot taken successfully before ${commandId}.`);
-              } else {
-                log(
-                  `No snapshot taken before ${commandId}: nothing changed since the last snapshot.`,
-                );
-              }
-            } catch (error: unknown) {
-              const errMsg =
-                error instanceof Error ? error.message : String(error);
-              log(
-                `Failed to take auto-snapshot before ${commandId}: ${errMsg}`,
-              );
-              vscode.window.showWarningMessage(
-                `Failed to take automatic snapshot before ${commandId}. Proceeding with Git operation.`,
-              );
-            }
+          } catch (error: unknown) {
+            const errMsg =
+              error instanceof Error ? error.message : String(error);
+            log(`Failed to take auto-snapshot before ${commandId}: ${errMsg}`);
+            vscode.window.showWarningMessage(
+              `Failed to take automatic snapshot before ${commandId}. Proceeding with Git operation.`,
+            );
           }
         } else {
           log(
