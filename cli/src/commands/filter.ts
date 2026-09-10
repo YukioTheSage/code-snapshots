@@ -1,6 +1,8 @@
 import chalk from 'chalk';
 import { UnifiedClient } from '../unifiedClient';
 import type { BaseCommandOptions, PaginationOptions } from '../types/options';
+import { printResult } from './output';
+import { setFailure } from '../exitState';
 
 /** Raw snapshot data returned from the API */
 interface SnapshotRecord {
@@ -105,13 +107,14 @@ export class FilterCommands {
       const result = await this.client.callApi('filterSnapshots', filterOpts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshots: result.snapshots || [],
             totalCount: result.totalCount || 0,
             filteredCount: result.snapshots?.length || 0,
-          }),
+          },
+          options,
         );
       } else {
         const snapshots = result.snapshots || [];
@@ -152,8 +155,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to get favorite snapshots:'),
           errorMessage,
@@ -174,14 +178,15 @@ export class FilterCommands {
       const result = await this.client.callApi('filterSnapshots', filterOpts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             filterTags: tagList,
             snapshots: result.snapshots || [],
             totalCount: result.totalCount || 0,
             filteredCount: result.snapshots?.length || 0,
-          }),
+          },
+          options,
         );
       } else {
         const snapshots = result.snapshots || [];
@@ -226,8 +231,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to filter snapshots by tags:'),
           errorMessage,
@@ -259,14 +265,15 @@ export class FilterCommands {
       const result = await this.client.callApi('filterSnapshots', filterOpts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             dateRange: { from: fromDate, to: toDate },
             snapshots: result.snapshots || [],
             totalCount: result.totalCount || 0,
             filteredCount: result.snapshots?.length || 0,
-          }),
+          },
+          options,
         );
       } else {
         const snapshots = result.snapshots || [];
@@ -311,8 +318,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to filter snapshots by date:'),
           errorMessage,
@@ -332,14 +340,15 @@ export class FilterCommands {
       const result = await this.client.callApi('filterSnapshots', filterOpts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             filePath,
             snapshots: result.snapshots || [],
             totalCount: result.totalCount || 0,
             filteredCount: result.snapshots?.length || 0,
-          }),
+          },
+          options,
         );
       } else {
         const snapshots = result.snapshots || [];
@@ -382,8 +391,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to filter snapshots by file:'),
           errorMessage,
@@ -402,15 +412,16 @@ export class FilterCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             isFavorite: result.isFavorite,
             message: `Snapshot ${
               result.isFavorite ? 'added to' : 'removed from'
             } favorites`,
-          }),
+          },
+          options,
         );
       } else {
         const status = result.isFavorite
@@ -423,8 +434,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to toggle favorite status:'),
           errorMessage,
@@ -447,13 +459,14 @@ export class FilterCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             tags: result.tags || [],
             message: 'Snapshot tags updated successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ Snapshot tags updated successfully'));
@@ -470,8 +483,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to edit snapshot tags:'),
           errorMessage,
@@ -492,13 +506,14 @@ export class FilterCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             notes: result.notes || '',
             message: 'Snapshot notes updated successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ Snapshot notes updated successfully'));
@@ -509,8 +524,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to edit snapshot notes:'),
           errorMessage,
@@ -531,13 +547,14 @@ export class FilterCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             taskReference: result.taskReference || '',
             message: 'Snapshot task reference updated successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(
@@ -554,8 +571,9 @@ export class FilterCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to edit task reference:'),
           errorMessage,

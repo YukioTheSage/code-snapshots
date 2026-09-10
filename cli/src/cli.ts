@@ -7,6 +7,8 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { UnifiedClient as CodeLapseClient } from './unifiedClient';
 import { inheritGlobalOptions, parseTimeout } from './globalOptions';
+import { getFailure, setFailure } from './exitState';
+import { printResult } from './commands/output';
 import { SnapshotCommands } from './commands/snapshot';
 import { SearchCommands } from './commands/search';
 import { WorkspaceCommands } from './commands/workspace';
@@ -195,7 +197,7 @@ export function buildProgram(): Command {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         if (globalOpts.json) {
-          console.log(JSON.stringify({ success: false, error: errorMessage }));
+          printResult({ success: false, error: errorMessage }, globalOpts);
         } else {
           console.error(chalk.red('✗ Failed to connect:'), errorMessage);
           console.log('\nTroubleshooting:');
@@ -204,8 +206,10 @@ export function buildProgram(): Command {
             '2. Make sure the CodeLapse extension is installed and enabled',
           );
           console.log('3. Open a workspace folder in VSCode');
+          // Record the failure without exiting here: the post-action hook
+          // chooses the code, so the client still disconnects and stdio flushes.
+          setFailure();
         }
-        process.exit(1);
       }
     });
 
@@ -1124,11 +1128,20 @@ export function buildProgram(): Command {
     // The 'watch' command is long-running and should not cause an exit.
     if (commandName !== 'watch') {
       await clientInstance?.disconnect();
-      // Force exit if the process hasn't terminated after a short delay
-      const exitTimeout = setTimeout(() => {
-        process.exit(0);
-      }, 500); // 500ms delay
-      exitTimeout.unref(); // Allow the process to exit if it finishes before the timeout
+
+      // `process.exitCode` rather than a forced `process.exit`, so the process
+      // exits on its own with the right status and stdio flushes first.
+      //
+      // The previous implementation scheduled `process.exit(0)` on an *unref'd*
+      // timer. That never ran: unref'd timers do not hold the event loop open,
+      // so the loop drained and the process exited naturally with the default
+      // code 0 -- which is why reading the failure flag alone was not enough.
+      process.exitCode = getFailure() ? 1 : 0;
+
+      // Safety net. If a stray handle keeps the loop alive the process would
+      // otherwise hang a CI job, so force the same code after a delay. This one
+      // is deliberately *not* unref'd, so it actually fires.
+      setTimeout(() => process.exit(getFailure() ? 1 : 0), 500);
     }
   });
 

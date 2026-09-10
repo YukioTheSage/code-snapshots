@@ -5,6 +5,8 @@ import type {
   BaseCommandOptions,
   UpdateRuleOptions,
 } from '../types/options';
+import { printResult } from './output';
+import { setFailure } from '../exitState';
 
 export interface AutoSnapshotRule {
   id?: string;
@@ -23,12 +25,13 @@ export class RulesCommands {
       const result = await this.client.callApi('getAutoSnapshotRules', {});
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             rules: result.rules || [],
             totalRules: result.rules?.length || 0,
-          }),
+          },
+          options,
         );
       } else {
         const rules = result.rules || [];
@@ -68,8 +71,9 @@ export class RulesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to list auto-snapshot rules:'),
           errorMessage,
@@ -96,8 +100,9 @@ export class RulesCommands {
     if (isNaN(rule.intervalMinutes) || rule.intervalMinutes < 1) {
       const errorMessage = 'Invalid interval. Must be a number greater than 0.';
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ ' + errorMessage));
       }
       return;
@@ -107,12 +112,13 @@ export class RulesCommands {
       const result = await this.client.callApi('addAutoSnapshotRule', { rule });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             rule: result.rule,
             message: 'Auto-snapshot rule added successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ Auto-snapshot rule added successfully'));
@@ -128,8 +134,9 @@ export class RulesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to add auto-snapshot rule:'),
           errorMessage,
@@ -160,8 +167,9 @@ export class RulesCommands {
     ) {
       const errorMessage = 'Invalid interval. Must be a number greater than 0.';
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ ' + errorMessage));
       }
       return;
@@ -174,12 +182,13 @@ export class RulesCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             rule: result.rule,
             message: 'Auto-snapshot rule updated successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ Auto-snapshot rule updated successfully'));
@@ -196,8 +205,9 @@ export class RulesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to update auto-snapshot rule:'),
           errorMessage,
@@ -213,12 +223,13 @@ export class RulesCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             ruleId,
             message: 'Auto-snapshot rule removed successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ Auto-snapshot rule removed successfully'));
@@ -227,8 +238,9 @@ export class RulesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to remove auto-snapshot rule:'),
           errorMessage,
@@ -244,15 +256,16 @@ export class RulesCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             ruleId,
             enabled: result.rule.enabled,
             message: `Auto-snapshot rule ${
               result.rule.enabled ? 'enabled' : 'disabled'
             }`,
-          }),
+          },
+          options,
         );
       } else {
         const status = result.rule.enabled
@@ -265,8 +278,9 @@ export class RulesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to toggle auto-snapshot rule:'),
           errorMessage,
@@ -288,13 +302,14 @@ export class RulesCommands {
       const result = await this.client.callApi('testAutoSnapshotRule', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             pattern,
             matches: result.matches || [],
             totalMatches: result.matches?.length || 0,
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.blue(`Testing pattern: ${chalk.yellow(pattern)}`));
@@ -315,8 +330,9 @@ export class RulesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to test auto-snapshot rule:'),
           errorMessage,

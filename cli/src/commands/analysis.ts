@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
 
 export class AnalysisCommands {
   constructor(private client: UnifiedClient) {}
@@ -16,8 +17,8 @@ export class AnalysisCommands {
 
     try {
       const result = await this.client.callApi('analyzeChunk', analysisOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           chunkId,
           analysis: result,
@@ -28,11 +29,12 @@ export class AnalysisCommands {
             relationshipCount: result.analysis?.relationships?.length || 0,
             securityConcerns: result.analysis?.securityConcerns?.length || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -40,19 +42,21 @@ export class AnalysisCommands {
             'Check snapshot availability',
             'Validate analysis type',
           ],
-        }),
+        },
+        options,
       );
     }
   }
 
   async file(filePath: string, options: any): Promise<void> {
     if (!options.snapshot) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: 'Snapshot ID is required for file analysis',
           suggestions: ['Use --snapshot <id> to specify snapshot'],
-        }),
+        },
+        options,
       );
       return;
     }
@@ -68,8 +72,8 @@ export class AnalysisCommands {
 
     try {
       const result = await this.client.callApi('analyzeFile', analysisOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           filePath,
           snapshotId: options.snapshot,
@@ -81,11 +85,12 @@ export class AnalysisCommands {
             securityConcerns: result.fileMetrics?.securityConcerns?.length || 0,
             designPatterns: result.fileMetrics?.designPatterns?.length || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -93,19 +98,21 @@ export class AnalysisCommands {
             'Check snapshot availability',
             'Validate analysis options',
           ],
-        }),
+        },
+        options,
       );
     }
   }
 
   async quality(target: string, options: any): Promise<void> {
     if (!options.snapshot) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: 'Snapshot ID is required for quality analysis',
           suggestions: ['Use --snapshot <id> to specify snapshot'],
-        }),
+        },
+        options,
       );
       return;
     }
@@ -123,8 +130,8 @@ export class AnalysisCommands {
 
     try {
       const result = await this.client.callApi('analyzeQuality', analysisOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           target,
           snapshotId: options.snapshot,
@@ -138,11 +145,12 @@ export class AnalysisCommands {
             recommendations:
               result.qualityAnalysis?.recommendations?.length || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -150,7 +158,8 @@ export class AnalysisCommands {
             'Check snapshot availability',
             'Validate quality metrics',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -171,8 +180,8 @@ export class AnalysisCommands {
         'getChunkDependencies',
         analysisOpts,
       );
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           chunkId,
           relationships: result,
@@ -183,11 +192,12 @@ export class AnalysisCommands {
             dependents: result.dependents?.length || 0,
             strongestRelationship: this.findStrongestRelationship(result),
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -195,7 +205,8 @@ export class AnalysisCommands {
             'Check relationship parameters',
             'Validate depth setting',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -222,8 +233,8 @@ export class AnalysisCommands {
       };
 
       const results = await this.client.callApi('batchAnalyze', batchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           batchResults: results,
           summary: {
@@ -232,11 +243,12 @@ export class AnalysisCommands {
             failedOperations: results.failedOperations || 0,
             processingTime: results.metadata?.processingTime || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -244,7 +256,8 @@ export class AnalysisCommands {
             'Verify file path',
             'Validate operation objects',
           ],
-        }),
+        },
+        options,
       );
     }
   }

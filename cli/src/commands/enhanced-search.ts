@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
 
 export class EnhancedSearchCommands {
   constructor(private client: UnifiedClient) {}
@@ -28,26 +29,28 @@ export class EnhancedSearchCommands {
 
     try {
       const results = await this.client.callApi('enhancedSearch', searchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           query,
           results,
           metadata: results.metadata || {},
           suggestions: results.suggestions || [],
           relatedQueries: results.relatedQueries || [],
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
             'Check semantic search service availability',
             'Verify query parameters',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -71,8 +74,8 @@ export class EnhancedSearchCommands {
 
     try {
       const results = await this.client.callApi('enhancedSearch', searchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           description,
           searchMode: 'behavioral',
@@ -88,18 +91,20 @@ export class EnhancedSearchCommands {
                 (r: any) => r.explanation?.confidenceFactors,
               ) || [],
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
             'Refine behavior description',
             'Check available snapshots',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -124,8 +129,8 @@ export class EnhancedSearchCommands {
 
     try {
       const results = await this.client.callApi('enhancedSearch', searchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           patternType,
           searchMode: 'pattern',
@@ -142,18 +147,20 @@ export class EnhancedSearchCommands {
                 (r: any) => r.qualityMetrics?.overallScore,
               ) || [],
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
             'Check pattern type spelling',
             'Try common patterns like Factory, Observer, Strategy',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -185,8 +192,8 @@ export class EnhancedSearchCommands {
       };
 
       const results = await this.client.callApi('batchSearch', batchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           batchResults: results,
           summary: {
@@ -194,11 +201,12 @@ export class EnhancedSearchCommands {
             successfulQueries: results.successfulQueries || 0,
             failedQueries: results.failedQueries || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -206,7 +214,8 @@ export class EnhancedSearchCommands {
             'Verify file path',
             'Validate query objects',
           ],
-        }),
+        },
+        options,
       );
     }
   }

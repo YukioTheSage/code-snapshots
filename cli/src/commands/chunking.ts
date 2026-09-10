@@ -1,17 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
 
 export class ChunkingCommands {
   constructor(private client: UnifiedClient) {}
 
   async file(filePath: string, options: any): Promise<void> {
     if (!options.snapshot) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: 'Snapshot ID is required for file chunking',
           suggestions: ['Use --snapshot <id> to specify snapshot'],
-        }),
+        },
+        options,
       );
       return;
     }
@@ -34,8 +36,8 @@ export class ChunkingCommands {
         'enhancedChunkFile',
         chunkingOpts,
       );
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           filePath,
           snapshotId: options.snapshot,
@@ -43,11 +45,12 @@ export class ChunkingCommands {
           chunks: result.chunks,
           summary: result.summary,
           metadata: result.metadata,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -55,7 +58,8 @@ export class ChunkingCommands {
             'Check snapshot availability',
             'Validate chunking strategy',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -80,19 +84,20 @@ export class ChunkingCommands {
 
     try {
       const result = await this.client.callApi('chunkSnapshot', chunkingOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           snapshotId,
           strategy: options.strategy || 'semantic',
           results: result.results,
           summary: result.summary,
           metadata: result.metadata,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -100,7 +105,8 @@ export class ChunkingCommands {
             'Check file patterns',
             'Validate chunking strategy',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -132,19 +138,20 @@ export class ChunkingCommands {
 
     try {
       const result = await this.client.callApi('listChunks', listOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           snapshotId,
           chunks: result.chunks,
           pagination: result.pagination,
           filters: listOpts.filters,
           metadata: result.metadata,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -152,7 +159,8 @@ export class ChunkingCommands {
             'Check filter parameters',
             'Validate pagination settings',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -171,23 +179,25 @@ export class ChunkingCommands {
         'getChunkMetadata',
         metadataOpts,
       );
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           chunkId,
           metadata: result.metadata,
           relationships: result.relationships,
           qualityMetrics: result.qualityMetrics,
           responseMetadata: result.responseMetadata,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: ['Verify chunk ID exists', 'Check metadata options'],
-        }),
+        },
+        options,
       );
     }
   }
@@ -203,24 +213,26 @@ export class ChunkingCommands {
 
     try {
       const result = await this.client.callApi('getChunkContext', contextOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           chunkId,
           context: result.context,
           metadata: result.metadata,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
             'Verify chunk ID exists',
             'Check context radius parameter',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -241,8 +253,8 @@ export class ChunkingCommands {
         'getChunkDependencies',
         dependencyOpts,
       );
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           chunkId,
           dependencies: result.dependencies,
@@ -254,11 +266,12 @@ export class ChunkingCommands {
               result.dependencies?.transitive?.length || 0,
             totalDependents: result.dependents?.length || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -266,7 +279,8 @@ export class ChunkingCommands {
             'Check dependency parameters',
             'Validate depth setting',
           ],
-        }),
+        },
+        options,
       );
     }
   }

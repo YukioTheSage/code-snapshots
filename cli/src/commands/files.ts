@@ -6,6 +6,8 @@ import type {
   CompareFileOptions,
   BaseCommandOptions,
 } from '../types/options';
+import { printResult } from './output';
+import { setFailure } from '../exitState';
 
 interface DiffEntry {
   type: 'header' | 'context' | 'delete' | 'insert';
@@ -46,14 +48,15 @@ export class FilesCommands {
       const result = await this.client.callApi('listSnapshotFiles', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             files: result.files || [],
             totalFiles: result.totalFiles || 0,
             changedFiles: result.changedFiles || 0,
-          }),
+          },
+          options,
         );
       } else {
         const files = result.files || [];
@@ -110,8 +113,9 @@ export class FilesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to list snapshot files:'),
           errorMessage,
@@ -148,14 +152,15 @@ export class FilesCommands {
       const result = await this.client.callApi('getSnapshotFile', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             filePath,
             file: result.file || {},
             content: result.content || '',
-          }),
+          },
+          options,
         );
       } else {
         const file = result.file;
@@ -198,8 +203,9 @@ export class FilesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to show file:'), errorMessage);
       }
     }
@@ -227,15 +233,16 @@ export class FilesCommands {
       const result = await this.client.callApi('compareSnapshotFile', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId1,
             snapshotId2,
             filePath,
             differences: result.differences || [],
             summary: result.summary || {},
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.blue(`Comparing ${chalk.cyan(filePath)}`));
@@ -282,8 +289,9 @@ export class FilesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to compare files:'), errorMessage);
       }
     }
@@ -309,15 +317,16 @@ export class FilesCommands {
       const result = await this.client.callApi('restoreSnapshotFile', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             filePath,
             targetPath: opts.targetPath,
             backupPath: result.backupPath,
             message: 'File restored successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ File restored successfully'));
@@ -333,8 +342,9 @@ export class FilesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to restore file:'), errorMessage);
       }
     }
@@ -363,13 +373,14 @@ export class FilesCommands {
       const result = await this.client.callApi('getFileHistory', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             filePath,
             history: result.history || [],
             totalVersions: result.totalVersions || 0,
-          }),
+          },
+          options,
         );
       } else {
         const history = result.history || [];
@@ -445,8 +456,9 @@ export class FilesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to get file history:'), errorMessage);
       }
     }
@@ -472,15 +484,16 @@ export class FilesCommands {
       const result = await this.client.callApi('exportSnapshotFile', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             filePath,
             outputPath: result.outputPath,
             format: opts.format,
             message: 'File exported successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ File exported successfully'));
@@ -494,8 +507,9 @@ export class FilesCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to export file:'), errorMessage);
       }
     }

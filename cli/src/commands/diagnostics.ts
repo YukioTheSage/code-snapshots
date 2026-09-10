@@ -1,5 +1,7 @@
 import chalk from 'chalk';
 import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
+import { setFailure } from '../exitState';
 
 export interface DiagnosticResult {
   category: string;
@@ -111,13 +113,14 @@ export class DiagnosticsCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             diagnostics: result.diagnostics || [],
             systemInfo: result.systemInfo || {},
             summary: result.summary || {},
-          }),
+          },
+          options,
         );
       } else {
         this.displayDiagnostics(
@@ -130,8 +133,9 @@ export class DiagnosticsCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to run diagnostics:'), errorMessage);
       }
     }
@@ -142,11 +146,12 @@ export class DiagnosticsCommands {
       const result = await this.client.callApi('getSystemInfo', {});
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             systemInfo: result.systemInfo || {},
-          }),
+          },
+          options,
         );
       } else {
         this.displaySystemInfo(result.systemInfo);
@@ -155,8 +160,9 @@ export class DiagnosticsCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to get system information:'),
           errorMessage,
@@ -190,12 +196,13 @@ export class DiagnosticsCommands {
         const result = await this.client.callApi('getLogs', opts);
 
         if (options.json) {
-          console.log(
-            JSON.stringify({
+          printResult(
+            {
               success: true,
               logs: result.logs || [],
               totalEntries: result.totalEntries || 0,
-            }),
+            },
+            options,
           );
         } else {
           const logs = result.logs || [];
@@ -217,8 +224,9 @@ export class DiagnosticsCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to get logs:'), errorMessage);
       }
     }
@@ -234,12 +242,13 @@ export class DiagnosticsCommands {
       const result = await this.client.callApi('clearLogs', opts);
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             clearedEntries: result.clearedEntries || 0,
             message: 'Logs cleared successfully',
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ Logs cleared successfully'));
@@ -249,8 +258,9 @@ export class DiagnosticsCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to clear logs:'), errorMessage);
       }
     }
@@ -265,13 +275,14 @@ export class DiagnosticsCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             health: result.health || {},
             score: result.score || 0,
             issues: result.issues || [],
-          }),
+          },
+          options,
         );
       } else {
         this.displayHealth(result.health, result.score, result.issues);
@@ -280,8 +291,9 @@ export class DiagnosticsCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to run health check:'), errorMessage);
       }
     }
@@ -295,12 +307,13 @@ export class DiagnosticsCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             metrics: result.metrics || {},
             history: result.history || [],
-          }),
+          },
+          options,
         );
       } else {
         this.displayPerformanceMetrics(result.metrics, result.history);
@@ -309,8 +322,9 @@ export class DiagnosticsCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to get performance metrics:'),
           errorMessage,

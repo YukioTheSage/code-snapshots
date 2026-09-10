@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
 
 export class WorkspaceCommands {
   constructor(private client: UnifiedClient) {}
@@ -7,18 +8,20 @@ export class WorkspaceCommands {
   async info(options: any): Promise<void> {
     try {
       const info = await this.client.callApi('getWorkspaceInfo', {});
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           workspace: info,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
@@ -26,18 +29,20 @@ export class WorkspaceCommands {
   async state(options: any): Promise<void> {
     try {
       const state = await this.client.callApi('getCurrentState', {});
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           state,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
@@ -55,18 +60,20 @@ export class WorkspaceCommands {
         result.openFiles = result.changedFiles;
       }
 
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           files: result,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import chalk from 'chalk';
 import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
 
 export class SnapshotCommands {
   constructor(private client: UnifiedClient) {}
@@ -39,19 +40,21 @@ export class SnapshotCommands {
 
     try {
       const result = await this.client.callApi('takeSnapshot', opts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           snapshot: this.getSnapshotSummary(result.snapshot),
           message: `Snapshot "${opts.description}" created successfully`,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
@@ -72,10 +75,24 @@ export class SnapshotCommands {
     }
 
     if (options.since) {
-      filter.dateRange = {
-        start: this.parseDate(options.since),
-        end: Date.now(),
-      };
+      // Parsed here rather than inside the try below, because the filter is
+      // built before it. Catching locally keeps an invalid `--since` behaving
+      // like every other command error -- a failure payload and exit 1 -- rather
+      // than escaping to the CLI's fatal-error path.
+      let start: number;
+      try {
+        start = this.parseDate(options.since);
+      } catch (error) {
+        printResult(
+          {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          options,
+        );
+        return;
+      }
+      filter.dateRange = { start, end: Date.now() };
     }
 
     try {
@@ -83,19 +100,21 @@ export class SnapshotCommands {
 
       const summaries = snapshots.map((s: any) => this.getSnapshotSummary(s));
 
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           snapshots: summaries,
           total: summaries.length,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
@@ -105,11 +124,12 @@ export class SnapshotCommands {
       const snapshot = await this.client.callApi('getSnapshot', { id });
 
       if (!snapshot) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: false,
             error: `Snapshot ${id} not found`,
-          }),
+          },
+          options,
         );
         return;
       }
@@ -133,11 +153,12 @@ export class SnapshotCommands {
 
       console.log(JSON.stringify(result));
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
@@ -156,19 +177,21 @@ export class SnapshotCommands {
         id,
         options: restoreOpts,
       });
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           result,
           message: `Snapshot ${id} restored successfully`,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
@@ -176,19 +199,21 @@ export class SnapshotCommands {
   async delete(id: string, options: any): Promise<void> {
     try {
       const result = await this.client.callApi('deleteSnapshot', { id });
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           result,
           message: `Snapshot ${id} deleted successfully`,
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
@@ -199,8 +224,8 @@ export class SnapshotCommands {
         snapshotId1: id1,
         snapshotId2: id2,
       });
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           comparison: result,
           summary: {
@@ -209,25 +234,31 @@ export class SnapshotCommands {
             modifiedFiles: result.modifiedFiles?.length || 0,
             identicalFiles: result.identicalFiles?.length || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
 
   async navigate(direction: string): Promise<void> {
+    // `navigate` takes no options object, and the code it replaces printed JSON
+    // unconditionally, so `{ json: true }` preserves the existing output while
+    // still recording failure. Its option surface is Plan 06's concern.
     if (!['previous', 'next'].includes(direction)) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: 'Direction must be "previous" or "next"',
-        }),
+        },
+        { json: true },
       );
       return;
     }
@@ -236,19 +267,21 @@ export class SnapshotCommands {
       const result = await this.client.callApi('navigateSnapshot', {
         direction,
       });
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           navigation: result,
           message: `Navigated to ${direction} snapshot`,
-        }),
+        },
+        { json: true },
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        { json: true },
       );
     }
   }

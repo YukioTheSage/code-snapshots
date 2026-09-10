@@ -6,6 +6,8 @@ import type {
   GitAutoSnapshotOptions,
   GitCompareOptions,
 } from '../types/options';
+import { printResult } from './output';
+import { setFailure } from '../exitState';
 
 export class GitCommands {
   constructor(private client: UnifiedClient) {}
@@ -29,14 +31,15 @@ export class GitCommands {
       );
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             commitHash: result.commitHash,
             branch: result.branch,
             message: result.message,
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green('✓ Git commit created successfully'));
@@ -48,8 +51,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to create Git commit:'),
           errorMessage,
@@ -75,13 +79,14 @@ export class GitCommands {
       );
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             operation,
             snapshot: result.snapshot,
             message: `Auto-snapshot created before ${operation}`,
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.green(`✓ Auto-snapshot created before ${operation}`));
@@ -92,8 +97,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red(`✗ Failed to create auto-snapshot before ${operation}:`),
           errorMessage,
@@ -107,15 +113,16 @@ export class GitCommands {
       const result = await this.client.callApi('getGitBranchInfo', {});
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             currentBranch: result.currentBranch,
             commitHash: result.commitHash,
             remoteUrl: result.remoteUrl,
             hasChanges: result.hasChanges,
             branches: result.branches,
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.blue('Git Repository Information:'));
@@ -145,8 +152,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to get Git information:'),
           errorMessage,
@@ -161,12 +169,13 @@ export class GitCommands {
       const branchInfo = await this.client.callApi('getGitBranchInfo', {});
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             currentBranch: branchInfo.currentBranch,
             branches: result.branches,
-          }),
+          },
+          options,
         );
       } else {
         console.log(chalk.blue('Branches:'));
@@ -182,8 +191,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to list branches:'), errorMessage);
       }
     }
@@ -200,12 +210,13 @@ export class GitCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             branch: name,
             checkout: !!options.checkout,
-          }),
+          },
+          options,
         );
       } else {
         if (options.checkout) {
@@ -220,8 +231,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to create branch:'), errorMessage);
       }
     }
@@ -232,7 +244,7 @@ export class GitCommands {
       await this.client.callApi('switchBranch', { name });
 
       if (options.json) {
-        console.log(JSON.stringify({ success: true, branch: name }));
+        printResult({ success: true, branch: name }, options);
       } else {
         console.log(chalk.green(`✓ Switched to branch '${name}'`));
       }
@@ -240,8 +252,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to switch branch:'), errorMessage);
       }
     }
@@ -258,9 +271,7 @@ export class GitCommands {
       });
 
       if (options.json) {
-        console.log(
-          JSON.stringify({ success: true, branch: name, deleted: true }),
-        );
+        printResult({ success: true, branch: name, deleted: true }, options);
       } else {
         console.log(chalk.green(`✓ Deleted branch '${name}'`));
       }
@@ -268,8 +279,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(chalk.red('✗ Failed to delete branch:'), errorMessage);
       }
     }
@@ -293,14 +305,15 @@ export class GitCommands {
       );
 
       if (options.json) {
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             snapshotId,
             commitHash,
             differences: result.differences,
             fileChanges: result.fileChanges,
-          }),
+          },
+          options,
         );
       } else {
         console.log(
@@ -327,8 +340,9 @@ export class GitCommands {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       if (options.json) {
-        console.log(JSON.stringify({ success: false, error: errorMessage }));
+        printResult({ success: false, error: errorMessage }, options);
       } else {
+        setFailure();
         console.error(
           chalk.red('✗ Failed to compare with Git commit:'),
           errorMessage,

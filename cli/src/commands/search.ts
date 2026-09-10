@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
 
 export class SearchCommands {
   constructor(private client: UnifiedClient) {}
@@ -33,8 +34,8 @@ export class SearchCommands {
       let results;
       try {
         results = await this.client.callApi('enhancedSearch', searchOpts);
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             query,
             results: results.results || results,
@@ -42,7 +43,8 @@ export class SearchCommands {
             suggestions: results.suggestions || [],
             relatedQueries: results.relatedQueries || [],
             enhanced: true,
-          }),
+          },
+          options,
         );
       } catch (enhancedError) {
         // Fallback to basic search
@@ -54,8 +56,8 @@ export class SearchCommands {
           languages: searchOpts.languages,
         };
         results = await this.client.callApi('searchSnapshots', basicOpts);
-        console.log(
-          JSON.stringify({
+        printResult(
+          {
             success: true,
             query,
             results,
@@ -63,12 +65,13 @@ export class SearchCommands {
             options: basicOpts,
             enhanced: false,
             fallback: true,
-          }),
+          },
+          options,
         );
       }
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -76,7 +79,8 @@ export class SearchCommands {
             'Verify query parameters',
             'Try simpler query terms',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -101,8 +105,8 @@ export class SearchCommands {
 
     try {
       const results = await this.client.callApi('enhancedSearch', searchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           description,
           searchMode: 'behavioral',
@@ -118,11 +122,12 @@ export class SearchCommands {
                 (r: any) => r.explanation?.confidenceFactors,
               ) || [],
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -130,7 +135,8 @@ export class SearchCommands {
             'Check available snapshots',
             'Try more specific behavioral terms',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -156,8 +162,8 @@ export class SearchCommands {
 
     try {
       const results = await this.client.callApi('enhancedSearch', searchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           patternType,
           searchMode: 'pattern',
@@ -174,11 +180,12 @@ export class SearchCommands {
                 (r: any) => r.qualityMetrics?.overallScore,
               ) || [],
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -186,7 +193,8 @@ export class SearchCommands {
             'Try common patterns like Factory, Observer, Strategy',
             'Use more specific pattern names',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -232,8 +240,8 @@ export class SearchCommands {
       };
 
       const results = await this.client.callApi('batchSearch', batchOpts);
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           batchResults: results,
           summary: {
@@ -242,11 +250,12 @@ export class SearchCommands {
             failedQueries: results?.failedQueries || 0,
             averageResponseTime: results?.averageResponseTime || 0,
           },
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           suggestions: [
@@ -255,7 +264,8 @@ export class SearchCommands {
             'Validate query objects',
             'Ensure queries array structure',
           ],
-        }),
+        },
+        options,
       );
     }
   }
@@ -265,19 +275,21 @@ export class SearchCommands {
       const result = await this.client.callApi('indexSnapshots', {
         snapshotIds: options.all ? undefined : [],
       });
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: true,
           indexing: result,
           message: 'Snapshots indexed successfully',
-        }),
+        },
+        options,
       );
     } catch (error) {
-      console.log(
-        JSON.stringify({
+      printResult(
+        {
           success: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        },
+        options,
       );
     }
   }
