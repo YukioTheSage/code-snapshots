@@ -180,4 +180,21 @@ describe('manifest consistency', () => {
 
     expect(unread).toEqual([]);
   });
+
+  it('matches no menu entry against the tree empty-state row', () => {
+    // The empty-state row exists to explain a blank view. If a context menu
+    // matched it, right-clicking an explanation would offer actions that need a
+    // real snapshot -- and `emptyState` is deliberately not in any `when`.
+    const itemMenus = manifest.contributes.menus['view/item/context'] ?? [];
+    const matching = itemMenus.filter((entry) => {
+      const when = entry.when ?? '';
+      if (when.includes('emptyState')) {
+        return true;
+      }
+      // An entry with no `viewItem` condition applies to every row.
+      return !when.includes('viewItem');
+    });
+
+    expect(matching).toEqual([]);
+  });
 });

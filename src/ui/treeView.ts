@@ -89,6 +89,41 @@ function getRelativeDateGroup(timestamp: number): string {
 const GROUP_ORDER = ['Today', 'Yesterday', 'This Week', 'Last Week', 'Older'];
 
 /**
+ * A non-interactive row explaining an empty view.
+ *
+ * `getChildren` previously returned an empty array whenever the filters
+ * excluded everything, so both views rendered blank with no indication of
+ * whether the store was empty, the filters were too narrow, or the extension
+ * was broken. `contextValue` is 'emptyState', which matches no menu entry, and
+ * no command is attached, so clicking the row does nothing.
+ */
+function createEmptyStateItem(label: string, detail: string): SnapshotTreeItem {
+  const item = new SnapshotTreeItem(
+    undefined,
+    false,
+    undefined as unknown as SnapshotManager,
+    undefined,
+    label,
+    [],
+    detail,
+  );
+  item.contextValue = 'emptyState';
+  item.command = undefined;
+  item.iconPath = new vscode.ThemeIcon('info');
+  item.collapsibleState = vscode.TreeItemCollapsibleState.None;
+  // The group branch is skipped for an empty group list, so the label and
+  // tooltip are set here rather than through the constructor's group path.
+  item.label = label;
+  item.tooltip = detail;
+  item.description = undefined;
+  item.accessibilityInformation = {
+    label: `${label}. ${detail}`,
+    role: 'treeitem',
+  };
+  return item;
+}
+
+/**
  * Enum defining the types of snapshots a view can display.
  */
 export enum SnapshotType {
@@ -340,7 +375,9 @@ export class SnapshotTreeDataProvider
       activeFilters.push('Date');
     }
     if (this.filterTags.length > 0) {
-      activeFilters.push(`Tags (${this.filterTags.length})`);
+      // Named, not counted: "Tags (1)" does not tell the user which tag is
+      // hiding their snapshots, which is the only thing they need to know.
+      activeFilters.push(`Tags: ${this.filterTags.join(', ')}`);
     }
     if (this.filterFavoritesOnly) {
       activeFilters.push('Favorites');
@@ -634,6 +671,31 @@ export class SnapshotTreeDataProvider
       logVerbose(
         `${currentLogPrefix} Returning ${groupItems.length} top-level group items.`,
       );
+
+      if (groupItems.length === 0) {
+        // `countBeforeUserFilters` is the count after the manual/auto split, so
+        // a non-zero value here means the user's filters are what emptied the
+        // view -- not that the view has nothing of its own kind to show.
+        if (countBeforeUserFilters > 0) {
+          return Promise.resolve([
+            createEmptyStateItem(
+              'No snapshots match the active filters',
+              `${this.getActiveFiltersDescription()}. Use "Snapshots: Clear All Filters" to reset.`,
+            ),
+          ]);
+        }
+
+        const isAutoView = this.snapshotTypeFilter === SnapshotType.AUTO;
+        return Promise.resolve([
+          createEmptyStateItem(
+            isAutoView ? 'No auto snapshots yet' : 'No snapshots yet',
+            isAutoView
+              ? 'Auto snapshots come from the autoSnapshotInterval setting and from auto-snapshot rules.'
+              : 'Take a snapshot with Ctrl+Alt+S.',
+          ),
+        ]);
+      }
+
       return Promise.resolve(groupItems);
     }
   }

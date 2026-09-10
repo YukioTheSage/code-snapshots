@@ -42,16 +42,26 @@ export class FilterStatusBar implements vscode.Disposable {
   private update(): void {
     const filterCount = this.treeDataProvider.getActiveFilterCount();
 
+    // Hidden when clean, because the empty-state row in the tree now carries
+    // the explanation. It used to hide whenever the count was zero, which is
+    // also the case when the tree is empty *because* a filter is active -- the
+    // one moment the badge was the only clue.
     if (filterCount === 0) {
+      this.statusBarItem.text = '';
+      this.statusBarItem.tooltip = '';
+      this.statusBarItem.accessibilityInformation = undefined;
       this.statusBarItem.hide();
       return;
     }
 
-    this.statusBarItem.text = `$(filter) ${this.viewName}: ${filterCount} filters`;
-    this.statusBarItem.tooltip = `${
-      this.viewName
-    } View: ${this.treeDataProvider.getActiveFiltersDescription()}
+    const filterWord = filterCount === 1 ? 'filter' : 'filters';
+    const description = this.treeDataProvider.getActiveFiltersDescription();
+    this.statusBarItem.text = `$(filter) ${this.viewName}: ${filterCount} ${filterWord}`;
+    this.statusBarItem.tooltip = `${this.viewName} View: ${description}
 Click to clear all filters`;
+    this.statusBarItem.accessibilityInformation = {
+      label: `CodeLapse: ${this.viewName} view has ${filterCount} active ${filterWord}. ${description}`,
+    };
     this.statusBarItem.command = 'vscode-snapshots.clearAllFilters';
     this.statusBarItem.show();
   }
