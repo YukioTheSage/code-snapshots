@@ -39,13 +39,15 @@ describe('extension manifest', () => {
    * the code is correct and simply never runs -- which is exactly how the IPC
    * bridge, the auto-snapshot timer and the welcome experience all stayed dead.
    */
-  it('declares every command it registers, so the palette can reach them', () => {
+  it('namespaces every contributed command', () => {
     const manifest = readManifest();
     const declared = new Set(
       manifest.contributes.commands.map((c) => c.command),
     );
 
-    // Every command contributed here must be resolvable from the palette.
+    // This asserts the namespace only. That every contributed command is
+    // actually registered -- which this test's former name claimed -- is
+    // checked by manifestConsistency.test.ts, because this one never did.
     expect(declared.size).toBeGreaterThan(0);
     for (const command of declared) {
       expect(command).toMatch(/^vscode-snapshots\./);
