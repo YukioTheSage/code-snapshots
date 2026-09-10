@@ -124,14 +124,12 @@ export interface ListFilesOptions extends BaseCommandOptions, SortOptions {
   snapshotId: string;
   /** Show only changed files */
   changedOnly?: boolean;
-  /** Include file content */
+  /** Include file content in results */
   content?: boolean;
+  /** Include file metadata in results */
+  metadata?: boolean;
   /** Filter by file pattern (glob) */
   pattern?: string;
-  /** Exclude file content from results */
-  noContent?: boolean;
-  /** Exclude metadata from results */
-  noMetadata?: boolean;
   /** Filter by date (ISO format or relative like "2d", "1w") */
   since?: string;
 }
@@ -144,10 +142,16 @@ export interface ViewFileOptions extends BaseCommandOptions {
   snapshotId: string;
   /** File path */
   filePath: string;
-  /** Disable syntax highlighting */
-  noSyntax?: boolean;
-  /** Disable line numbers */
-  noLineNumbers?: boolean;
+  /**
+   * Encoding the `--no-x` flags. Commander maps `--no-syntax` to
+   * `options.syntax === false`, so the positive name is what actually gets
+   * populated. These were previously spelled `noSyntax` / `noLineNumbers`,
+   * which are never set: reading them always yielded `undefined`, so the
+   * documented flags were silent no-ops.
+   */
+  syntax?: boolean;
+  /** Show line numbers */
+  lineNumbers?: boolean;
 }
 
 /**
@@ -178,8 +182,8 @@ export interface RestoreFileOptions extends BaseCommandOptions {
   filePath: string;
   /** Target restore path (defaults to original path) */
   to?: string;
-  /** Skip backup before restore */
-  noBackup?: boolean;
+  /** Create a backup before restoring (`--no-backup` sets this false) */
+  backup?: boolean;
   /** Skip confirmation prompts */
   force?: boolean;
 }
@@ -686,14 +690,14 @@ export interface ImportConfigOptions extends BaseCommandOptions {
  * Options for running diagnostics
  */
 export interface DiagnosticsOptions extends BaseCommandOptions {
-  /** Exclude system info */
-  noSystem?: boolean;
-  /** Exclude snapshot diagnostics */
-  noSnapshots?: boolean;
-  /** Exclude Git diagnostics */
-  noGit?: boolean;
-  /** Exclude config diagnostics */
-  noConfig?: boolean;
+  /** Include system info (`--no-system` sets this false) */
+  system?: boolean;
+  /** Include snapshot diagnostics (`--no-snapshots` sets this false) */
+  snapshots?: boolean;
+  /** Include Git diagnostics (`--no-git` sets this false) */
+  git?: boolean;
+  /** Include config diagnostics (`--no-config` sets this false) */
+  config?: boolean;
 }
 
 /**
@@ -716,26 +720,28 @@ export interface LogOptions extends BaseCommandOptions {
 export interface ClearLogsOptions extends BaseCommandOptions {
   /** Clear logs older than duration */
   olderThan?: string;
+  /** Clear only a specific log level */
+  level?: DiagnosticLevel;
 }
 
 /**
  * Options for health check
  */
 export interface HealthCheckOptions extends BaseCommandOptions {
-  /** Exclude performance checks */
-  noPerformance?: boolean;
-  /** Exclude connectivity checks */
-  noConnectivity?: boolean;
-  /** Exclude storage checks */
-  noStorage?: boolean;
+  /** Include performance checks (`--no-performance` sets this false) */
+  performance?: boolean;
+  /** Include connectivity checks (`--no-connectivity` sets this false) */
+  connectivity?: boolean;
+  /** Include storage checks (`--no-storage` sets this false) */
+  storage?: boolean;
 }
 
 /**
  * Options for performance metrics
  */
 export interface PerformanceMetricsOptions extends BaseCommandOptions {
-  /** Include historical data */
-  noHistory?: boolean;
+  /** Include historical data (`--no-history` sets this false) */
+  history?: boolean;
   /** Time range for metrics */
   timeRange?: string;
 }

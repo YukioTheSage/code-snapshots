@@ -15,9 +15,33 @@ import { EnhancedSearchCommands } from './commands/enhanced-search';
 import { AnalysisCommands } from './commands/analysis';
 import { ChunkingCommands } from './commands/chunking';
 import { GitCommands } from './commands/git';
+import { ConfigCommands } from './commands/config';
+import { DiagnosticsCommands } from './commands/diagnostics';
+import { FilesCommands } from './commands/files';
+import { FilterCommands } from './commands/filter';
+import { RulesCommands } from './commands/rules';
 const program = new Command();
+let programBuilt = false;
 
-async function main() {
+/**
+ * Build the command tree.
+ *
+ * Exported and separated from `main()` so the command surface can be inspected
+ * by tests. `cli.ts` cannot be imported for its side effects -- it used to run
+ * `main()` (and therefore `parseAsync()`) at module load -- and because
+ * `collectCoverageFrom` excludes this file, no test could reach the wiring.
+ * That is how 33 implemented subcommands went unregistered, `--json` never
+ * reached a handler, and every `--no-x` flag silently did nothing.
+ *
+ * Idempotent: repeated calls return the same program rather than registering
+ * each command a second time.
+ */
+export function buildProgram(): Command {
+  if (programBuilt) {
+    return program;
+  }
+  programBuilt = true;
+
   program
     .name('codelapse')
     .alias('cl')
@@ -673,6 +697,273 @@ async function main() {
     .option('--no-strength', 'Disable relationship strength calculation')
     .action(chunkingCommands.dependencies.bind(chunkingCommands));
 
+  // Configuration commands
+  const configCommands = new ConfigCommands(getClient());
+  const configCmd = program
+    .command('config')
+    .alias('cfg')
+    .description('Configuration management commands');
+
+  configCmd
+    .command('get [key]')
+    .description('Get configuration value(s)')
+    .action(configCommands.get.bind(configCommands));
+
+  configCmd
+    .command('set <key> <value>')
+    .description('Set a configuration value')
+    .action(configCommands.set.bind(configCommands));
+
+  configCmd
+    .command('reset [key]')
+    .description('Reset configuration to defaults')
+    .action(configCommands.reset.bind(configCommands));
+
+  configCmd
+    .command('list')
+    .description('List available configuration keys')
+    .action(configCommands.list.bind(configCommands));
+
+  configCmd
+    .command('validate')
+    .description('Validate current configuration')
+    .action(configCommands.validate.bind(configCommands));
+
+  configCmd
+    .command('export <file-path>')
+    .description('Export configuration to file')
+    .option('-f, --format <format>', 'Export format: json, yaml', 'json')
+    .action(configCommands.export.bind(configCommands));
+
+  configCmd
+    .command('import <file-path>')
+    .description('Import configuration from file')
+    .option('--merge', 'Merge with existing config instead of replacing')
+    .action(configCommands.import.bind(configCommands));
+
+  // File-level snapshot operations
+  const filesCommands = new FilesCommands(getClient());
+  const filesCmd = program
+    .command('files')
+    .description('File-level snapshot operations');
+
+  filesCmd
+    .command('list <snapshot-id>')
+    .alias('ls')
+    .description('List files in a snapshot')
+    .option('--changed-only', 'Show only changed files')
+    .option('--content', 'Include file content preview')
+    .option('--pattern <pattern>', 'Filter files by pattern')
+    .option('--sort-by <field>', 'Sort by: path, size, modified', 'path')
+    .option('--sort-order <order>', 'Sort order: asc, desc', 'asc')
+    .action(filesCommands.list.bind(filesCommands));
+
+  filesCmd
+    .command('show <snapshot-id> <file-path>')
+    .description('Show file content from a snapshot')
+    // `--no-*` flags populate the positive key with `false`, which is what the
+    // handler now reads. Declaring them as `--no-content` is what API.md
+    // documents; the handler previously looked for a `noContent` key that
+    // Commander never sets, so every one of these was a silent no-op.
+    .option('--no-content', 'Skip file content')
+    .option('--no-metadata', 'Skip file metadata')
+    .option('--no-syntax', 'Skip syntax highlighting')
+    .option('--no-line-numbers', 'Skip line numbers')
+    .option('--context <lines>', 'Context lines around changes')
+    .action(filesCommands.show.bind(filesCommands));
+
+  filesCmd
+    .command('compare <id1> <id2> <file-path>')
+    .alias('diff')
+    .description('Compare a file between two snapshots')
+    .option('-c, --context <lines>', 'Context lines for diff', '3')
+    .option('--ignore-whitespace', 'Ignore whitespace changes')
+    .option('--side-by-side', 'Side-by-side diff format')
+    .action(filesCommands.compare.bind(filesCommands));
+
+  filesCmd
+    .command('restore <snapshot-id> <file-path>')
+    .description('Restore a single file from a snapshot')
+    .option('--to <path>', 'Restore to a different path')
+    .option('--no-backup', 'Skip creating a backup')
+    .option('-f, --force', 'Force restore without confirmation')
+    .action(filesCommands.restore.bind(filesCommands));
+
+  filesCmd
+    .command('history <file-path>')
+    .description('Show file history across snapshots')
+    .option('-l, --limit <number>', 'Limit results', '50')
+    .option('--since <time>', 'Show history since time')
+    .option('--content', 'Include content changes')
+    .option('--sort-order <order>', 'Sort order: asc, desc', 'desc')
+    .action(filesCommands.history.bind(filesCommands));
+
+  filesCmd
+    .command('export <snapshot-id> <file-path> <output-path>')
+    .description('Export a file from a snapshot')
+    .option('--format <format>', 'Export format: original, json', 'original')
+    .option('--metadata', 'Include metadata in export')
+    .action(filesCommands.export.bind(filesCommands));
+
+  // Filter and manage snapshots
+  const filterCommands = new FilterCommands(getClient());
+  const filterCmd = program
+    .command('filter')
+    .alias('f')
+    .description('Filter and manage snapshots');
+
+  filterCmd
+    .command('favorites')
+    .alias('fav')
+    .description('Show favorite snapshots')
+    .option('-l, --limit <number>', 'Limit results')
+    .option('--offset <number>', 'Offset for pagination')
+    .action(filterCommands.favorites.bind(filterCommands));
+
+  filterCmd
+    .command('tags <tags>')
+    .description('Filter snapshots by tags')
+    .option('-l, --limit <number>', 'Limit results')
+    .option('--offset <number>', 'Offset for pagination')
+    .action(filterCommands.byTags.bind(filterCommands));
+
+  filterCmd
+    .command('date <range>')
+    .description('Filter snapshots by date')
+    .option('-l, --limit <number>', 'Limit results')
+    .option('--offset <number>', 'Offset for pagination')
+    .action(filterCommands.byDate.bind(filterCommands));
+
+  filterCmd
+    .command('file <file-path>')
+    .description('Filter snapshots by file path')
+    .option('-l, --limit <number>', 'Limit results')
+    .option('--offset <number>', 'Offset for pagination')
+    .action(filterCommands.byFile.bind(filterCommands));
+
+  filterCmd
+    .command('favorite <snapshot-id>')
+    .description('Toggle favorite status of a snapshot')
+    .action(filterCommands.toggleFavorite.bind(filterCommands));
+
+  filterCmd
+    .command('edit-tags <snapshot-id> <tags>')
+    .description('Edit snapshot tags')
+    .action(filterCommands.editTags.bind(filterCommands));
+
+  filterCmd
+    .command('edit-notes <snapshot-id> <notes>')
+    .description('Edit snapshot notes')
+    .action(filterCommands.editNotes.bind(filterCommands));
+
+  filterCmd
+    .command('edit-task <snapshot-id> <task-ref>')
+    .description('Edit snapshot task reference')
+    .action(filterCommands.editTaskRef.bind(filterCommands));
+
+  // Auto-snapshot rules
+  const rulesCommands = new RulesCommands(getClient());
+  const rulesCmd = program
+    .command('rules')
+    .alias('r')
+    .description('Auto-snapshot rules management');
+
+  rulesCmd
+    .command('list')
+    .alias('ls')
+    .description('List auto-snapshot rules')
+    .action(rulesCommands.list.bind(rulesCommands));
+
+  rulesCmd
+    .command('add <pattern> <interval>')
+    .description('Add an auto-snapshot rule (interval in minutes)')
+    .option('-d, --description <desc>', 'Rule description')
+    .option('-t, --tags <tags>', 'Comma-separated tags')
+    .option('--disabled', 'Create the rule in a disabled state')
+    .action(rulesCommands.add.bind(rulesCommands));
+
+  rulesCmd
+    .command('update <rule-id>')
+    .description('Update an auto-snapshot rule')
+    .option('-p, --pattern <pattern>', 'New pattern')
+    .option('-i, --interval <minutes>', 'New interval')
+    .option('-d, --description <desc>', 'New description')
+    .option('-t, --tags <tags>', 'New tags (comma-separated)')
+    // The handler reads `options.enabled` and `options.disabled` and treats
+    // each as a boolean toggle, so both are declared as plain flags.
+    .option('--enabled', 'Enable the rule')
+    .option('--disabled', 'Disable the rule')
+    .action(rulesCommands.update.bind(rulesCommands));
+
+  rulesCmd
+    .command('remove <rule-id>')
+    .alias('rm')
+    .description('Remove an auto-snapshot rule')
+    .action(rulesCommands.remove.bind(rulesCommands));
+
+  rulesCmd
+    .command('toggle <rule-id>')
+    .description('Toggle an auto-snapshot rule enabled/disabled')
+    .action(rulesCommands.toggle.bind(rulesCommands));
+
+  rulesCmd
+    .command('test <pattern>')
+    .description('Test an auto-snapshot rule pattern against files')
+    .option('--path <path>', 'Test path (defaults to the current directory)')
+    .action(rulesCommands.test.bind(rulesCommands));
+
+  // Diagnostics and logging
+  const diagnosticsCommands = new DiagnosticsCommands(getClient());
+  const diagnosticsCmd = program
+    .command('diagnostics')
+    .alias('diag')
+    .description('Diagnostics and logging commands');
+
+  diagnosticsCmd
+    .command('run')
+    .description('Run comprehensive diagnostics')
+    .option('--no-system', 'Skip system information')
+    .option('--no-snapshots', 'Skip snapshot checks')
+    .option('--no-git', 'Skip Git checks')
+    .option('--no-config', 'Skip configuration checks')
+    .action(diagnosticsCommands.run.bind(diagnosticsCommands));
+
+  diagnosticsCmd
+    .command('system')
+    .description('Show system information')
+    .action(diagnosticsCommands.system.bind(diagnosticsCommands));
+
+  diagnosticsCmd
+    .command('logs')
+    .description('Show extension logs')
+    .option('-l, --lines <number>', 'Number of log lines', '100')
+    .option('--level <level>', 'Log level filter: error, warn, info, debug')
+    .option('--since <time>', 'Show logs since time (e.g. 1h, 2d)')
+    .option('-f, --follow', 'Follow log output in real-time')
+    .action(diagnosticsCommands.logs.bind(diagnosticsCommands));
+
+  diagnosticsCmd
+    .command('clear-logs')
+    .description('Clear extension logs')
+    .option('--older-than <time>', 'Clear logs older than time')
+    .option('--level <level>', 'Clear only a specific log level')
+    .action(diagnosticsCommands.clearLogs.bind(diagnosticsCommands));
+
+  diagnosticsCmd
+    .command('health')
+    .description('Run health check')
+    .option('--no-performance', 'Skip performance checks')
+    .option('--no-connectivity', 'Skip connectivity checks')
+    .option('--no-storage', 'Skip storage checks')
+    .action(diagnosticsCommands.health.bind(diagnosticsCommands));
+
+  diagnosticsCmd
+    .command('performance')
+    .description('Show performance metrics')
+    .option('--no-history', 'Skip performance history')
+    .option('--time-range <range>', 'Time range: 1h, 6h, 1d', '1h')
+    .action(diagnosticsCommands.performance.bind(diagnosticsCommands));
+
   // AI-friendly batch operations
   program
     .command('batch <file>')
@@ -835,30 +1126,40 @@ async function main() {
     }
   });
 
-  // Parse arguments
-  await program.parseAsync();
+  return program;
 }
 
-// Handle shutdown gracefully
-process.on('SIGINT', () => {
-  const globalOpts = program.opts();
-  if (!globalOpts.silent) {
-    console.log('\n' + chalk.yellow('Shutting down...'));
-  }
-  process.exit(0);
-});
+async function main(): Promise<void> {
+  const built = buildProgram();
 
-process.on('SIGTERM', () => {
-  process.exit(0);
-});
+  // Handle shutdown gracefully. Registered here rather than at module scope so
+  // that importing this module from a test installs no process listeners.
+  process.on('SIGINT', () => {
+    const globalOpts = built.opts();
+    if (!globalOpts.silent) {
+      console.log('\n' + chalk.yellow('Shutting down...'));
+    }
+    process.exit(0);
+  });
 
-// Run main function
-main().catch((error) => {
-  const globalOpts = program.opts();
-  if (globalOpts.json) {
-    console.log(JSON.stringify({ success: false, error: error.message }));
-  } else {
-    console.error(chalk.red('Fatal error:'), error.message);
-  }
-  process.exit(1);
-});
+  process.on('SIGTERM', () => {
+    process.exit(0);
+  });
+
+  // Parse arguments
+  await built.parseAsync();
+}
+
+// Only run when executed as the entry point. Without this guard, importing the
+// module in a test would parse the test runner's argv and exit the process.
+if (require.main === module) {
+  main().catch((error) => {
+    const globalOpts = program.opts();
+    if (globalOpts.json) {
+      console.log(JSON.stringify({ success: false, error: error.message }));
+    } else {
+      console.error(chalk.red('Fatal error:'), error.message);
+    }
+    process.exit(1);
+  });
+}

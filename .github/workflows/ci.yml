@@ -19,11 +19,13 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
-      # Kept deliberately: the three files that fail eslint are the same three
-      # that fail prettier --check, so this step is currently the only gate
-      # catching them. Do not remove it when adding the test steps below.
+      # Must be `format:check`, not `format -- --check`. The `format` script is
+      # `prettier --write`, and passing `--check` alongside `--write` makes
+      # prettier REWRITE the files and exit 0 -- so the previous invocation
+      # could never fail and silently masked violations instead of reporting
+      # them. Verified with a deliberately malformed file.
       - name: Format check
-        run: npm run format -- --check
+        run: npm run format:check
       - name: Compile
         run: npm run compile
       - name: Test
@@ -50,7 +52,7 @@ jobs:
         # gate ever caught, because this job only type-checked, tested and built.
         run: npm run lint
       - name: Format check
-        run: npm run format -- --check
+        run: npm run format:check
       - name: Type-check sources
         run: npm run check-types
       - name: Type-check tests

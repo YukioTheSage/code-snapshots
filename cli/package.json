@@ -13,6 +13,7 @@
     "check-types": "tsc --noEmit",
     "check-types:test": "tsc -p tsconfig.test.json --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "test": "jest",

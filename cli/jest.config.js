@@ -15,8 +15,11 @@ module.exports = {
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
-    '!src/**/__tests__/**',
-    '!src/cli.ts' // Exclude main CLI file from coverage as it's hard to test
+    '!src/**/__tests__/**'
+    // cli.ts was excluded here as "hard to test", which is exactly why 33
+    // implemented subcommands sat unregistered, --json never reached a handler,
+    // and every --no-x flag did nothing. It exports buildProgram() now, so the
+    // command surface is inspectable.
   ],
   coverageDirectory: 'coverage',
   coverageReporters: [

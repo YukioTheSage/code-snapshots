@@ -30,11 +30,24 @@ export interface SystemInfo {
   architecture: string;
 }
 
+/**
+ * Commander maps every `--no-x` flag to `options.x === false`, so a negatable
+ * flag must be declared here under its positive name. Spelled `noSystem` etc.
+ * these keys are never populated, and `!options.noSystem` silently evaluates to
+ * `true`, making the documented flag a no-op.
+ *
+ * `string` (not `number`) for the numeric options because Commander passes the
+ * raw argument through unchanged.
+ */
 interface DiagnosticsOptions {
-  noSystem?: boolean;
-  noSnapshots?: boolean;
-  noGit?: boolean;
-  noConfig?: boolean;
+  system?: boolean;
+  snapshots?: boolean;
+  git?: boolean;
+  config?: boolean;
+  performance?: boolean;
+  connectivity?: boolean;
+  storage?: boolean;
+  history?: boolean;
   verbose?: boolean;
   json?: boolean;
   lines?: string;
@@ -42,10 +55,6 @@ interface DiagnosticsOptions {
   since?: string;
   follow?: boolean;
   olderThan?: string;
-  noPerformance?: boolean;
-  noConnectivity?: boolean;
-  noStorage?: boolean;
-  noHistory?: boolean;
   timeRange?: string;
 }
 
@@ -91,10 +100,13 @@ export class DiagnosticsCommands {
   async run(options: DiagnosticsOptions = {}): Promise<void> {
     try {
       const result = await this.client.callApi('runDiagnostics', {
-        includeSystem: !options.noSystem,
-        includeSnapshots: !options.noSnapshots,
-        includeGit: !options.noGit,
-        includeConfiguration: !options.noConfig,
+        // `!== false` rather than `!options.noX`: Commander maps `--no-system`
+        // to `options.system === false`, so a `noSystem` key is never set and
+        // the documented flag was a silent no-op.
+        includeSystem: options.system !== false,
+        includeSnapshots: options.snapshots !== false,
+        includeGit: options.git !== false,
+        includeConfiguration: options.config !== false,
         verbose: !!options.verbose,
       });
 
@@ -247,9 +259,9 @@ export class DiagnosticsCommands {
   async health(options: DiagnosticsOptions = {}): Promise<void> {
     try {
       const result = await this.client.callApi('healthCheck', {
-        includePerformance: !options.noPerformance,
-        includeConnectivity: !options.noConnectivity,
-        includeStorage: !options.noStorage,
+        includePerformance: options.performance !== false,
+        includeConnectivity: options.connectivity !== false,
+        includeStorage: options.storage !== false,
       });
 
       if (options.json) {
@@ -278,7 +290,7 @@ export class DiagnosticsCommands {
   async performance(options: DiagnosticsOptions = {}): Promise<void> {
     try {
       const result = await this.client.callApi('getPerformanceMetrics', {
-        includeHistory: !options.noHistory,
+        includeHistory: options.history !== false,
         timeRange: options.timeRange || '1h',
       });
 

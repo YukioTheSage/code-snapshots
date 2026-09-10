@@ -125,8 +125,8 @@ export class FilesCommands {
     filePath: string,
     options: Partial<
       ViewFileOptions & {
-        noContent?: boolean;
-        noMetadata?: boolean;
+        content?: boolean;
+        metadata?: boolean;
         context?: string;
       }
     > = {},
@@ -134,10 +134,13 @@ export class FilesCommands {
     const opts = {
       snapshotId,
       filePath,
-      includeContent: !options.noContent,
-      includeMetadata: !options.noMetadata,
-      highlightSyntax: !options.noSyntax,
-      lineNumbers: !options.noLineNumbers,
+      // `!== false`, not `!options.noX`: Commander sets `options.content` to
+      // false for `--no-content`, so the `noContent` key never exists and the
+      // documented flags did nothing.
+      includeContent: options.content !== false,
+      includeMetadata: options.metadata !== false,
+      highlightSyntax: options.syntax !== false,
+      lineNumbers: options.lineNumbers !== false,
       contextLines: parseInt(options.context ?? '0') || 0,
     };
 
@@ -290,14 +293,15 @@ export class FilesCommands {
     snapshotId: string,
     filePath: string,
     options: Partial<
-      BaseCommandOptions & { to?: string; noBackup?: boolean; force?: boolean }
+      BaseCommandOptions & { to?: string; backup?: boolean; force?: boolean }
     > = {},
   ): Promise<void> {
     const opts = {
       snapshotId,
       filePath,
       targetPath: options.to || filePath,
-      createBackup: !options.noBackup,
+      // `--no-backup` sets `options.backup` to false; `noBackup` is never set.
+      createBackup: options.backup !== false,
       force: !!options.force,
     };
 
