@@ -564,23 +564,67 @@ export class SnapshotManager {
       }
     }
 
-    // Save the snapshot data using storage
-    try {
-      // Add await here
-      await this.storage.saveSnapshotData(snapshot);
-    } catch (error) {
-      // Handle potential save error (logged by storage, but maybe show user message?)
-      vscode.window.showErrorMessage(`Failed to save snapshot data: ${error}`);
-      throw error; // Re-throw so the command fails
-    }
-
-    // Add to our in-memory list
+    // Add to our in-memory list first, so the index write below includes it.
     this.snapshots.push(snapshot);
     this.currentSnapshotIndex = this.snapshots.length - 1;
-    this.refreshIntegrityReport();
 
-    // Update the index file
-    await this.saveSnapshotIndex();
+    // Write the index BEFORE the snapshot data, and surface failure.
+    //
+    // The order is what makes the rollback honest. If the index write fails,
+    // nothing has reached disk yet, so dropping the in-memory entry leaves the
+    // store consistent. Writing the data first would leave a snapshot directory
+    // with no index entry -- exactly what `recoverSnapshotsFromFileSystem`
+    // deliberately resurrects -- so the user would be told "not saved" while the
+    // snapshot reappeared on the next reload.
+    try {
+      await this.saveSnapshotIndex();
+    } catch (indexError) {
+      this.snapshots.pop();
+      this.currentSnapshotIndex = this.snapshots.length - 1;
+      this.refreshIntegrityReport();
+      log(
+        `Failed to persist the snapshot index after taking a snapshot: ${indexError}`,
+      );
+      vscode.window.showErrorMessage(
+        `Snapshot was not saved: ${
+          indexError instanceof Error ? indexError.message : indexError
+        }`,
+      );
+      throw indexError;
+    }
+
+    // Now persist the snapshot data. A failure here leaves an index entry with
+    // no data, which the loader skips and reports, rather than orphaned data
+    // that the recovery scan would bring back.
+    try {
+      await this.storage.saveSnapshotData(snapshot);
+    } catch (error) {
+      this.snapshots = this.snapshots.filter((s) => s.id !== snapshot.id);
+      this.currentSnapshotIndex = this.snapshots.length - 1;
+      this.refreshIntegrityReport();
+
+      // Remove anything the failed write left behind, so the recovery scan
+      // cannot resurrect a snapshot the user was told was not saved.
+      try {
+        await this.storage.deleteSnapshotData(snapshot.id);
+      } catch (cleanupError) {
+        log(
+          `Could not remove partial snapshot data for ${snapshot.id}: ${cleanupError}`,
+        );
+      }
+      try {
+        await this.saveSnapshotIndex();
+      } catch (rewriteError) {
+        log(
+          `Could not rewrite the index after a failed snapshot write: ${rewriteError}`,
+        );
+      }
+
+      vscode.window.showErrorMessage(`Failed to save snapshot data: ${error}`);
+      throw error;
+    }
+
+    this.refreshIntegrityReport();
 
     // Enforce max snapshots limit
     await this.enforceSnapshotLimit(); // This now uses storage for deletion

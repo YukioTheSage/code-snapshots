@@ -462,14 +462,40 @@ export class SnapshotStorage {
   /**
    * Saves the snapshot index file asynchronously.
    */
+  /**
+   * Writes JSON through a temporary file and renames it into place. The rename
+   * is the commit point: a crash before it leaves the previous file intact plus
+   * a stray `.tmp`, rather than a truncated file that the loader has to
+   * quarantine.
+   */
+  private async writeJsonAtomically(
+    filePath: string,
+    payload: unknown,
+    maxBytes: number,
+  ): Promise<void> {
+    const serialized = JSON.stringify(payload, null, 2);
+    assertBufferSizeWithinLimit(serialized, filePath, maxBytes);
+    await assertNoSymlinkPath(this.snapshotDirectory, filePath);
+    await assertSufficientDiskSpace(filePath);
+
+    const tempPath = `${filePath}.tmp`;
+    await fsPromises.writeFile(tempPath, serialized, 'utf8');
+    try {
+      await fsPromises.rename(tempPath, filePath);
+    } catch (error) {
+      await fsPromises.rm(tempPath, { force: true });
+      throw error;
+    }
+  }
+
   public async saveSnapshotIndex(
     snapshots: Snapshot[],
     currentIndex: number,
   ): Promise<void> {
     if (!this.snapshotDirectory) {
-      log('Cannot save index, storage directory not initialized.');
-      return;
+      throw new Error('Snapshot storage directory not initialized.');
     }
+
     const indexFilePath = path.join(this.snapshotDirectory, 'index.json');
     const indexContent: SnapshotIndex = {
       snapshots: snapshots.map((s) => ({
@@ -480,25 +506,16 @@ export class SnapshotStorage {
       currentIndex: currentIndex,
     };
 
-    try {
-      validateSnapshotIndex(indexContent);
-      await this.ensureDirectoryExistsAsync(this.snapshotDirectory);
-      await assertNoSymlinkPath(this.snapshotDirectory, indexFilePath);
-
-      const serialized = JSON.stringify(indexContent, null, 2);
-      assertBufferSizeWithinLimit(
-        serialized,
-        indexFilePath,
-        MAX_JSON_PAYLOAD_BYTES,
-      );
-
-      await assertSufficientDiskSpace(indexFilePath);
-      await fsPromises.writeFile(indexFilePath, serialized, 'utf8');
-      logVerbose(`Snapshot index saved to ${indexFilePath}`);
-    } catch (error) {
-      log(`Error saving snapshot index: ${error}`);
-      vscode.window.showErrorMessage(`Failed to save snapshot index: ${error}`);
-    }
+    // Validate before touching the filesystem, so an invalid payload cannot
+    // leave a partially written index behind.
+    validateSnapshotIndex(indexContent);
+    await this.ensureDirectoryExistsAsync(this.snapshotDirectory);
+    await this.writeJsonAtomically(
+      indexFilePath,
+      indexContent,
+      MAX_JSON_PAYLOAD_BYTES,
+    );
+    logVerbose(`Snapshot index saved to ${indexFilePath}`);
   }
 
   /**
@@ -506,7 +523,6 @@ export class SnapshotStorage {
    */
   public async saveSnapshotData(snapshot: Snapshot): Promise<void> {
     if (!this.snapshotDirectory) {
-      log(`Cannot save snapshot ${snapshot.id}, storage directory not set.`);
       throw new Error('Snapshot storage directory not initialized.');
     }
     validateSnapshot(snapshot);
@@ -518,15 +534,11 @@ export class SnapshotStorage {
 
     const snapshotMetaPath = path.join(snapshotDir, 'snapshot.json');
     try {
-      await assertNoSymlinkPath(this.snapshotDirectory, snapshotMetaPath);
-      const serialized = JSON.stringify(snapshot, null, 2);
-      assertBufferSizeWithinLimit(
-        serialized,
+      await this.writeJsonAtomically(
         snapshotMetaPath,
+        snapshot,
         MAX_JSON_PAYLOAD_BYTES,
       );
-      await assertSufficientDiskSpace(snapshotMetaPath);
-      await fsPromises.writeFile(snapshotMetaPath, serialized, 'utf8');
       logVerbose(`Saved snapshot metadata to ${snapshotMetaPath}`);
     } catch (error) {
       log(`Error saving snapshot metadata for ${snapshot.id}: ${error}`);
