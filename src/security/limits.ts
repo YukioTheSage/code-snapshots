@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { promises as fsPromises } from 'fs';
+import { log, logVerbose } from '../logger';
 
 const MB = 1024 * 1024;
 
@@ -61,12 +62,18 @@ async function findExistingAncestor(startPath: string): Promise<string> {
   }
 }
 
-export async function assertSufficientDiskSpace(
-  targetPath: string,
-  minFreeBytes: number = MIN_FREE_DISK_BYTES,
-): Promise<void> {
-  const checkPath = await findExistingAncestor(path.dirname(targetPath));
-
+/**
+ * Returns the number of free bytes at the nearest existing ancestor of
+ * `dirPath`, or null when the runtime cannot report it.
+ *
+ * Node exposes `fsPromises.statfs` from 18.15, and VS Code only ships that Node
+ * from 1.85. Every caller reaches this through an `unknown` cast because
+ * `@types/node` here predates `statfs`, so the runtime check below is the only
+ * thing standing between an older host and a `TypeError`.
+ */
+export async function getFreeDiskBytes(
+  dirPath: string,
+): Promise<number | null> {
   const statfsFn = (
     fsPromises as unknown as {
       statfs?: (
@@ -74,23 +81,68 @@ export async function assertSufficientDiskSpace(
       ) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
     }
   ).statfs;
-  if (!statfsFn) {
-    throw new Error('Disk space check requires Node.js 18+ runtime support');
+
+  if (typeof statfsFn !== 'function') {
+    return null;
   }
 
+  const checkPath = await findExistingAncestor(dirPath);
   const stats = await statfsFn(checkPath);
 
   if (
     (typeof stats.bavail !== 'number' && typeof stats.bavail !== 'bigint') ||
     (typeof stats.bsize !== 'number' && typeof stats.bsize !== 'bigint')
   ) {
-    throw new Error('Disk space check is unavailable on this runtime');
+    return null;
   }
 
-  const freeBytes = Number(stats.bavail) * Number(stats.bsize);
+  return Number(stats.bavail) * Number(stats.bsize);
+}
+
+/**
+ * A missing free-space figure is worth saying once, not once per write. Every
+ * write path calls the guard, so an unguarded log would flood the output
+ * channel on exactly the hosts where the guard cannot run.
+ */
+let warnedDiskSpaceUnavailable = false;
+
+function warnDiskSpaceUnavailable(): void {
+  if (warnedDiskSpaceUnavailable) {
+    logVerbose(
+      'Free disk space is still unavailable on this runtime; disk-space pre-checks remain skipped.',
+    );
+    return;
+  }
+  warnedDiskSpaceUnavailable = true;
+  log(
+    'Free disk space cannot be read on this runtime (fs.statfs requires Node 18.15, i.e. VS Code 1.85+), so disk-space pre-checks are skipped. Writes will still fail normally if the disk is full.',
+  );
+}
+
+/** Test seam: lets the one-time warning be re-armed between cases. */
+export function resetDiskSpaceWarningForTesting(): void {
+  warnedDiskSpaceUnavailable = false;
+}
+
+export async function assertSufficientDiskSpace(
+  targetPath: string,
+  minFreeBytes: number = MIN_FREE_DISK_BYTES,
+): Promise<void> {
+  const freeBytes = await getFreeDiskBytes(path.dirname(targetPath));
+
+  if (freeBytes === null) {
+    // Best effort. An unknown figure is not evidence of a full disk, and
+    // throwing here would break every write on a host that simply cannot
+    // report free space -- which is the bug this replaced.
+    warnDiskSpaceUnavailable();
+    return;
+  }
+
   if (freeBytes < minFreeBytes) {
     throw new Error(
-      `Insufficient free disk space at ${checkPath}: ${freeBytes} bytes available, ${minFreeBytes} bytes required`,
+      `Insufficient free disk space at ${path.dirname(
+        targetPath,
+      )}: ${freeBytes} bytes available, ${minFreeBytes} bytes required`,
     );
   }
 }

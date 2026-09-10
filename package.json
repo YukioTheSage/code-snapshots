@@ -25,7 +25,7 @@
     "url": "https://github.com/YukioTheSage/code-snapshots.git"
   },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
     "Other",
@@ -569,7 +569,7 @@
     "@types/diff": "^7.0.2",
     "@types/jest": "^29.0.0",
     "@types/node": "14.x",
-    "@types/vscode": "^1.60.0",
+    "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^5.0.0",
     "@typescript-eslint/parser": "^5.0.0",
     "esbuild": "^0.25.3",
@@ -585,10 +585,10 @@
     "vsce": "^2.15.0"
   },
   "dependencies": {
-    "codelapse-core": "^0.9.5",
     "@google/genai": "^0.10.0",
     "@google/generative-ai": "^0.24.0",
     "@pinecone-database/pinecone": "^5.1.2",
+    "codelapse-core": "^0.9.5",
     "diff": "^5.0.0",
     "java-parser": "^2.3.3",
     "minimatch": "^10.0.1",

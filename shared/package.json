@@ -22,7 +22,7 @@
   "author": "",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.15.0"
   },
   "dependencies": {
     "minimatch": "^10.0.1",
