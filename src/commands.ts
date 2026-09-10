@@ -8,7 +8,7 @@ import { SnapshotContentProvider } from './snapshotContentProvider';
 import { SnapshotContextInput } from './ui/snapshotContextInput';
 import { log, logVerbose, showOutputChannel } from './logger';
 import { ChangeNotifier } from './changeNotifier';
-import { API as GitAPI } from './types/git.d';
+import { API as GitAPI, CommitOptions } from './types/git.d';
 import { AutoSnapshotRulesUI } from './ui/autoSnapshotRulesUI';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
@@ -2325,16 +2325,7 @@ function registerCreateGitCommitCommand({
 
             // Additional logging to help diagnose any issues
             try {
-              // `{ all: true }` stages the working tree as part of the commit.
-              //
-              // This previously read `await repo.add([])` with a comment
-              // claiming it staged all changes. It did not: an empty path list
-              // reaches git as `git add --`, which stages nothing. The commit
-              // then contained only whatever was already staged — either
-              // nothing, or unrelated pre-staged files, depending on the
-              // workspace. `CommitOptions.all` is the supported way to express
-              // this and does not depend on empty-array semantics.
-              await repo.commit(commitMessage, { all: true });
+              await stageAndCommit(repo, commitMessage);
               log(`Git commit operation completed successfully`);
             } catch (commitErr: unknown) {
               log(
@@ -2452,4 +2443,32 @@ interface EditorState {
   selection: vscode.Selection;
   visibleRanges: readonly vscode.Range[];
   options: vscode.TextEditorOptions;
+}
+
+/**
+ * Stages the working tree and commits it.
+ *
+ * Uses `commit(message, { all: true })` rather than `add([])`. The Git
+ * extension's `add` maps to `git add -- <pathspecs>`, and with no pathspecs git
+ * prints "Nothing specified, nothing added" -- verified against real git. So a
+ * commit following `add([])` recorded only whatever was already staged, which is
+ * either nothing or unrelated files. `CommitOptions.all` is the API's own way to
+ * say "commit the working tree" and does not depend on how an empty array is
+ * interpreted.
+ *
+ * Note the scope: `all` covers changes to tracked files. Files the snapshot
+ * restored that git has never seen are untracked, and `git commit -a` does not
+ * include those -- also verified against real git. Selecting untracked files
+ * would need an explicit pathspec, which is a behaviour change this fix does not
+ * make.
+ *
+ * Extracted from the command so the staging contract is testable without a real
+ * repository; the parameter type is the real `CommitOptions`, so a double that
+ * satisfies it is proof the call shape is right.
+ */
+export async function stageAndCommit(
+  repo: { commit: (message: string, opts?: CommitOptions) => Promise<void> },
+  message: string,
+): Promise<void> {
+  await repo.commit(message, { all: true });
 }
