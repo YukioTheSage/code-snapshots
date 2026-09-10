@@ -17,6 +17,12 @@
   "include": [
     "src/**/*"
   ],
+  // Tests are excluded from the build output on purpose: they must not ship in
+  // dist/. They are type-checked separately by tsconfig.test.json through the
+  // `check-types:test` script, which CI runs. Excluding them here is exactly
+  // what allowed four suites to fail to compile while `tsc --noEmit` still
+  // exited 0, so do not "fix" this by deleting the exclude -- that would ship
+  // test code and still not type-check it at build time.
   "exclude": [
     "node_modules",
     "dist",
