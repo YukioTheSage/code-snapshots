@@ -1,6 +1,7 @@
 // New file: src/ui/snapshotContextInput.ts
 import path = require('path');
 import * as vscode from 'vscode';
+import { GitignoreParser } from 'codelapse-core';
 
 export interface SnapshotContextOptions {
   description: string;
@@ -12,28 +13,41 @@ export interface SnapshotContextOptions {
   selectedFiles: string[]; // Relative paths of selected files (when isSelective is true)
 }
 
-export class SnapshotContextInput {
-  /**
-   * Opens a multi-step input process to collect enhanced context for a snapshot
-   * @returns The collected context options, or undefined if cancelled
-   */
-  // Add method to get workspace files using VS Code API
-  private static async getWorkspaceFiles(): Promise<vscode.Uri[]> {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) {
-      return [];
+/**
+ * Lists files the snapshot engine will actually include.
+ *
+ * Uses the same `GitignoreParser` that `takeSnapshotInternal` uses, so the
+ * picker cannot offer a file the engine then filters out. The previous
+ * implementation hardcoded `**\/node_modules/**` and ignored `.gitignore`, so a
+ * user could select build output and end up with a snapshot containing none of
+ * their selections.
+ */
+export async function listSelectableFiles(
+  workspaceRoot: string,
+): Promise<string[]> {
+  const parser = new GitignoreParser(workspaceRoot);
+  const initial = await vscode.workspace.findFiles(
+    '**/*',
+    parser.getExcludeGlobPattern(),
+  );
+
+  const seen = new Set<string>();
+  for (const uri of initial) {
+    const relative = path
+      .relative(workspaceRoot, uri.fsPath)
+      .replace(/\\/g, '/');
+    if (!relative || relative.startsWith('..')) {
+      continue;
     }
-
-    // Fetch files using same ignore patterns as the snapshot functionality
-    // Note: We're simplifying the ignore pattern handling here
-    const files = await vscode.workspace.findFiles(
-      '**/*',
-      '{**/node_modules/**,**/.git/**,**/.snapshots/**}',
-    );
-
-    return files;
+    if (!parser.shouldIgnore(relative)) {
+      seen.add(relative);
+    }
   }
 
+  return [...seen].sort();
+}
+
+export class SnapshotContextInput {
   public static async show(
     initialDescription = '',
   ): Promise<SnapshotContextOptions | undefined> {
@@ -53,6 +67,9 @@ export class SnapshotContextInput {
       {
         placeHolder: 'Select snapshot type',
         title: 'Take Snapshot',
+        // Without this, clicking away silently discards a half-completed
+        // wizard and the take reports as cancelled.
+        ignoreFocusOut: true,
       },
     );
 
@@ -65,6 +82,7 @@ export class SnapshotContextInput {
       prompt: 'Enter a description for this snapshot',
       placeHolder: 'E.g., "Implemented login feature"',
       value: initialDescription,
+      ignoreFocusOut: true,
     });
 
     if (description === undefined) {
@@ -84,9 +102,6 @@ export class SnapshotContextInput {
 
     // For selective snapshot, let the user pick files
     if (contextLevel.label === 'Selective Snapshot') {
-      // Get workspace files
-      const files = await this.getWorkspaceFiles();
-
       // Guard against missing workspace
       if (
         !vscode.workspace.workspaceFolders ||
@@ -97,17 +112,20 @@ export class SnapshotContextInput {
       }
       const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
 
-      // Create QuickPick items from files
-      const fileItems = files.map((file) => {
-        const relativePath = path.relative(workspaceRoot, file.fsPath);
-        return {
-          label: relativePath,
-          picked: false, // Initially not selected
-        };
-      });
+      const files = await listSelectableFiles(workspaceRoot);
 
-      // Sort alphabetically for easier selection
-      fileItems.sort((a, b) => a.label.localeCompare(b.label));
+      if (files.length === 0) {
+        vscode.window.showWarningMessage(
+          'No files in this workspace are eligible for a snapshot. Check .gitignore and the snapshotLocation setting.',
+        );
+        return undefined;
+      }
+
+      // Create QuickPick items from files
+      const fileItems = files.map((relativePath) => ({
+        label: relativePath,
+        picked: false, // Initially not selected
+      }));
 
       // Show multi-select QuickPick
       const selectedItems = await vscode.window.showQuickPick(fileItems, {
@@ -115,6 +133,7 @@ export class SnapshotContextInput {
         placeHolder:
           'Select files to include in this snapshot (files not selected will be ignored)',
         title: 'Select Files for Snapshot',
+        ignoreFocusOut: true,
       });
 
       if (selectedItems === undefined) {
@@ -149,6 +168,7 @@ export class SnapshotContextInput {
     const tagsInput = await vscode.window.showInputBox({
       prompt: 'Enter tags (comma-separated)',
       placeHolder: 'E.g., "feature, login, authentication"',
+      ignoreFocusOut: true,
     });
 
     if (tagsInput === undefined) {
@@ -168,6 +188,7 @@ export class SnapshotContextInput {
     const taskRef = await vscode.window.showInputBox({
       prompt: 'Enter associated task/issue reference (optional)',
       placeHolder: 'E.g., "JIRA-123" or "Issue #42"',
+      ignoreFocusOut: true,
     });
 
     if (taskRef === undefined) {
@@ -180,6 +201,7 @@ export class SnapshotContextInput {
     const notes = await vscode.window.showInputBox({
       prompt: 'Enter additional notes (optional)',
       placeHolder: 'E.g., "Fixed edge cases with validation"',
+      ignoreFocusOut: true,
     });
 
     if (notes === undefined) {
@@ -191,6 +213,7 @@ export class SnapshotContextInput {
     // 4. Favorite marking
     const favoriteResponse = await vscode.window.showQuickPick(['No', 'Yes'], {
       placeHolder: 'Mark this snapshot as a favorite?',
+      ignoreFocusOut: true,
     });
 
     if (favoriteResponse === undefined) {

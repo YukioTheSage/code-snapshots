@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { SnapshotManager } from './snapshotManager';
+import { SnapshotManager, TakeSnapshotOutcome } from './snapshotManager';
 import { SnapshotQuickPick } from './ui/quickPick';
 import { SnapshotTreeDataProvider, SnapshotTreeItem } from './ui/treeView';
 import { SnapshotContentProvider } from './snapshotContentProvider';
@@ -488,9 +488,24 @@ function registerJumpToSnapshotCommand({
           log(
             'Taking snapshot before restoring due to unsaved changes conflict.',
           );
-          // Trigger the take snapshot command - assumes it handles its own progress/UI
-          await vscode.commands.executeCommand('vscode-snapshots.takeSnapshot');
-          // Check if snapshot was actually taken? For now, assume success or command handles failure.
+
+          // The take command prompts for context, so the user can cancel it,
+          // and it refuses to record anything when the workspace is unchanged.
+          // Both outcomes leave the unsaved changes unprotected, and the
+          // previous code restored anyway -- discarding exactly what this
+          // prompt exists to protect.
+          const outcome = await vscode.commands.executeCommand<
+            TakeSnapshotOutcome | undefined
+          >('vscode-snapshots.takeSnapshot');
+
+          if (!outcome?.created) {
+            log('No snapshot was taken; cancelling the restore.');
+            vscode.window.showWarningMessage(
+              'No snapshot was taken, so the restore has been cancelled to avoid discarding your unsaved changes.',
+            );
+            return;
+          }
+
           log('Snapshot taken, proceeding with restore.');
         }
         log(
