@@ -374,23 +374,10 @@ export async function activate(context: vscode.ExtensionContext) {
       }, 10000); // Show after 10 seconds
     }
 
-    // Register additional command that will be needed for the UX improvements
-    const registerFocusSnapshotViewCommand = (
-      context: vscode.ExtensionContext,
-    ): void => {
-      const focusViewCmd = vscode.commands.registerCommand(
-        'vscode-snapshots.focusSnapshotView',
-        async () => {
-          await vscode.commands.executeCommand(
-            'workbench.view.extension.snapshot-explorer',
-          );
-        },
-      );
-      context.subscriptions.push(focusViewCmd);
-      log('focusSnapshotView command registered');
-    };
-
-    registerFocusSnapshotViewCommand(context);
+    // The "focus view" commands live in commands.ts: this file used to
+    // register `focusSnapshotView`, an id no manifest entry declares and no
+    // caller invokes, while the two ids that *are* contributed went
+    // unregistered and reported "command not found" from the palette.
 
     // Enhance status bar with more help
     statusBarItem.tooltip =

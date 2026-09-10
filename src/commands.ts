@@ -46,6 +46,7 @@ export function registerCommands(deps: CommandDependencies): void {
   registerDiagnosticCommand(deps);
   registerManageAutoSnapshotRulesCommand(deps);
   registerToggleChangedFilesCommand(deps);
+  registerFocusViewCommands(deps);
   registerSemanticIndexCommand(deps);
   registerSemanticSearchCommand(deps);
   registerShowLogsCommand(deps);
@@ -54,6 +55,50 @@ export function registerCommands(deps: CommandDependencies): void {
 }
 
 // --- Individual Command Registration Functions ---
+
+/**
+ * Registers the two "focus this view" commands.
+ *
+ * VS Code generates `<viewId>.focus` for every view declared in
+ * `contributes.views`. The previous implementation registered an id that was
+ * never contributed and targeted a workbench command that does not exist, so
+ * the two ids the manifest actually declares reported "command not found".
+ */
+function registerFocusViewCommands({ context }: CommandDependencies): void {
+  log('Registering focus view commands...');
+
+  const manual = vscode.commands.registerCommand(
+    'vscode-snapshots.focusManualSnapshotView',
+    async () => {
+      // Both views declare `when: workspaceFolderCount > 0`, so with no folder
+      // open there is no view to focus and executeCommand would do nothing
+      // silently. Say so instead.
+      if (!vscode.workspace.workspaceFolders?.length) {
+        vscode.window.showInformationMessage(
+          'Open a folder to use the CodeLapse snapshot views.',
+        );
+        return;
+      }
+      await vscode.commands.executeCommand('manualSnapshotHistoryView.focus');
+    },
+  );
+
+  const auto = vscode.commands.registerCommand(
+    'vscode-snapshots.focusAutoSnapshotView',
+    async () => {
+      if (!vscode.workspace.workspaceFolders?.length) {
+        vscode.window.showInformationMessage(
+          'Open a folder to use the CodeLapse snapshot views.',
+        );
+        return;
+      }
+      await vscode.commands.executeCommand('autoSnapshotHistoryView.focus');
+    },
+  );
+
+  context.subscriptions.push(manual, auto);
+  log('Focus view commands registered successfully');
+}
 
 function registerManageAutoSnapshotRulesCommand({
   context,
@@ -604,6 +649,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot) {
         log('restoreFromTree called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       // Execute the main jumpToSnapshot command, which now handles UI/confirmation
@@ -626,6 +674,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot) {
         log('compareWithCurrentFromTree called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -738,6 +789,9 @@ function registerTreeViewCommands({
       // Ensure item is a snapshot node, not a file node
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('deleteFromTree called with invalid or non-snapshot item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -777,6 +831,9 @@ function registerTreeViewCommands({
         item.contextValue !== 'snapshotFile' // Ensure it's a file item
       ) {
         log('compareFileWithWorkspace called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a file inside a snapshot in the CodeLapse view.',
+        );
         return;
       }
 
@@ -862,6 +919,9 @@ function registerTreeViewCommands({
         item.contextValue !== 'snapshotFile' // Ensure it's a file item
       ) {
         log('restoreFileFromSnapshot called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a file inside a snapshot in the CodeLapse view.',
+        );
         return;
       }
 
@@ -928,6 +988,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('showChangedFilesInSnapshot called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
 
@@ -1053,6 +1116,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('toggleFavoriteStatus called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -1094,6 +1160,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('editSnapshotTags called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -1150,6 +1219,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('editSnapshotNotes called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -1197,6 +1269,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('editTaskReference called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -2216,7 +2291,7 @@ function registerCreateGitCommitCommand({
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('createGitCommitFromSnapshot called with invalid item.');
         vscode.window.showErrorMessage(
-          'Please run this command from a snapshot item in the tree view.',
+          'Run this command from a snapshot in the CodeLapse view.',
         );
         return;
       }

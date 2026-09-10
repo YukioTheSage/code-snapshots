@@ -181,6 +181,11 @@
         "command": "vscode-snapshots.editConfig",
         "title": "Snapshots: Edit Setting",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "vscode-snapshots.toggleChangedFilesView",
+        "title": "Snapshots: Toggle Show Only Changed Files",
+        "icon": "$(list-filter)"
       }
     ],
     "configuration": {
@@ -541,6 +546,16 @@
           "command": "vscode-snapshots.searchSnapshots",
           "when": "view == manualSnapshotHistoryView || view == autoSnapshotHistoryView",
           "group": "navigation@6"
+        },
+        {
+          "command": "vscode-snapshots.toggleChangedFilesView",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "navigation@7"
+        },
+        {
+          "command": "vscode-snapshots.toggleChangedFilesView",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "navigation@7"
         }
       ],
       "commandPalette": [
@@ -555,6 +570,50 @@
         {
           "command": "vscode-snapshots.focusAutoSnapshotView",
           "group": "CodeLapse"
+        },
+        {
+          "command": "vscode-snapshots.restoreFromTree",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.compareWithCurrentFromTree",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.deleteFromTree",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.compareFileWithWorkspace",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.restoreFileFromSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.showChangedFilesInSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.toggleFavoriteStatus",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotTags",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotNotes",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editTaskReference",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editConfig",
+          "when": "false"
         }
       ]
     }
