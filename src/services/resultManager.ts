@@ -256,15 +256,22 @@ export class ResultManager {
       rankingConfig,
     );
 
-    // Normalize scores if requested
-    if (rankingConfig.normalizeScores) {
-      this.normalizeScores(adjustedResults);
-    }
-
-    // Filter by minimum threshold
+    // Filter by the minimum threshold FIRST, on the un-normalized composite.
+    // The composite is an absolute [0, 1] score -- a weighted sum whose weights
+    // total 1 -- so a floor of 0.1 is a real floor. Filtering after
+    // normalization was not: normalization maps the lowest score to exactly 0,
+    // so `0 >= 0.1` is false and the last result was discarded on every search
+    // no matter how good it was.
     const thresholdResults = adjustedResults.filter(
       (item) => item.compositeScore >= rankingConfig.minScoreThreshold,
     );
+
+    // Normalize the survivors. Normalization is a ranking device -- it makes
+    // rankingScore comparable across a result set -- and it is monotone, so it
+    // cannot change the order the sort above established.
+    if (rankingConfig.normalizeScores) {
+      this.normalizeScores(thresholdResults);
+    }
 
     logVerbose(
       `Ranked ${results.length} results, ${thresholdResults.length} passed threshold`,
