@@ -1462,15 +1462,25 @@ export class SnapshotManager {
   }
 
   /**
-   * Refresh all open editors to show updated content after a restore.
-   * TODO: This might be better placed in extension.ts or a dedicated UI update module.
+   * Reloads open editors from disk after a restore, preserving the cursor and
+   * scroll position.
+   *
+   * The edit is applied per document rather than as one workspace-wide edit, so
+   * a single unreadable file cannot abort the refresh for the others.
    */
   private async refreshOpenEditors() {
     for (const editor of vscode.window.visibleTextEditors) {
-      try {
-        const document = editor.document;
+      const document = editor.document;
 
-        // Skip documents with unsaved changes
+      try {
+        // Only real files on disk have content to re-read. A diff view, an
+        // output channel or an untitled buffer has no fsPath to read.
+        if (document.uri.scheme !== 'file') {
+          continue;
+        }
+
+        // Never touch a buffer with unsaved changes: the replacement below is a
+        // full-document overwrite, so the user's edits would vanish.
         if (document.isDirty) {
           log(
             `Skipping refresh for ${document.uri.fsPath} due to unsaved changes`,
@@ -1478,24 +1488,47 @@ export class SnapshotManager {
           continue;
         }
 
+        let content: string;
+        try {
+          content = await fsPromises.readFile(document.uri.fsPath, 'utf8');
+        } catch (error) {
+          // A restore can delete the file that is still open, which is an
+          // expected outcome rather than a failure to report.
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === 'ENOENT') {
+            logVerbose(
+              `Skipping refresh for ${document.uri.fsPath}: the file no longer exists`,
+            );
+          } else {
+            log(`Failed to read ${document.uri.fsPath} for refresh: ${error}`);
+          }
+          continue;
+        }
+
+        // Nothing changed on disk, so there is no reason to replace the buffer
+        // and disturb the user's selection.
+        if (content === document.getText()) {
+          continue;
+        }
+
         // Save current view state
         const selection = editor.selection;
         const visibleRanges = editor.visibleRanges;
 
-        // Read and update content
-        const content = await fsPromises.readFile(document.uri.fsPath, 'utf8');
         const fullRange = new vscode.Range(
           document.positionAt(0),
           document.positionAt(document.getText().length),
         );
-
         const edit = new vscode.WorkspaceEdit();
         edit.replace(document.uri, fullRange, content);
         await vscode.workspace.applyEdit(edit);
 
-        // Restore view state
+        // Restore view state. `visibleRanges` is empty for a document that is
+        // not laid out, and `visibleRanges[0]` would then be undefined.
         editor.selection = selection;
-        editor.revealRange(visibleRanges[0]);
+        if (visibleRanges.length > 0) {
+          editor.revealRange(visibleRanges[0]);
+        }
       } catch (error) {
         log(
           `Failed to refresh editor for ${editor.document.uri.fsPath}: ${error}`,
