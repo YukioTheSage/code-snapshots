@@ -824,30 +824,31 @@ export class SemanticSearchService implements vscode.Disposable {
 
   /**
    * Handle snapshot deletion
+   *
+   * Order matters: the vector store is cleared *first*. Purging the in-memory
+   * set first meant a failed store delete left the extension believing the
+   * snapshot was de-indexed while its vectors stayed searchable forever --
+   * consuming topK slots on hits that were then discarded. Failing before the
+   * bookkeeping leaves the snapshot marked as indexed so a later attempt can
+   * retry, and the error is propagated for the caller to report.
    */
   async deleteSnapshotIndexing(snapshotId: string): Promise<void> {
-    try {
-      // Remove from indexed set
-      this.indexedSnapshots.delete(snapshotId);
-      // Persist removal
-      await this.context.workspaceState.update(
-        'semanticSearch.indexedSnapshots',
-        Array.from(this.indexedSnapshots),
-      );
+    await this.vectorDatabaseService.deleteSnapshotVectors(snapshotId);
 
-      // Remove from queue if present
-      const queueIndex = this.processingQueue.indexOf(snapshotId);
-      if (queueIndex !== -1) {
-        this.processingQueue.splice(queueIndex, 1);
-      }
+    this.indexedSnapshots.delete(snapshotId);
+    // Persist removal
+    await this.context.workspaceState.update(
+      'semanticSearch.indexedSnapshots',
+      Array.from(this.indexedSnapshots),
+    );
 
-      // Delete from vector database
-      await this.vectorDatabaseService.deleteSnapshotVectors(snapshotId);
-
-      log(`Removed indexing for snapshot ${snapshotId}`);
-    } catch (error) {
-      log(`Error deleting snapshot indexing: ${error}`);
+    // Remove from queue if present
+    const queueIndex = this.processingQueue.indexOf(snapshotId);
+    if (queueIndex !== -1) {
+      this.processingQueue.splice(queueIndex, 1);
     }
+
+    log(`Removed indexing for snapshot ${snapshotId}`);
   }
 
   /**
