@@ -3,12 +3,14 @@ import * as vscode from 'vscode'; // Ensure vscode is imported for QuickPick etc
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { promises as fsPromises } from 'fs'; // Import promises API
-import { GitignoreParser } from './gitignoreParser';
+import { GitignoreParser, runWithConcurrencyLimit } from 'codelapse-core';
 import { log, logVerbose } from './logger';
 import { getMaxSnapshots } from './config';
 import { createDiff } from './snapshotDiff'; // Removed unused applyDiff import
 import { SnapshotStorage } from './snapshotStorage';
 import { API as GitAPI } from './types/git'; // Import Git API type
+import { assertNoSymlinkPath, ensureWithinDirectory } from './pathSecurity';
+import { MAX_FILE_SIZE_BYTES } from './security/limits';
 
 // Keep Snapshot interface definition here as it's central to the manager
 export interface Snapshot {
@@ -41,6 +43,7 @@ export class SnapshotManager {
   private currentSnapshotIndex = -1;
   private storage: SnapshotStorage;
   private gitApi: GitAPI | null; // Store Git API instance
+  private writeLock: Promise<void> = Promise.resolve();
   private _onDidChangeSnapshots = new vscode.EventEmitter<void>(); // Event emitter
   public readonly onDidChangeSnapshots: vscode.Event<void> =
     this._onDidChangeSnapshots.event; // Public event
@@ -100,11 +103,42 @@ export class SnapshotManager {
     );
   }
 
+  private async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previousLock = this.writeLock;
+    let releaseLock: () => void = () => undefined;
+    this.writeLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    await previousLock;
+    try {
+      return await operation();
+    } finally {
+      releaseLock();
+    }
+  }
+
   /**
    * Take a snapshot of the current workspace
    * @param description Optional description provided by the user.
    */
   public async takeSnapshot(
+    description = '',
+    contextOptions: {
+      tags?: string[];
+      notes?: string;
+      taskReference?: string;
+      isFavorite?: boolean;
+      isSelective?: boolean;
+      selectedFiles?: string[];
+    } = {},
+  ): Promise<Snapshot> {
+    return await this.withWriteLock(() =>
+      this.takeSnapshotInternal(description, contextOptions),
+    );
+  }
+
+  private async takeSnapshotInternal(
     description = '',
     contextOptions: {
       tags?: string[];
@@ -226,8 +260,13 @@ export class SnapshotManager {
     });
 
     // 4. Apply selective filtering if needed
-    let finalFiles = Array.from(finalFileUrisMap.values());
-    log(`Final file count after combining negated rules: ${finalFiles.length}`);
+    let finalFiles = Array.from(finalFileUrisMap.values()).filter((fileUri) => {
+      const relativePath = path.relative(workspaceRoot, fileUri.fsPath);
+      return !parser.shouldIgnore(relativePath);
+    });
+    log(
+      `Final file count after combining negated rules and local filtering: ${finalFiles.length}`,
+    );
     if (
       snapshot.isSelective &&
       snapshot.selectedFiles &&
@@ -316,15 +355,28 @@ export class SnapshotManager {
     }
 
     // Process each file identified by the new filtering logic
-    for (const file of finalFiles) {
+    await runWithConcurrencyLimit(finalFiles, 50, async (file) => {
       // File was NOT ignored by the new logic, so we process it
       logVerbose(`Including file in snapshot: ${file.fsPath}`);
 
       // Skip binary files and files we can't read (using storage method)
       try {
         const relativePath = path.relative(workspaceRoot, file.fsPath);
+        const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
+        await assertNoSymlinkPath(workspaceRoot, fullPath);
+        const fileStats = await fsPromises.lstat(fullPath);
+        if (!fileStats.isFile() || fileStats.isSymbolicLink()) {
+          logVerbose(`Skipping non-regular file: ${relativePath}`);
+          return;
+        }
+        if (fileStats.size > MAX_FILE_SIZE_BYTES) {
+          logVerbose(
+            `Skipping oversized file ${relativePath}: ${fileStats.size} bytes exceeds ${MAX_FILE_SIZE_BYTES} byte limit`,
+          );
+          return;
+        }
 
-        if (this.storage.isBinaryFile(file.fsPath)) {
+        if (this.storage.isBinaryFile(fullPath)) {
           // Record it exists, but don't store content
           snapshot.files[relativePath] = {
             isBinary: true,
@@ -332,14 +384,14 @@ export class SnapshotManager {
             baseSnapshotId: baseSnapshot?.files[relativePath]?.baseSnapshotId,
           };
           logVerbose(`Recorded binary file presence: ${relativePath}`);
-          continue; // Skip content reading for binary files
+          return; // Skip content reading for binary files
         }
 
         // Add await here
-        const content = await this.storage.readFileContent(file.fsPath); // Use storage method
+        const content = await this.storage.readFileContent(fullPath); // Use storage method
         if (content === null) {
-          logVerbose(`Skipping file with null content: ${file.fsPath}`);
-          continue; // Skip binary or unreadable files
+          logVerbose(`Skipping file with null content: ${fullPath}`);
+          return; // Skip binary or unreadable files
         }
 
         // If we have a base snapshot with this file, store just the diff
@@ -382,7 +434,7 @@ export class SnapshotManager {
         // Log error but continue processing other files
         log(`Error processing file ${file.fsPath}: ${error}`); // Use imported log directly
       }
-    }
+    });
 
     // Check for files that existed in the previous snapshot but don't exist anymore
     // These represent deleted files that need to be tracked
@@ -507,14 +559,18 @@ export class SnapshotManager {
       }
     }
     const currentWorkspaceFilesRelative = new Set<string>();
-    initialCurrentFiles.forEach((uri) =>
-      currentWorkspaceFilesRelative.add(
-        path.relative(workspaceRoot, uri.fsPath),
-      ),
-    );
+    initialCurrentFiles.forEach((uri) => {
+      const relativePath = path.relative(workspaceRoot, uri.fsPath);
+      if (!parser.shouldIgnore(relativePath)) {
+        currentWorkspaceFilesRelative.add(relativePath);
+      }
+    });
     reIncludedCurrentFiles.forEach((fsPath) => {
       const relativePath = path.relative(workspaceRoot, fsPath);
-      if (!currentWorkspaceFilesRelative.has(relativePath)) {
+      if (
+        !currentWorkspaceFilesRelative.has(relativePath) &&
+        !parser.shouldIgnore(relativePath)
+      ) {
         currentWorkspaceFilesRelative.add(relativePath);
       }
     });
@@ -544,73 +600,82 @@ export class SnapshotManager {
     }[] = [];
 
     // Check for modifications and additions
-    for (const [relativePath, fileData] of expectedSnapshotFiles.entries()) {
-      if (fileData.deleted) continue; // Handle deletions separately
+    await runWithConcurrencyLimit(
+      Array.from(expectedSnapshotFiles.entries()),
+      50,
+      async ([relativePath, fileData]) => {
+        if (fileData.deleted) return; // Handle deletions separately
 
-      if (fileData.isBinary) {
-        if (!currentWorkspaceFilesRelative.has(relativePath)) {
-          // Only show addition if binary file doesn't exist in workspace
+        if (fileData.isBinary) {
+          if (!currentWorkspaceFilesRelative.has(relativePath)) {
+            // Only show addition if binary file doesn't exist in workspace
+            changes.push({
+              label: `+ ${relativePath} (Binary)`,
+              description: 'Added (Binary File)',
+              relativePath,
+              status: 'A',
+            });
+          }
+          return; // Skip further comparison for binary files
+        }
+
+        const workspacePath = ensureWithinDirectory(
+          workspaceRoot,
+          relativePath,
+        );
+        let workspaceContent: string | null = null;
+        let snapshotContent: string | null = null;
+        let isDirty = false;
+
+        // Check if file exists in workspace and if it's dirty
+        if (currentWorkspaceFilesRelative.has(relativePath)) {
+          try {
+            workspaceContent = await this.storage.readFileContent(
+              workspacePath,
+            ); // Use storage method
+            // Check if the file is open and dirty
+            const openEditor = vscode.window.visibleTextEditors.find(
+              (editor) => editor.document.uri.fsPath === workspacePath,
+            );
+            if (openEditor?.document.isDirty) {
+              isDirty = true;
+            }
+          } catch (e) {
+            logVerbose(
+              `Could not read workspace file ${relativePath} for change calculation: ${e}`,
+            );
+            // Treat as if it doesn't exist for comparison purposes
+          }
+        }
+
+        // Get snapshot content (only if needed for comparison or addition)
+        snapshotContent = await this.getSnapshotFileContentPublic(
+          snapshot.id,
+          relativePath,
+        );
+
+        if (currentWorkspaceFilesRelative.has(relativePath)) {
+          // File exists in both: Check for modification
+          if (workspaceContent !== snapshotContent) {
+            changes.push({
+              label: `~ ${relativePath}${isDirty ? ' *' : ''}`, // Mark dirty files
+              description: 'Modified',
+              relativePath,
+              status: 'M',
+              isDirty,
+            });
+          }
+        } else {
+          // File exists in snapshot but not workspace: Added
           changes.push({
-            label: `+ ${relativePath} (Binary)`,
-            description: 'Added (Binary File)',
+            label: `+ ${relativePath}`,
+            description: 'Added',
             relativePath,
             status: 'A',
           });
         }
-        continue; // Skip further comparison for binary files
-      }
-
-      const workspacePath = path.join(workspaceRoot, relativePath);
-      let workspaceContent: string | null = null;
-      let snapshotContent: string | null = null;
-      let isDirty = false;
-
-      // Check if file exists in workspace and if it's dirty
-      if (currentWorkspaceFilesRelative.has(relativePath)) {
-        try {
-          workspaceContent = await this.storage.readFileContent(workspacePath); // Use storage method
-          // Check if the file is open and dirty
-          const openEditor = vscode.window.visibleTextEditors.find(
-            (editor) => editor.document.uri.fsPath === workspacePath,
-          );
-          if (openEditor?.document.isDirty) {
-            isDirty = true;
-          }
-        } catch (e) {
-          logVerbose(
-            `Could not read workspace file ${relativePath} for change calculation: ${e}`,
-          );
-          // Treat as if it doesn't exist for comparison purposes
-        }
-      }
-
-      // Get snapshot content (only if needed for comparison or addition)
-      snapshotContent = await this.getSnapshotFileContentPublic(
-        snapshot.id,
-        relativePath,
-      );
-
-      if (currentWorkspaceFilesRelative.has(relativePath)) {
-        // File exists in both: Check for modification
-        if (workspaceContent !== snapshotContent) {
-          changes.push({
-            label: `~ ${relativePath}${isDirty ? ' *' : ''}`, // Mark dirty files
-            description: 'Modified',
-            relativePath,
-            status: 'M',
-            isDirty,
-          });
-        }
-      } else {
-        // File exists in snapshot but not workspace: Added
-        changes.push({
-          label: `+ ${relativePath}`,
-          description: 'Added',
-          relativePath,
-          status: 'A',
-        });
-      }
-    }
+      },
+    );
 
     // Check for deletions
     for (const relativePath of currentWorkspaceFilesRelative) {
@@ -619,7 +684,10 @@ export class SnapshotManager {
         expectedSnapshotFiles.get(relativePath)?.deleted
       ) {
         // File exists in workspace but not in snapshot (or marked deleted): Deletion
-        const workspacePath = path.join(workspaceRoot, relativePath);
+        const workspacePath = ensureWithinDirectory(
+          workspaceRoot,
+          relativePath,
+        );
 
         // NEW: Preserve binary files during restore preview
         if (this.storage.isBinaryFile(workspacePath)) {
@@ -669,7 +737,7 @@ export class SnapshotManager {
           !previousSnapshot.files[relativePath].deleted
         ) {
           // NEW: Skip binary files marked as deleted
-          const fullPath = path.join(workspaceRoot, relativePath);
+          const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
           if (this.storage.isBinaryFile(fullPath)) {
             logVerbose(
               `Binary file excluded from deletion in snapshot metadata preview: ${relativePath}`,
@@ -721,6 +789,14 @@ export class SnapshotManager {
    * @throws Error if workspace root is not found or snapshot is invalid.
    */
   public async applySnapshotRestore(snapshotId: string): Promise<boolean> {
+    return await this.withWriteLock(() =>
+      this.applySnapshotRestoreInternal(snapshotId),
+    );
+  }
+
+  private async applySnapshotRestoreInternal(
+    snapshotId: string,
+  ): Promise<boolean> {
     // Find the snapshot
     const index = this.snapshots.findIndex((s) => s.id === snapshotId);
     if (index === -1) {
@@ -779,7 +855,10 @@ export class SnapshotManager {
       { deleted?: boolean; isBinary?: boolean }
     >();
     Object.entries(snapshot.files).forEach(([relativePath, fileData]) => {
-      expectedSnapshotFiles.set(relativePath, { deleted: fileData.deleted });
+      expectedSnapshotFiles.set(relativePath, {
+        deleted: fileData.deleted,
+        isBinary: fileData.isBinary,
+      });
     });
 
     let restoredCount = 0;
@@ -792,7 +871,7 @@ export class SnapshotManager {
         !expectedSnapshotFiles.has(relativePath) ||
         expectedSnapshotFiles.get(relativePath)?.deleted
       ) {
-        const fullPath = path.join(workspaceRoot, relativePath);
+        const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
 
         // CRITICAL FIX: Preserve binary files even if they weren't in the snapshot
         if (this.storage.isBinaryFile(fullPath)) {
@@ -816,7 +895,7 @@ export class SnapshotManager {
     // 2. Handle Restorations/Additions: Files in snapshot (and not marked deleted)
     expectedSnapshotFiles.forEach(async (fileData, relativePath) => {
       if (!fileData.deleted) {
-        const fullPath = path.join(workspaceRoot, relativePath);
+        const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
 
         if (fileData.isBinary) {
           // Don't attempt to restore content for binary files
@@ -970,54 +1049,51 @@ export class SnapshotManager {
       return false;
     }
 
-    const snapshotToDelete = this.snapshots[index];
-
-    // Delete the snapshot data using storage
-    // Add await here
-    await this.storage.deleteSnapshotData(snapshotToDelete.id);
-    // Note: deleteSnapshotData handles logging and errors internally
-
-    // Remove from the snapshots array
-    this.snapshots.splice(index, 1);
-    log(`Removed snapshot ${snapshotId} from in-memory list.`);
-
-    // Adjust currentSnapshotIndex if necessary
-    if (this.snapshots.length === 0) {
-      this.currentSnapshotIndex = -1;
-      log('No snapshots left, resetting current index.');
-    } else if (index <= this.currentSnapshotIndex) {
-      // If deleted snapshot was at or before the current one, decrement index
-      // (Handles deleting the current one, or one before it)
-      // Use max to ensure index doesn't go below -1 if the first was deleted
-      this.currentSnapshotIndex = Math.max(-1, this.currentSnapshotIndex - 1);
-      log(
-        `Adjusted current index due to deletion: ${this.currentSnapshotIndex}`,
-      );
-    }
-    // If index > currentSnapshotIndex, no adjustment needed
-
-    // Delete semantic search data
-    const semanticSearchService = (this as any).semanticSearchService;
-    if (semanticSearchService) {
-      try {
-        await semanticSearchService.deleteSnapshotIndexing(snapshotToDelete.id);
-      } catch (error) {
-        log(`Error deleting semantic search data: ${error}`);
+    return await this.withWriteLock(async () => {
+      const lockedIndex = this.snapshots.findIndex((s) => s.id === snapshotId);
+      if (lockedIndex === -1) {
+        log(`Snapshot ${snapshotId} no longer exists.`);
+        return false;
       }
-    }
 
-    // Save the updated index
-    await this.saveSnapshotIndex();
-    log(`Snapshot index saved after deleting ${snapshotId}.`);
+      const snapshotToDelete = this.snapshots[lockedIndex];
+      await this.storage.deleteSnapshotData(snapshotToDelete.id);
 
-    // Emit event
-    this._onDidChangeSnapshots.fire();
-    log('Fired onDidChangeSnapshots event after deleteSnapshot');
+      this.snapshots.splice(lockedIndex, 1);
+      log(`Removed snapshot ${snapshotId} from in-memory list.`);
 
-    vscode.window.showInformationMessage(
-      `Snapshot "${snapshotToDelete.description || snapshotId}" deleted.`,
-    );
-    return true;
+      if (this.snapshots.length === 0) {
+        this.currentSnapshotIndex = -1;
+        log('No snapshots left, resetting current index.');
+      } else if (lockedIndex <= this.currentSnapshotIndex) {
+        this.currentSnapshotIndex = Math.max(-1, this.currentSnapshotIndex - 1);
+        log(
+          `Adjusted current index due to deletion: ${this.currentSnapshotIndex}`,
+        );
+      }
+
+      const semanticSearchService = (this as any).semanticSearchService;
+      if (semanticSearchService) {
+        try {
+          await semanticSearchService.deleteSnapshotIndexing(
+            snapshotToDelete.id,
+          );
+        } catch (error) {
+          log(`Error deleting semantic search data: ${error}`);
+        }
+      }
+
+      await this.saveSnapshotIndex();
+      log(`Snapshot index saved after deleting ${snapshotId}.`);
+
+      this._onDidChangeSnapshots.fire();
+      log('Fired onDidChangeSnapshots event after deleteSnapshot');
+
+      vscode.window.showInformationMessage(
+        `Snapshot "${snapshotToDelete.description || snapshotId}" deleted.`,
+      );
+      return true;
+    });
   }
 
   /**
@@ -1136,7 +1212,11 @@ export class SnapshotManager {
     }
 
     // Get workspace file path
-    const workspaceFilePath = path.join(workspaceRoot, relativePath);
+    const workspaceFilePath = ensureWithinDirectory(
+      workspaceRoot,
+      relativePath,
+    );
+    await assertNoSymlinkPath(workspaceRoot, workspaceFilePath);
 
     // Use storage method to write (handles directory creation)
     // Add await here
@@ -1253,51 +1333,43 @@ export class SnapshotManager {
       description?: string;
     },
   ): Promise<boolean> {
-    log(`Updating context for snapshot: ${snapshotId}`);
+    return await this.withWriteLock(async () => {
+      log(`Updating context for snapshot: ${snapshotId}`);
 
-    // Find the snapshot
-    const index = this.snapshots.findIndex((s) => s.id === snapshotId);
-    if (index === -1) {
-      log(`Snapshot ${snapshotId} not found for context update.`);
-      throw new Error(`Snapshot with ID ${snapshotId} not found.`);
-    }
+      const index = this.snapshots.findIndex((s) => s.id === snapshotId);
+      if (index === -1) {
+        log(`Snapshot ${snapshotId} not found for context update.`);
+        throw new Error(`Snapshot with ID ${snapshotId} not found.`);
+      }
 
-    const snapshot = this.snapshots[index];
+      const snapshot = this.snapshots[index];
 
-    // Update each field if provided
-    if (contextUpdate.tags !== undefined) {
-      snapshot.tags = contextUpdate.tags;
-    }
+      if (contextUpdate.tags !== undefined) {
+        snapshot.tags = contextUpdate.tags;
+      }
+      if (contextUpdate.notes !== undefined) {
+        snapshot.notes = contextUpdate.notes;
+      }
+      if (contextUpdate.taskReference !== undefined) {
+        snapshot.taskReference = contextUpdate.taskReference;
+      }
+      if (contextUpdate.isFavorite !== undefined) {
+        snapshot.isFavorite = contextUpdate.isFavorite;
+      }
+      if (contextUpdate.description !== undefined) {
+        snapshot.description = contextUpdate.description;
+      }
 
-    if (contextUpdate.notes !== undefined) {
-      snapshot.notes = contextUpdate.notes;
-    }
-
-    if (contextUpdate.taskReference !== undefined) {
-      snapshot.taskReference = contextUpdate.taskReference;
-    }
-
-    if (contextUpdate.isFavorite !== undefined) {
-      snapshot.isFavorite = contextUpdate.isFavorite;
-    }
-
-    if (contextUpdate.description !== undefined) {
-      snapshot.description = contextUpdate.description;
-    }
-
-    // Save the updated snapshot
-    try {
-      await this.storage.saveSnapshotData(snapshot);
-      log(`Successfully updated context for snapshot ${snapshotId}`);
-
-      // Notify listeners of the change
-      this._onDidChangeSnapshots.fire();
-
-      return true;
-    } catch (error) {
-      log(`Error updating context for snapshot ${snapshotId}: ${error}`);
-      throw new Error(`Failed to update snapshot context: ${error}`);
-    }
+      try {
+        await this.storage.saveSnapshotData(snapshot);
+        log(`Successfully updated context for snapshot ${snapshotId}`);
+        this._onDidChangeSnapshots.fire();
+        return true;
+      } catch (error) {
+        log(`Error updating context for snapshot ${snapshotId}: ${error}`);
+        throw new Error(`Failed to update snapshot context: ${error}`);
+      }
+    });
   }
 
   // Removed deleteDirectory - handled by SnapshotStorage

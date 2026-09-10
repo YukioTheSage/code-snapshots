@@ -30,6 +30,9 @@ export interface SearchResult {
 export class VectorDatabaseService {
   private readonly INDEX_NAME = 'codelapse-snapshots';
   private readonly DIMENSION = 3072; // Must match Gemini's embedding dimension
+  private readonly MAX_INIT_ATTEMPTS = 3;
+  private readonly MAX_INDEX_READY_CHECKS = 24;
+  private readonly INDEX_READY_POLL_INTERVAL_MS = 5000;
 
   private credentialsManager: CredentialsManager;
   private pineconeClient: Pinecone | null = null;
@@ -40,73 +43,96 @@ export class VectorDatabaseService {
     // Note: Initialization is deferred until first use via ensureInitialized()
   }
 
-  private async initialize(): Promise<void> {
-    try {
-      let apiKey = await this.credentialsManager.getPineconeApiKey();
-
-      if (!apiKey) {
-        log('Pinecone API key not found. Prompting for credentials.');
-        const got = await this.credentialsManager.promptForCredentials();
-        if (!got) throw new Error('Pinecone API key required');
-        const newKey = await this.credentialsManager.getPineconeApiKey();
-        if (!newKey) throw new Error('Pinecone API key required');
-        apiKey = newKey;
+  private async waitForIndexReady(client: Pinecone): Promise<void> {
+    for (let attempt = 1; attempt <= this.MAX_INDEX_READY_CHECKS; attempt++) {
+      const indexDescription = await client.describeIndex(this.INDEX_NAME);
+      if (indexDescription.status?.ready === true) {
+        return;
       }
 
-      const validKey = apiKey;
-      this.pineconeClient = new Pinecone({ apiKey: validKey });
-
-      // Check if index exists
-      const indexList = await this.pineconeClient.listIndexes();
-      // Extract index names and check if our index exists
-      const indexNames = indexList.indexes?.map((index) => index.name) || [];
-      const indexExists = indexNames.includes(this.INDEX_NAME);
-
-      if (!indexExists) {
-        log(`Creating Pinecone index: ${this.INDEX_NAME}`);
-
-        await this.pineconeClient.createIndex({
-          name: this.INDEX_NAME,
-          dimension: this.DIMENSION,
-          metric: 'cosine',
-          spec: {
-            serverless: {
-              cloud: 'aws',
-              region: 'us-west-2',
-            },
-          },
-        });
-
-        // Wait for index to be ready
-        let isReady = false;
-        while (!isReady) {
-          const indexDescription = await this.pineconeClient.describeIndex(
-            this.INDEX_NAME,
-          );
-          isReady = indexDescription.status?.ready === true;
-          if (!isReady) {
-            log('Waiting for Pinecone index to be ready...');
-            await new Promise((resolve) => setTimeout(resolve, 5000));
-          }
-        }
+      if (attempt < this.MAX_INDEX_READY_CHECKS) {
+        log(
+          `Waiting for Pinecone index to be ready (attempt ${attempt}/${this.MAX_INDEX_READY_CHECKS})...`,
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.INDEX_READY_POLL_INTERVAL_MS),
+        );
       }
-
-      this.index = this.pineconeClient.Index(this.INDEX_NAME);
-      log('Vector database service initialized successfully');
-    } catch (error) {
-      // On auth failures (key rejected) prompt for new Pinecone API key and retry
-      if (
-        error instanceof Error &&
-        /(rejected|401|Unauthorized)/i.test(error.message)
-      ) {
-        const got = await this.credentialsManager.promptForCredentials();
-        if (!got) throw error;
-        return this.initialize();
-      }
-
-      log(`Error initializing vector database service: ${error}`);
-      throw new Error(`Failed to initialize vector database service: ${error}`);
     }
+
+    throw new Error(
+      `Pinecone index "${this.INDEX_NAME}" was not ready after ${this.MAX_INDEX_READY_CHECKS} checks`,
+    );
+  }
+
+  private async initialize(): Promise<void> {
+    for (let attempt = 1; attempt <= this.MAX_INIT_ATTEMPTS; attempt++) {
+      try {
+        let apiKey = await this.credentialsManager.getPineconeApiKey();
+
+        if (!apiKey) {
+          log('Pinecone API key not found. Prompting for credentials.');
+          const got = await this.credentialsManager.promptForCredentials();
+          if (!got) {
+            throw new Error('Pinecone API key required');
+          }
+          const newKey = await this.credentialsManager.getPineconeApiKey();
+          if (!newKey) {
+            throw new Error('Pinecone API key required');
+          }
+          apiKey = newKey;
+        }
+
+        this.pineconeClient = new Pinecone({ apiKey });
+
+        const indexList = await this.pineconeClient.listIndexes();
+        const indexNames = indexList.indexes?.map((index) => index.name) || [];
+        const indexExists = indexNames.includes(this.INDEX_NAME);
+
+        if (!indexExists) {
+          log(`Creating Pinecone index: ${this.INDEX_NAME}`);
+          await this.pineconeClient.createIndex({
+            name: this.INDEX_NAME,
+            dimension: this.DIMENSION,
+            metric: 'cosine',
+            spec: {
+              serverless: {
+                cloud: 'aws',
+                region: 'us-west-2',
+              },
+            },
+          });
+        }
+
+        await this.waitForIndexReady(this.pineconeClient);
+        this.index = this.pineconeClient.Index(this.INDEX_NAME);
+        log('Vector database service initialized successfully');
+        return;
+      } catch (error) {
+        const isAuthError =
+          error instanceof Error &&
+          /(rejected|401|Unauthorized)/i.test(error.message);
+        if (isAuthError && attempt < this.MAX_INIT_ATTEMPTS) {
+          log(
+            `Vector database auth failure (attempt ${attempt}/${this.MAX_INIT_ATTEMPTS}). Prompting for new credentials.`,
+          );
+          const got = await this.credentialsManager.promptForCredentials();
+          if (!got) {
+            throw error;
+          }
+          continue;
+        }
+
+        log(`Error initializing vector database service: ${error}`);
+        throw new Error(
+          `Failed to initialize vector database service after ${attempt} attempt(s): ${error}`,
+        );
+      }
+    }
+
+    throw new Error(
+      `Failed to initialize vector database service after ${this.MAX_INIT_ATTEMPTS} attempts`,
+    );
   }
 
   /**

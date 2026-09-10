@@ -44,7 +44,7 @@ export class SemanticSearchWebview {
       'icon.png',
     );
 
-    this.panel.webview.html = this.getWebviewContent();
+    this.panel.webview.html = this.getWebviewContent(this.panel.webview);
 
     this.panel.onDidDispose(
       () => {
@@ -249,15 +249,27 @@ export class SemanticSearchWebview {
   /**
    * Gets the HTML content for the webview
    */
-  private getWebviewContent(): string {
+  private generateNonce(): string {
+    const possible =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let nonce = '';
+    for (let i = 0; i < 32; i++) {
+      nonce += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return nonce;
+  }
+
+  private getWebviewContent(webview: vscode.Webview): string {
     // All content is inlined to avoid file access issues with esbuild
+    const nonce = this.generateNonce();
     return `<!DOCTYPE html>
     <html lang="en">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
       <title>CodeLapse Semantic Search</title>
-      <style>
+      <style nonce="${nonce}">
         /* VS Code Theme Variables */
         :root {
           --container-padding: 20px;
@@ -929,7 +941,7 @@ export class SemanticSearchWebview {
         <div class="tooltip" id="tooltip"></div>
       </div>
 
-      <script>
+      <script nonce="${nonce}">
         // Self-executing function to encapsulate scope
         (function() {
           // Initialize communication with VSCode extension

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Jest setup file for CLI tests
 
 // Mock console methods to avoid noise in test output
@@ -23,7 +24,7 @@ afterEach(() => {
     getStatus: jest.fn(),
     disconnect: jest.fn(),
     watchEvents: jest.fn(),
-    executeCommand: jest.fn()
+    executeCommand: jest.fn(),
   };
 };
 
@@ -33,7 +34,7 @@ jest.mock('fs', () => ({
   writeFileSync: jest.fn(),
   existsSync: jest.fn(),
   unlinkSync: jest.fn(),
-  mkdirSync: jest.fn()
+  mkdirSync: jest.fn(),
 }));
 
 // Increase timeout for integration tests

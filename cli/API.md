@@ -556,19 +556,19 @@ codelapse git commit snapshot-123 --branch feature/auth --push
 | `--branch <name>` | Create new branch |
 | `--push` | Push after commit |
 
-#### `git auto-snapshot <operation>`
+#### `git auto-commit <operation>`
 
 Create an auto-snapshot before a Git operation.
 
 ```bash
-codelapse git auto-snapshot merge
-codelapse git auto-snapshot rebase -d "Before rebase onto main"
+codelapse git auto-commit merge
+codelapse git auto-commit rebase -d "Before rebase onto main"
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-d, --description <desc>` | Snapshot description |
-| `--include-untracked` | Include untracked files |
+| `-u, --include-untracked` | Include untracked files |
 
 #### `git info`
 
@@ -591,32 +591,47 @@ codelapse git compare snapshot-123 abc1234 --files
 |--------|-------------|
 | `--files` | Show file-level changes |
 
-#### `git branch`
+#### `git branches`
 
-Branch management commands.
+List available Git branches.
 
 ```bash
-# List branches
-codelapse git branch list        # alias: ls
-
-# Create branch
-codelapse git branch create feature/auth
-codelapse git branch create feature/auth -c    # checkout after creation
-
-# Switch branch
-codelapse git branch switch feature/auth
-
-# Delete branch
-codelapse git branch delete feature/auth
-codelapse git branch delete feature/auth -f    # force delete
+codelapse git branches
 ```
 
-| Subcommand | Options |
-|------------|---------|
-| `list` (alias: `ls`) | None |
-| `create <name>` | `-c, --checkout` - Switch to new branch after creation |
-| `switch <name>` | None |
-| `delete <name>` (alias: `rm`) | `-f, --force` - Force delete |
+#### `git branch <name>`
+
+Create a new Git branch.
+
+```bash
+codelapse git branch feature/auth
+codelapse git branch feature/auth -c    # checkout after creation
+```
+
+| Option | Description |
+|--------|-------------|
+| `-c, --checkout` | Switch to new branch after creation |
+
+#### `git checkout <name>`
+
+Switch to an existing Git branch.
+
+```bash
+codelapse git checkout feature/auth
+```
+
+#### `git delete-branch <name>`
+
+Delete a Git branch.
+
+```bash
+codelapse git delete-branch feature/auth
+codelapse git delete-branch feature/auth -f    # force delete
+```
+
+| Option | Description |
+|--------|-------------|
+| `-f, --force` | Force delete |
 
 ---
 

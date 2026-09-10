@@ -780,6 +780,17 @@ If CodeLapse causes VS Code instability:
 3. Check `.snapshots/` directory for corruption
 4. Re-enable extension after identifying the issue
 
+## Command Line Interface (CLI)
+
+CodeLapse provides a powerful CLI tool (`codelapse-cli`) that brings snapshot management to your terminal.
+
+### Key Features
+- **Standalone Mode**: Run independently without VS Code (perfect for CI/CD, servers, and headless environments).
+- **IPC Mode**: Connect to the running VS Code extension for AI features and visual management.
+- **Automation**: Scriptable JSON output and batch operations.
+
+For detailed installation and usage instructions, see the [CLI Guide](../cli/README.md).
+
 ## Tips and Best Practices
 
 - Use meaningful descriptions, tags, and task references.

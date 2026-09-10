@@ -4,8 +4,22 @@ import * as path from 'path';
 import { log, logVerbose } from './logger';
 import { Snapshot } from './snapshotManager';
 import { applyDiff } from './snapshotDiff';
+import { runWithConcurrencyLimit } from 'codelapse-core';
 import { SnapshotContentProvider } from './snapshotContentProvider';
 import { getSnapshotLocation } from './config';
+import { assertNoSymlinkPath, validateSnapshotId } from './pathSecurity';
+import {
+  assertBufferSizeWithinLimit,
+  assertFileSizeWithinLimit,
+  assertSufficientDiskSpace,
+  MAX_FILE_SIZE_BYTES,
+  MAX_JSON_PAYLOAD_BYTES,
+  MAX_SNAPSHOT_RESOLUTION_DEPTH,
+} from './security/limits';
+import {
+  validateSnapshot,
+  validateSnapshotIndex,
+} from './validation/snapshotValidation';
 
 // Interface for the snapshot index file structure
 interface SnapshotIndex {
@@ -165,6 +179,65 @@ export class SnapshotStorage {
     return this.snapshotDirectory;
   }
 
+  private getQuarantineDirectory(): string {
+    return path.join(this.snapshotDirectory, 'quarantine');
+  }
+
+  private async quarantinePath(
+    targetPath: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const stats = await fsPromises.lstat(targetPath);
+      if (stats.isSymbolicLink()) {
+        log(`Refusing to quarantine symlinked path: ${targetPath}`);
+        return;
+      }
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
+        return;
+      }
+      log(`Failed to inspect path for quarantine (${targetPath}): ${error}`);
+      return;
+    }
+
+    try {
+      const quarantineDir = this.getQuarantineDirectory();
+      await this.ensureDirectoryExistsAsync(quarantineDir);
+
+      const baseName = path.basename(targetPath);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const quarantinePath = path.join(
+        quarantineDir,
+        `${baseName}.quarantine-${timestamp}`,
+      );
+
+      await fsPromises.rename(targetPath, quarantinePath);
+      log(
+        `Quarantined invalid snapshot artifact "${targetPath}" due to "${reason}" -> ${quarantinePath}`,
+      );
+    } catch (error) {
+      log(`Failed to quarantine path ${targetPath}: ${error}`);
+    }
+  }
+
+  private async readJsonFileWithValidation<T>(
+    filePath: string,
+    validator: (value: unknown) => void,
+    context: string,
+  ): Promise<T> {
+    await assertNoSymlinkPath(this.snapshotDirectory, filePath);
+    await assertFileSizeWithinLimit(filePath, MAX_JSON_PAYLOAD_BYTES);
+
+    const content = await fsPromises.readFile(filePath, 'utf8');
+    assertBufferSizeWithinLimit(content, context, MAX_JSON_PAYLOAD_BYTES);
+
+    const parsed = JSON.parse(content) as unknown;
+    validator(parsed);
+    return parsed as T;
+  }
+
   /**
    * Loads the snapshot index and metadata asynchronously.
    * Returns the list of snapshots and the current index, or null if loading fails.
@@ -183,24 +256,29 @@ export class SnapshotStorage {
 
     let indexData: SnapshotIndex | null = null;
 
-    // Use async readFile and handle potential ENOENT error
     try {
-      const content = await fsPromises.readFile(indexFilePath, 'utf8');
-      indexData = JSON.parse(content) as SnapshotIndex;
+      indexData = await this.readJsonFileWithValidation<SnapshotIndex>(
+        indexFilePath,
+        validateSnapshotIndex,
+        'snapshot index',
+      );
       log(`Successfully parsed index file.`);
-      // If parse succeeded, proceed to load snapshots based on indexData
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') {
         log('Snapshot index file not found. Attempting recovery if possible.');
       } else {
         log(
-          `Error reading or parsing snapshot index file: ${
+          `Error reading or validating snapshot index file: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
+        await this.quarantinePath(
+          indexFilePath,
+          error instanceof Error ? error.message : String(error),
+        );
         vscode.window.showWarningMessage(
-          `Snapshot index file is corrupted. Attempting recovery...`,
+          'Snapshot index file is invalid and was quarantined. Attempting recovery...',
         );
       }
     }
@@ -213,25 +291,34 @@ export class SnapshotStorage {
       log(
         `Index contains ${indexData.snapshots.length} entries. Loading full snapshot data...`,
       );
-      // Load full data based on index - use Promise.all for concurrency
-      const snapshotPromises = indexData.snapshots.map((snapshotInfo) =>
-        this.readSnapshotData(snapshotInfo.id).then((fullSnapshot) => {
-          if (fullSnapshot) {
-            // Basic validation: Check if ID matches
-            if (fullSnapshot.id !== snapshotInfo.id) {
-              log(
-                `Warning: Snapshot ID mismatch for ${snapshotInfo.id}. Index vs snapshot.json (${fullSnapshot.id}). Using data from snapshot.json.`,
-              );
-            }
-            return fullSnapshot;
-          } else {
+      const snapshotPromises = indexData.snapshots.map(async (snapshotInfo) => {
+        try {
+          validateSnapshotId(snapshotInfo.id);
+        } catch (error) {
+          log(`Skipping invalid snapshot ID in index: ${snapshotInfo.id}`);
+          return null;
+        }
+
+        const fullSnapshot = await this.readSnapshotData(snapshotInfo.id);
+        if (fullSnapshot) {
+          if (fullSnapshot.id !== snapshotInfo.id) {
             log(
-              `Failed to load full data for snapshot ${snapshotInfo.id} listed in index. Skipping.`,
+              `Warning: Snapshot ID mismatch for ${snapshotInfo.id}. Index vs snapshot.json (${fullSnapshot.id}).`,
             );
-            return null; // Return null for failed loads
+            await this.quarantinePath(
+              path.join(this.snapshotDirectory, snapshotInfo.id),
+              'snapshot ID mismatch',
+            );
+            return null;
           }
-        }),
-      );
+          return fullSnapshot;
+        }
+
+        log(
+          `Failed to load full data for snapshot ${snapshotInfo.id} listed in index. Skipping.`,
+        );
+        return null;
+      });
 
       // Wait for all snapshots to load and filter out nulls
       const loadedResults = await Promise.all(snapshotPromises);
@@ -295,32 +382,40 @@ export class SnapshotStorage {
    */
   private async readSnapshotData(snapshotId: string): Promise<Snapshot | null> {
     if (!this.snapshotDirectory) return null;
-    const snapshotJsonPath = path.join(
-      this.snapshotDirectory,
-      snapshotId,
-      'snapshot.json',
-    );
-    // Use async readFile and handle potential ENOENT error
+
     try {
-      const snapshotContent = await fsPromises.readFile(
+      validateSnapshotId(snapshotId);
+    } catch (error) {
+      log(`Invalid snapshot ID "${snapshotId}": ${error}`);
+      return null;
+    }
+
+    const snapshotDir = path.join(this.snapshotDirectory, snapshotId);
+    const snapshotJsonPath = path.join(snapshotDir, 'snapshot.json');
+
+    try {
+      const fullSnapshotData = await this.readJsonFileWithValidation<Snapshot>(
         snapshotJsonPath,
-        'utf8',
+        validateSnapshot,
+        `snapshot ${snapshotId}`,
       );
-      const fullSnapshotData = JSON.parse(snapshotContent) as Snapshot;
-      // Basic validation
-      if (fullSnapshotData.id && fullSnapshotData.timestamp) {
-        return fullSnapshotData;
-      } else {
-        log(
-          `Invalid snapshot.json for ${snapshotId}: missing id or timestamp.`,
+
+      if (fullSnapshotData.id !== snapshotId) {
+        throw new Error(
+          `Snapshot ID mismatch: expected ${snapshotId}, found ${fullSnapshotData.id}`,
         );
-        return null;
       }
+
+      return fullSnapshotData;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         log(`File not found: ${snapshotJsonPath}`);
       } else {
         log(`Error reading snapshot.json for ${snapshotId}: ${error}`);
+        await this.quarantinePath(
+          snapshotDir,
+          error instanceof Error ? error.message : String(error),
+        );
       }
       return null;
     }
@@ -341,7 +436,10 @@ export class SnapshotStorage {
       });
       const recoveryPromises = entries
         .filter(
-          (entry) => entry.isDirectory() && entry.name.startsWith('snapshot-'),
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.isSymbolicLink() &&
+            entry.name.startsWith('snapshot-'),
         )
         .map(async (entry) => {
           const snapshotData = await this.readSnapshotData(entry.name);
@@ -383,12 +481,19 @@ export class SnapshotStorage {
     };
 
     try {
-      // Use async writeFile
-      await fsPromises.writeFile(
+      validateSnapshotIndex(indexContent);
+      await this.ensureDirectoryExistsAsync(this.snapshotDirectory);
+      await assertNoSymlinkPath(this.snapshotDirectory, indexFilePath);
+
+      const serialized = JSON.stringify(indexContent, null, 2);
+      assertBufferSizeWithinLimit(
+        serialized,
         indexFilePath,
-        JSON.stringify(indexContent, null, 2),
-        'utf8',
+        MAX_JSON_PAYLOAD_BYTES,
       );
+
+      await assertSufficientDiskSpace(indexFilePath);
+      await fsPromises.writeFile(indexFilePath, serialized, 'utf8');
       logVerbose(`Snapshot index saved to ${indexFilePath}`);
     } catch (error) {
       log(`Error saving snapshot index: ${error}`);
@@ -404,17 +509,24 @@ export class SnapshotStorage {
       log(`Cannot save snapshot ${snapshot.id}, storage directory not set.`);
       throw new Error('Snapshot storage directory not initialized.');
     }
+    validateSnapshot(snapshot);
+    validateSnapshotId(snapshot.id);
+
     const snapshotDir = path.join(this.snapshotDirectory, snapshot.id);
+    await assertNoSymlinkPath(this.snapshotDirectory, snapshotDir);
     await this.ensureDirectoryExistsAsync(snapshotDir);
 
     const snapshotMetaPath = path.join(snapshotDir, 'snapshot.json');
     try {
-      // Use async writeFile
-      await fsPromises.writeFile(
+      await assertNoSymlinkPath(this.snapshotDirectory, snapshotMetaPath);
+      const serialized = JSON.stringify(snapshot, null, 2);
+      assertBufferSizeWithinLimit(
+        serialized,
         snapshotMetaPath,
-        JSON.stringify(snapshot, null, 2),
-        'utf8',
+        MAX_JSON_PAYLOAD_BYTES,
       );
+      await assertSufficientDiskSpace(snapshotMetaPath);
+      await fsPromises.writeFile(snapshotMetaPath, serialized, 'utf8');
       logVerbose(`Saved snapshot metadata to ${snapshotMetaPath}`);
     } catch (error) {
       log(`Error saving snapshot metadata for ${snapshot.id}: ${error}`);
@@ -431,25 +543,47 @@ export class SnapshotStorage {
       log(`Cannot delete snapshot ${snapshotId}, storage directory not set.`);
       return;
     }
+    validateSnapshotId(snapshotId);
+
     const snapshotDir = path.join(this.snapshotDirectory, snapshotId);
     log(`Attempting to delete snapshot directory: ${snapshotDir}`);
+
     try {
-      // Use async recursive delete
+      await assertNoSymlinkPath(this.snapshotDirectory, snapshotDir);
+
+      try {
+        const stats = await fsPromises.lstat(snapshotDir);
+        if (stats.isSymbolicLink()) {
+          throw new Error(
+            `Refusing to delete symlink snapshot directory: ${snapshotDir}`,
+          );
+        }
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code === 'ENOENT') {
+          log(
+            `Snapshot directory not found, skipping deletion: ${snapshotDir}`,
+          );
+          return;
+        }
+        throw error;
+      }
+
       await this.deleteDirectoryRecursiveAsync(snapshotDir);
       log(`Successfully deleted snapshot directory: ${snapshotDir}`);
       this.clearCacheForSnapshot(snapshotId); // Clear cache entries for deleted snapshot
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        log(`Snapshot directory not found, skipping deletion: ${snapshotDir}`);
-      } else if ((error as NodeJS.ErrnoException).code === 'EISDIR') {
+      if ((error as NodeJS.ErrnoException).code === 'EISDIR') {
         log(
           `Attempted to delete a directory as a file during unlink: ${snapshotDir}`,
         );
+        throw error;
       } else {
         log(`Failed to delete snapshot directory ${snapshotDir}: ${error}`);
         vscode.window.showErrorMessage(
           `Failed to delete snapshot files for ${snapshotId}: ${error}`,
         );
+        throw error;
       }
     }
   }
@@ -459,6 +593,7 @@ export class SnapshotStorage {
    */
   private async deleteDirectoryRecursiveAsync(dirPath: string): Promise<void> {
     try {
+      await assertNoSymlinkPath(this.snapshotDirectory, dirPath);
       await fsPromises.rm(dirPath, { recursive: true, force: true });
     } catch (error) {
       log(`Error using fsPromises.rm on ${dirPath}: ${error}`);
@@ -473,9 +608,19 @@ export class SnapshotStorage {
   public async readFileContent(absolutePath: string): Promise<string | null> {
     // Check existence and type first asynchronously
     try {
-      const stats = await fsPromises.stat(absolutePath);
-      if (!stats.isFile()) {
+      if (!this.workspaceRoot) {
+        return null;
+      }
+      await assertNoSymlinkPath(this.workspaceRoot, absolutePath);
+      const stats = await fsPromises.lstat(absolutePath);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
         logVerbose(`Path is not a file, skipping read: ${absolutePath}`);
+        return null;
+      }
+      if (stats.size > MAX_FILE_SIZE_BYTES) {
+        logVerbose(
+          `Skipping oversized file ${absolutePath}: ${stats.size} bytes exceeds ${MAX_FILE_SIZE_BYTES} byte limit`,
+        );
         return null;
       }
     } catch (error) {
@@ -532,7 +677,9 @@ export class SnapshotStorage {
         return null;
       }
 
+      await assertFileSizeWithinLimit(absolutePath, MAX_FILE_SIZE_BYTES);
       const content = await fsPromises.readFile(absolutePath, 'utf8');
+      assertBufferSizeWithinLimit(content, absolutePath, MAX_FILE_SIZE_BYTES);
 
       if (content.includes('\u0000')) {
         logVerbose(
@@ -680,60 +827,58 @@ export class SnapshotStorage {
   ): Promise<Set<string>> {
     const binaryFilePaths = new Set<string>();
 
-    // Only check a reasonable number of files
-    const filesToCheck = filePaths.slice(0, 100);
+    // Process all files with a concurrency limit (e.g., 50)
+    await runWithConcurrencyLimit(filePaths, 50, async (filePath) => {
+      try {
+        if (this.workspaceRoot) {
+          await assertNoSymlinkPath(this.workspaceRoot, filePath);
+        }
+        // Check if file exists and is readable
+        const stats = await fsPromises.lstat(filePath);
+        if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= 0) {
+          return;
+        }
 
-    await Promise.all(
-      filesToCheck.map(async (filePath) => {
-        try {
-          // Check if file exists and is readable
-          const stats = await fsPromises.stat(filePath);
-          if (!stats.isFile() || stats.size <= 0) {
-            return;
-          }
+        // Skip very large files (likely binary)
+        if (stats.size > MAX_FILE_SIZE_BYTES) {
+          binaryFilePaths.add(filePath);
+          return;
+        }
 
-          // Skip very large files (likely binary)
-          if (stats.size > 1024 * 1024) {
-            // > 1MB
+        // Sample first few bytes
+        const fd = await fsPromises.open(filePath, 'r');
+        const buffer = Buffer.alloc(512);
+        const { bytesRead } = await fd.read(buffer, 0, 512, 0);
+        await fd.close();
+
+        // Check for null bytes or other binary markers
+        if (bytesRead > 0) {
+          // Check for null bytes which indicate binary content
+          if (buffer.slice(0, bytesRead).includes(0)) {
             binaryFilePaths.add(filePath);
             return;
           }
 
-          // Sample first few bytes
-          const fd = await fsPromises.open(filePath, 'r');
-          const buffer = Buffer.alloc(512);
-          const { bytesRead } = await fd.read(buffer, 0, 512, 0);
-          await fd.close();
-
-          // Check for null bytes or other binary markers
-          if (bytesRead > 0) {
-            // Check for null bytes which indicate binary content
-            if (buffer.slice(0, bytesRead).includes(0)) {
-              binaryFilePaths.add(filePath);
-              return;
-            }
-
-            // Additional binary detection heuristics
-            let nonTextChars = 0;
-            for (let i = 0; i < bytesRead; i++) {
-              const byte = buffer[i];
-              // Check for control characters except common ones like tab, newline
-              if ((byte < 32 && ![9, 10, 13].includes(byte)) || byte > 126) {
-                nonTextChars++;
-              }
-            }
-
-            // If more than 10% of content is non-text, consider it binary
-            if (nonTextChars > bytesRead * 0.1) {
-              binaryFilePaths.add(filePath);
+          // Additional binary detection heuristics
+          let nonTextChars = 0;
+          for (let i = 0; i < bytesRead; i++) {
+            const byte = buffer[i];
+            // Check for control characters except common ones like tab, newline
+            if ((byte < 32 && ![9, 10, 13].includes(byte)) || byte > 126) {
+              nonTextChars++;
             }
           }
-        } catch (error) {
-          // Log but don't fail
-          logVerbose(`Error checking binary content for ${filePath}: ${error}`);
+
+          // If more than 10% of content is non-text, consider it binary
+          if (nonTextChars > bytesRead * 0.1) {
+            binaryFilePaths.add(filePath);
+          }
         }
-      }),
-    );
+      } catch (error) {
+        // Log but don't fail
+        logVerbose(`Error checking binary content for ${filePath}: ${error}`);
+      }
+    });
 
     return binaryFilePaths;
   }
@@ -746,8 +891,16 @@ export class SnapshotStorage {
     content: string,
   ): Promise<void> {
     try {
+      if (!this.workspaceRoot) {
+        throw new Error('Workspace root not initialized');
+      }
+
+      assertBufferSizeWithinLimit(content, absolutePath, MAX_FILE_SIZE_BYTES);
       const dirPath = path.dirname(absolutePath);
+      await assertNoSymlinkPath(this.workspaceRoot, dirPath);
       await this.ensureDirectoryExistsAsync(dirPath);
+      await assertNoSymlinkPath(this.workspaceRoot, absolutePath);
+      await assertSufficientDiskSpace(absolutePath);
       await fsPromises.writeFile(absolutePath, content, 'utf8');
       logVerbose(`Written content to: ${absolutePath}`);
     } catch (error) {
@@ -764,6 +917,14 @@ export class SnapshotStorage {
    */
   public async deleteWorkspaceFile(absolutePath: string): Promise<void> {
     try {
+      if (!this.workspaceRoot) {
+        throw new Error('Workspace root not initialized');
+      }
+      await assertNoSymlinkPath(this.workspaceRoot, absolutePath);
+      const stats = await fsPromises.lstat(absolutePath);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`Refusing to delete symlink file: ${absolutePath}`);
+      }
       await fsPromises.unlink(absolutePath);
       logVerbose(`Deleted workspace file: ${absolutePath}`);
     } catch (error) {
@@ -773,6 +934,7 @@ export class SnapshotStorage {
         log(
           `Attempted to delete a directory as a file during unlink: ${absolutePath}`,
         );
+        throw error;
       } else {
         log(`Failed to delete workspace file ${absolutePath}: ${error}`);
         vscode.window.showWarningMessage(
@@ -780,6 +942,7 @@ export class SnapshotStorage {
             absolutePath,
           )} during restore.`,
         );
+        throw error;
       }
     }
   }
@@ -798,114 +961,135 @@ export class SnapshotStorage {
     relativePath: string,
     allSnapshots: Snapshot[],
     forIndexing = false,
+    visited: Set<string> = new Set<string>(),
+    depth = 0,
   ): Promise<string | null> {
+    if (depth > MAX_SNAPSHOT_RESOLUTION_DEPTH) {
+      log(
+        `Snapshot content resolution depth exceeded (${MAX_SNAPSHOT_RESOLUTION_DEPTH}) for ${snapshotId}:${relativePath}`,
+      );
+      return null;
+    }
+
+    const resolutionKey = `${snapshotId}:${relativePath}`;
+    if (visited.has(resolutionKey)) {
+      log(
+        `Cycle detected while resolving snapshot content for ${resolutionKey}`,
+      );
+      return null;
+    }
+    visited.add(resolutionKey);
+
     // Use a special cache key if this is for indexing to avoid interfering with the regular workflow
     const cacheKey = `${snapshotId}::${relativePath}${
       forIndexing ? '::indexing' : ''
     }`;
 
-    if (this.contentCache.has(cacheKey)) {
-      logVerbose(
-        `Cache hit for ${relativePath} in ${snapshotId}${
-          forIndexing ? ' (indexing)' : ''
-        }`,
-      );
-      return this.contentCache.get(cacheKey) ?? null;
-    }
-
-    logVerbose(
-      `Cache miss for ${relativePath} in ${snapshotId}${
-        forIndexing ? ' (indexing)' : ''
-      }. Resolving...`,
-    );
-
-    const snapshot = allSnapshots.find((s) => s.id === snapshotId);
-    if (!snapshot) {
-      log(`Error: Snapshot ${snapshotId} not found in provided list.`);
-      return null;
-    }
-
-    const fileData = snapshot.files[relativePath];
-    if (!fileData) {
-      logVerbose(`File ${relativePath} not found in snapshot ${snapshotId}.`);
-      this.updateCache(cacheKey, null); // Cache null result
-      return null;
-    }
-
-    if (fileData.deleted) {
-      logVerbose(
-        `File ${relativePath} marked as deleted in snapshot ${snapshotId}.`,
-      );
-      this.updateCache(cacheKey, null); // Cache null result
-      return null;
-    }
-
-    if (typeof fileData.content === 'string') {
-      logVerbose(
-        `Found direct content for ${relativePath} in snapshot ${snapshotId}.`,
-      );
-      this.updateCache(cacheKey, fileData.content);
-      return fileData.content;
-    }
-
-    if (fileData.content === null && !fileData.baseSnapshotId) {
-      logVerbose(
-        `File ${relativePath} has null content and no base in snapshot ${snapshotId}.`,
-      );
-      this.updateCache(cacheKey, null); // Cache null result (empty or unreadable file)
-      return null;
-    }
-
-    if (fileData.baseSnapshotId) {
-      // Pass the forIndexing flag when resolving base content
-      const baseContent = await this.getSnapshotFileContent(
-        fileData.baseSnapshotId,
-        relativePath,
-        allSnapshots,
-        forIndexing, // Pass the forIndexing flag to prevent creating editor tabs
-      );
-
-      if (baseContent === null) {
-        log(
-          `Error: Could not resolve base content for ${relativePath} from snapshot ${fileData.baseSnapshotId}.`,
-        );
-        // Do not cache null here, as it indicates a resolution failure, not a definitive file state
-        return null;
-      }
-
-      if (!fileData.diff) {
+    try {
+      if (this.contentCache.has(cacheKey)) {
         logVerbose(
-          `File ${relativePath} is identical to base snapshot ${fileData.baseSnapshotId}.`,
+          `Cache hit for ${relativePath} in ${snapshotId}${
+            forIndexing ? ' (indexing)' : ''
+          }`,
         );
-        this.updateCache(cacheKey, baseContent); // Cache the resolved base content
-        return baseContent;
+        return this.contentCache.get(cacheKey) ?? null;
       }
 
       logVerbose(
-        `Applying diff for ${relativePath} from snapshot ${snapshotId}.`,
-      );
-      const patchedContent = applyDiff(
-        baseContent,
-        fileData.diff,
-        relativePath,
+        `Cache miss for ${relativePath} in ${snapshotId}${
+          forIndexing ? ' (indexing)' : ''
+        }. Resolving...`,
       );
 
-      if (patchedContent === null) {
-        log(
-          `Error: Failed to apply patch for ${relativePath} in snapshot ${snapshotId}.`,
-        );
-        // Do not cache null here, indicates patch failure
+      const snapshot = allSnapshots.find((s) => s.id === snapshotId);
+      if (!snapshot) {
+        log(`Error: Snapshot ${snapshotId} not found in provided list.`);
         return null;
       }
 
-      this.updateCache(cacheKey, patchedContent); // Cache the patched content
-      return patchedContent;
-    }
+      const fileData = snapshot.files[relativePath];
+      if (!fileData) {
+        logVerbose(`File ${relativePath} not found in snapshot ${snapshotId}.`);
+        this.updateCache(cacheKey, null);
+        return null;
+      }
 
-    log(
-      `Error: Unexpected state for file ${relativePath} in snapshot ${snapshotId}.`,
-    );
-    return null; // Should not be reached
+      if (fileData.deleted) {
+        logVerbose(
+          `File ${relativePath} marked as deleted in snapshot ${snapshotId}.`,
+        );
+        this.updateCache(cacheKey, null);
+        return null;
+      }
+
+      if (typeof fileData.content === 'string') {
+        logVerbose(
+          `Found direct content for ${relativePath} in snapshot ${snapshotId}.`,
+        );
+        this.updateCache(cacheKey, fileData.content);
+        return fileData.content;
+      }
+
+      if (fileData.content === null && !fileData.baseSnapshotId) {
+        logVerbose(
+          `File ${relativePath} has null content and no base in snapshot ${snapshotId}.`,
+        );
+        this.updateCache(cacheKey, null);
+        return null;
+      }
+
+      if (fileData.baseSnapshotId) {
+        const baseContent = await this.getSnapshotFileContent(
+          fileData.baseSnapshotId,
+          relativePath,
+          allSnapshots,
+          forIndexing,
+          visited,
+          depth + 1,
+        );
+
+        if (baseContent === null) {
+          log(
+            `Error: Could not resolve base content for ${relativePath} from snapshot ${fileData.baseSnapshotId}.`,
+          );
+          return null;
+        }
+
+        if (!fileData.diff) {
+          logVerbose(
+            `File ${relativePath} is identical to base snapshot ${fileData.baseSnapshotId}.`,
+          );
+          this.updateCache(cacheKey, baseContent);
+          return baseContent;
+        }
+
+        logVerbose(
+          `Applying diff for ${relativePath} from snapshot ${snapshotId}.`,
+        );
+        const patchedContent = applyDiff(
+          baseContent,
+          fileData.diff,
+          relativePath,
+        );
+
+        if (patchedContent === null) {
+          log(
+            `Error: Failed to apply patch for ${relativePath} in snapshot ${snapshotId}.`,
+          );
+          return null;
+        }
+
+        this.updateCache(cacheKey, patchedContent);
+        return patchedContent;
+      }
+
+      log(
+        `Error: Unexpected state for file ${relativePath} in snapshot ${snapshotId}.`,
+      );
+      return null;
+    } finally {
+      visited.delete(resolutionKey);
+    }
   }
 
   // --- Cache Helper Methods ---

@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { CodeLapseClient } from './client';
+import { UnifiedClient as CodeLapseClient } from './unifiedClient';
 import { SnapshotCommands } from './commands/snapshot';
 import { SearchCommands } from './commands/search';
 import { WorkspaceCommands } from './commands/workspace';
@@ -11,14 +11,16 @@ import { UtilityCommands } from './commands/utility';
 import { EnhancedSearchCommands } from './commands/enhanced-search';
 import { AnalysisCommands } from './commands/analysis';
 import { ChunkingCommands } from './commands/chunking';
-
+import { GitCommands } from './commands/git';
 const program = new Command();
 
 async function main() {
   program
     .name('codelapse')
     .alias('cl')
-    .description('CLI for CodeLapse VSCode extension - AI-friendly snapshot management')
+    .description(
+      'CLI for CodeLapse VSCode extension - AI-friendly snapshot management',
+    )
     .version('1.0.0');
 
   // Global options
@@ -30,6 +32,7 @@ async function main() {
 
   // Initialize client
   const client = new CodeLapseClient();
+  await client.initialize();
 
   // Global error handling
   process.on('uncaughtException', (error) => {
@@ -47,21 +50,25 @@ async function main() {
     .description('Check connection to CodeLapse extension')
     .action(async (options) => {
       const globalOpts = program.opts();
-      const spinner = globalOpts.silent ? null : ora('Checking connection...').start();
-      
+      const spinner = globalOpts.silent
+        ? null
+        : ora('Checking connection...').start();
+
       try {
         const status = await client.getStatus();
-        
+
         if (spinner) spinner.succeed('Connected to CodeLapse extension');
-        
+
         if (globalOpts.json) {
-          console.log(JSON.stringify({
-            success: true,
-            connected: status.connected,
-            workspace: status.workspace,
-            totalSnapshots: status.totalSnapshots,
-            currentSnapshot: status.currentSnapshot
-          }));
+          console.log(
+            JSON.stringify({
+              success: true,
+              connected: status.connected,
+              workspace: status.workspace,
+              totalSnapshots: status.totalSnapshots,
+              currentSnapshot: status.currentSnapshot,
+            }),
+          );
         } else {
           console.log(chalk.green('✓ Connected to CodeLapse extension'));
           console.log(`Workspace: ${status.workspace || 'None'}`);
@@ -70,15 +77,18 @@ async function main() {
         }
       } catch (error) {
         if (spinner) spinner.fail('Failed to connect');
-        
-        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         if (globalOpts.json) {
           console.log(JSON.stringify({ success: false, error: errorMessage }));
         } else {
           console.error(chalk.red('✗ Failed to connect:'), errorMessage);
           console.log('\nTroubleshooting:');
           console.log('1. Make sure VSCode is running');
-          console.log('2. Make sure the CodeLapse extension is installed and enabled');
+          console.log(
+            '2. Make sure the CodeLapse extension is installed and enabled',
+          );
           console.log('3. Open a workspace folder in VSCode');
         }
         process.exit(1);
@@ -101,7 +111,10 @@ async function main() {
     .option('-r, --task-ref <ref>', 'Task reference')
     .option('-f, --favorite', 'Mark as favorite')
     .option('-s, --selective', 'Selective snapshot (choose files)')
-    .option('--files <files>', 'Comma-separated file paths for selective snapshot')
+    .option(
+      '--files <files>',
+      'Comma-separated file paths for selective snapshot',
+    )
     .action(snapshotCommands.create.bind(snapshotCommands));
 
   snapshotCmd
@@ -111,7 +124,10 @@ async function main() {
     .option('-t, --tags <tags>', 'Filter by tags (comma-separated)')
     .option('-f, --favorites', 'Show only favorites')
     .option('-l, --limit <number>', 'Limit number of results')
-    .option('--since <date>', 'Show snapshots since date (ISO string or relative like "1h", "2d")')
+    .option(
+      '--since <date>',
+      'Show snapshots since date (ISO string or relative like "1h", "2d")',
+    )
     .action(snapshotCommands.list.bind(snapshotCommands));
 
   snapshotCmd
@@ -158,24 +174,49 @@ async function main() {
   searchCmd
     .command('query <query>')
     .alias('q')
-    .description('Search snapshots with natural language (enhanced with AI-optimized features)')
+    .description(
+      'Search snapshots with natural language (enhanced with AI-optimized features)',
+    )
     .option('-l, --limit <number>', 'Limit results', '20')
     .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.65')
-    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option(
+      '--snapshots <ids>',
+      'Search specific snapshots (comma-separated IDs)',
+    )
     .option('--languages <langs>', 'Filter by languages (comma-separated)')
-    .option('-m, --mode <mode>', 'Search mode: semantic, syntactic, behavioral, hybrid', 'semantic')
+    .option(
+      '-m, --mode <mode>',
+      'Search mode: semantic, syntactic, behavioral, hybrid',
+      'semantic',
+    )
     .option('--no-explanations', 'Disable result explanations')
     .option('--no-relationships', 'Disable relationship information')
     .option('--no-quality', 'Disable quality metrics')
     .option('-c, --context <lines>', 'Context radius in lines', '5')
-    .option('-r, --ranking <strategy>', 'Ranking strategy: relevance, quality, recency, usage', 'relevance')
+    .option(
+      '-r, --ranking <strategy>',
+      'Ranking strategy: relevance, quality, recency, usage',
+      'relevance',
+    )
     .option('--complexity-min <number>', 'Minimum complexity score')
     .option('--complexity-max <number>', 'Maximum complexity score')
     .option('--quality-min <number>', 'Minimum quality threshold')
-    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
-    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
-    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
-    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .option(
+      '--semantic-types <types>',
+      'Filter by semantic types (comma-separated)',
+    )
+    .option(
+      '--patterns <patterns>',
+      'Filter by design patterns (comma-separated)',
+    )
+    .option(
+      '--exclude-smells <smells>',
+      'Exclude code smells (comma-separated)',
+    )
+    .option(
+      '--domains <domains>',
+      'Filter by business domains (comma-separated)',
+    )
     .option('--max-per-file <number>', 'Maximum results per file')
     .option('--no-diversify', 'Disable result diversification')
     .action(searchCommands.query.bind(searchCommands));
@@ -186,17 +227,32 @@ async function main() {
     .description('Search for code based on behavioral description')
     .option('-l, --limit <number>', 'Limit results', '20')
     .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.6')
-    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option(
+      '--snapshots <ids>',
+      'Search specific snapshots (comma-separated IDs)',
+    )
     .option('--languages <langs>', 'Filter by languages (comma-separated)')
     .option('--no-relationships', 'Disable relationship information')
     .option('-c, --context <lines>', 'Context radius in lines', '5')
     .option('--complexity-min <number>', 'Minimum complexity score')
     .option('--complexity-max <number>', 'Maximum complexity score')
     .option('--quality-min <number>', 'Minimum quality threshold')
-    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
-    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
-    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
-    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .option(
+      '--semantic-types <types>',
+      'Filter by semantic types (comma-separated)',
+    )
+    .option(
+      '--patterns <patterns>',
+      'Filter by design patterns (comma-separated)',
+    )
+    .option(
+      '--exclude-smells <smells>',
+      'Exclude code smells (comma-separated)',
+    )
+    .option(
+      '--domains <domains>',
+      'Filter by business domains (comma-separated)',
+    )
     .action(searchCommands.behavioral.bind(searchCommands));
 
   searchCmd
@@ -205,15 +261,27 @@ async function main() {
     .description('Search for specific design patterns or code structures')
     .option('-l, --limit <number>', 'Limit results', '15')
     .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.7')
-    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option(
+      '--snapshots <ids>',
+      'Search specific snapshots (comma-separated IDs)',
+    )
     .option('--languages <langs>', 'Filter by languages (comma-separated)')
     .option('-c, --context <lines>', 'Context radius in lines', '8')
     .option('--complexity-min <number>', 'Minimum complexity score')
     .option('--complexity-max <number>', 'Maximum complexity score')
     .option('--quality-min <number>', 'Minimum quality threshold')
-    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
-    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
-    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .option(
+      '--semantic-types <types>',
+      'Filter by semantic types (comma-separated)',
+    )
+    .option(
+      '--exclude-smells <smells>',
+      'Exclude code smells (comma-separated)',
+    )
+    .option(
+      '--domains <domains>',
+      'Filter by business domains (comma-separated)',
+    )
     .action(searchCommands.pattern.bind(searchCommands));
 
   searchCmd
@@ -284,21 +352,44 @@ async function main() {
     .description('Enhanced semantic search with AI-optimized features')
     .option('-l, --limit <number>', 'Limit results', '20')
     .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.65')
-    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option(
+      '--snapshots <ids>',
+      'Search specific snapshots (comma-separated IDs)',
+    )
     .option('--languages <langs>', 'Filter by languages (comma-separated)')
-    .option('-m, --mode <mode>', 'Search mode: semantic, syntactic, behavioral, hybrid', 'semantic')
+    .option(
+      '-m, --mode <mode>',
+      'Search mode: semantic, syntactic, behavioral, hybrid',
+      'semantic',
+    )
     .option('--no-explanations', 'Disable result explanations')
     .option('--no-relationships', 'Disable relationship information')
     .option('--no-quality', 'Disable quality metrics')
     .option('-c, --context <lines>', 'Context radius in lines', '5')
-    .option('-r, --ranking <strategy>', 'Ranking strategy: relevance, quality, recency, usage', 'relevance')
+    .option(
+      '-r, --ranking <strategy>',
+      'Ranking strategy: relevance, quality, recency, usage',
+      'relevance',
+    )
     .option('--complexity-min <number>', 'Minimum complexity score')
     .option('--complexity-max <number>', 'Maximum complexity score')
     .option('--quality-min <number>', 'Minimum quality threshold')
-    .option('--semantic-types <types>', 'Filter by semantic types (comma-separated)')
-    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
-    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
-    .option('--domains <domains>', 'Filter by business domains (comma-separated)')
+    .option(
+      '--semantic-types <types>',
+      'Filter by semantic types (comma-separated)',
+    )
+    .option(
+      '--patterns <patterns>',
+      'Filter by design patterns (comma-separated)',
+    )
+    .option(
+      '--exclude-smells <smells>',
+      'Exclude code smells (comma-separated)',
+    )
+    .option(
+      '--domains <domains>',
+      'Filter by business domains (comma-separated)',
+    )
     .option('--max-per-file <number>', 'Maximum results per file')
     .option('--no-diversify', 'Disable result diversification')
     .action(enhancedSearchCommands.enhanced.bind(enhancedSearchCommands));
@@ -309,7 +400,10 @@ async function main() {
     .description('Search for code based on behavioral description')
     .option('-l, --limit <number>', 'Limit results', '20')
     .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.6')
-    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option(
+      '--snapshots <ids>',
+      'Search specific snapshots (comma-separated IDs)',
+    )
     .option('--languages <langs>', 'Filter by languages (comma-separated)')
     .option('--no-relationships', 'Disable relationship information')
     .option('-c, --context <lines>', 'Context radius in lines', '5')
@@ -321,7 +415,10 @@ async function main() {
     .description('Search for specific design patterns or code structures')
     .option('-l, --limit <number>', 'Limit results', '15')
     .option('-t, --threshold <number>', 'Score threshold (0-1)', '0.7')
-    .option('--snapshots <ids>', 'Search specific snapshots (comma-separated IDs)')
+    .option(
+      '--snapshots <ids>',
+      'Search specific snapshots (comma-separated IDs)',
+    )
     .option('--languages <langs>', 'Filter by languages (comma-separated)')
     .option('-c, --context <lines>', 'Context radius in lines', '8')
     .action(enhancedSearchCommands.pattern.bind(enhancedSearchCommands));
@@ -364,7 +461,10 @@ async function main() {
     .command('quality <target>')
     .description('Analyze code quality metrics')
     .option('-s, --snapshot <id>', 'Snapshot ID (required)')
-    .option('-m, --metrics <metrics>', 'Specific metrics (comma-separated): readability,maintainability,complexity,documentation')
+    .option(
+      '-m, --metrics <metrics>',
+      'Specific metrics (comma-separated): readability,maintainability,complexity,documentation',
+    )
     .option('--no-recommendations', 'Disable recommendations')
     .option('--no-trends', 'Disable trend analysis')
     .option('--threshold <number>', 'Quality threshold (0-1)', '0.7')
@@ -375,7 +475,10 @@ async function main() {
     .description('Analyze chunk relationships and dependencies')
     .option('--no-transitive', 'Disable transitive relationships')
     .option('-d, --depth <number>', 'Maximum relationship depth', '3')
-    .option('--types <types>', 'Relationship types (comma-separated): calls,imports,extends,implements')
+    .option(
+      '--types <types>',
+      'Relationship types (comma-separated): calls,imports,extends,implements',
+    )
     .option('--no-strength', 'Disable relationship strength calculation')
     .action(analysisCommands.relationships.bind(analysisCommands));
 
@@ -397,7 +500,11 @@ async function main() {
     .command('file <file-path>')
     .description('Chunk a specific file with enhanced strategies')
     .option('-s, --snapshot <id>', 'Snapshot ID (required)')
-    .option('--strategy <strategy>', 'Chunking strategy: semantic, hierarchical, context-aware', 'semantic')
+    .option(
+      '--strategy <strategy>',
+      'Chunking strategy: semantic, hierarchical, context-aware',
+      'semantic',
+    )
     .option('--max-size <number>', 'Maximum chunk size in lines', '1000')
     .option('--min-size <number>', 'Minimum chunk size in lines', '50')
     .option('--overlap <number>', 'Overlap between chunks in lines', '0')
@@ -408,8 +515,15 @@ async function main() {
   chunkingCmd
     .command('snapshot <snapshot-id>')
     .description('Chunk all files in a snapshot')
-    .option('--strategy <strategy>', 'Chunking strategy: semantic, hierarchical, context-aware', 'semantic')
-    .option('--patterns <patterns>', 'File patterns to include (comma-separated)')
+    .option(
+      '--strategy <strategy>',
+      'Chunking strategy: semantic, hierarchical, context-aware',
+      'semantic',
+    )
+    .option(
+      '--patterns <patterns>',
+      'File patterns to include (comma-separated)',
+    )
     .option('--max-size <number>', 'Maximum chunk size in lines', '1000')
     .option('--min-size <number>', 'Minimum chunk size in lines', '50')
     .option('--overlap <number>', 'Overlap between chunks in lines', '0')
@@ -427,11 +541,21 @@ async function main() {
     .option('--quality-min <number>', 'Minimum quality threshold')
     .option('--complexity-min <number>', 'Minimum complexity score')
     .option('--complexity-max <number>', 'Maximum complexity score')
-    .option('--patterns <patterns>', 'Filter by design patterns (comma-separated)')
-    .option('--exclude-smells <smells>', 'Exclude code smells (comma-separated)')
+    .option(
+      '--patterns <patterns>',
+      'Filter by design patterns (comma-separated)',
+    )
+    .option(
+      '--exclude-smells <smells>',
+      'Exclude code smells (comma-separated)',
+    )
     .option('-p, --page <number>', 'Page number', '1')
     .option('-l, --limit <number>', 'Results per page', '50')
-    .option('--sort <field>', 'Sort by field: startLine, endLine, quality, complexity', 'startLine')
+    .option(
+      '--sort <field>',
+      'Sort by field: startLine, endLine, quality, complexity',
+      'startLine',
+    )
     .option('--order <order>', 'Sort order: asc, desc', 'asc')
     .action(chunkingCommands.list.bind(chunkingCommands));
 
@@ -458,7 +582,10 @@ async function main() {
     .description('Get chunk dependencies and relationships')
     .option('--no-transitive', 'Disable transitive dependencies')
     .option('-d, --depth <number>', 'Maximum dependency depth', '3')
-    .option('--types <types>', 'Dependency types (comma-separated): imports,calls,extends,implements')
+    .option(
+      '--types <types>',
+      'Dependency types (comma-separated): imports,calls,extends,implements',
+    )
     .option('--no-strength', 'Disable relationship strength calculation')
     .action(chunkingCommands.dependencies.bind(chunkingCommands));
 
@@ -470,41 +597,117 @@ async function main() {
       try {
         const fs = await import('fs');
         const batchCommands = JSON.parse(fs.readFileSync(file, 'utf8'));
-        
+
         const results = [];
         for (const cmd of batchCommands) {
           try {
             const result = await client.executeCommand(cmd);
             results.push({ success: true, command: cmd, result });
           } catch (error) {
-            results.push({ success: false, command: cmd, error: error instanceof Error ? error.message : String(error) });
+            results.push({
+              success: false,
+              command: cmd,
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
         }
-        
+
         console.log(JSON.stringify({ success: true, results }));
       } catch (error) {
-        console.log(JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        console.log(
+          JSON.stringify({
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
       }
     });
+
+  // Git commands
+  const gitCommands = new GitCommands(client);
+  const gitCmd = program
+    .command('git')
+    .alias('g')
+    .description('Git integration commands');
+
+  gitCmd
+    .command('commit <snapshot-id>')
+    .description('Create a Git commit from a snapshot')
+    .option('-m, --message <message>', 'Commit message (auto-generated if omitted)')
+    .option('-b, --branch <name>', 'Create a new branch for the commit')
+    .option('-u, --include-untracked', 'Include untracked files', false)
+    .option('-p, --push', 'Push commit to remote', false)
+    .action(gitCommands.createCommit.bind(gitCommands));
+
+  gitCmd
+    .command('auto-commit <operation>')
+    .description('Create an auto-snapshot before a Git operation')
+    .option('-d, --description <desc>', 'Snapshot description')
+    .option('-u, --include-untracked', 'Include untracked files', false)
+    .action(gitCommands.autoSnapshotBeforeOperation.bind(gitCommands));
+
+  gitCmd
+    .command('info')
+    .description('Get current Git repository information')
+    .action(gitCommands.getBranchInfo.bind(gitCommands));
+
+  gitCmd
+    .command('branches')
+    .description('List available Git branches')
+    .action(gitCommands.listBranches.bind(gitCommands));
+
+  gitCmd
+    .command('branch <name>')
+    .description('Create a new Git branch')
+    .option('-c, --checkout', 'Switch to branch after creating', false)
+    .action(gitCommands.createBranch.bind(gitCommands));
+
+  gitCmd
+    .command('checkout <name>')
+    .description('Switch to an existing Git branch')
+    .action(gitCommands.switchBranch.bind(gitCommands));
+
+  gitCmd
+    .command('delete-branch <name>')
+    .description('Delete a Git branch')
+    .option('-f, --force', 'Force delete branch', false)
+    .action(gitCommands.deleteBranch.bind(gitCommands));
+
+  gitCmd
+    .command('compare <snapshot-id> <commit-hash>')
+    .description('Compare a snapshot with a Git commit')
+    .option('-f, --files', 'Show file-level changes only', false)
+    .action(gitCommands.compareWithCommit.bind(gitCommands));
 
   // Event streaming for AI tools
   program
     .command('watch')
     .description('Watch for snapshot changes (real-time events)')
-    .option('--events <events>', 'Event types to watch (comma-separated): changes,snapshots,workspace')
+    .option(
+      '--events <events>',
+      'Event types to watch (comma-separated): changes,snapshots,workspace',
+    )
     .action(async (options) => {
       const globalOpts = program.opts();
-      const eventTypes = options.events ? options.events.split(',') : ['changes', 'snapshots'];
-      
+      const eventTypes = options.events
+        ? options.events.split(',')
+        : ['changes', 'snapshots'];
+
       if (!globalOpts.silent) {
-        console.log(chalk.blue('Watching for events... (Press Ctrl+C to stop)'));
+        console.log(
+          chalk.blue('Watching for events... (Press Ctrl+C to stop)'),
+        );
       }
-      
+
       await client.watchEvents(eventTypes, (event) => {
         if (globalOpts.json) {
           console.log(JSON.stringify({ type: 'event', event }));
         } else {
-          console.log(chalk.yellow(`[${new Date().toISOString()}]`), event.type, event.data);
+          console.log(
+            chalk.yellow(`[${new Date().toISOString()}]`),
+            event.type,
+            event.data,
+          );
         }
       });
     });
@@ -520,7 +723,12 @@ async function main() {
         const result = await client.callApi(method, data);
         console.log(JSON.stringify({ success: true, result }));
       } catch (error) {
-        console.log(JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        console.log(
+          JSON.stringify({
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
       }
     });
 
@@ -566,4 +774,4 @@ main().catch((error) => {
     console.error(chalk.red('Fatal error:'), error.message);
   }
   process.exit(1);
-}); 
+});

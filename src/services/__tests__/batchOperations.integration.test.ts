@@ -7,7 +7,27 @@ import * as vscode from 'vscode';
 jest.mock('vscode');
 jest.mock('../terminalApiService');
 jest.mock('../semanticSearchService');
-jest.mock('../enhancedCodeChunker');
+jest.mock('../enhancedCodeChunker', () => {
+  return {
+    EnhancedCodeChunker: jest.fn().mockImplementation(() => ({
+      chunkFileEnhanced: jest.fn().mockResolvedValue([
+        {
+          id: 'chunk1',
+          startLine: 1,
+          endLine: 10,
+          qualityMetrics: { overallScore: 80 },
+          enhancedMetadata: {
+            semanticType: 'function',
+            complexityScore: 10,
+            securityConcerns: [],
+            designPatterns: []
+          },
+          relationships: [],
+        },
+      ]),
+    })),
+  };
+});
 jest.mock('../queryProcessor');
 jest.mock('../resultManager');
 jest.mock('../qualityMetricsCalculator');

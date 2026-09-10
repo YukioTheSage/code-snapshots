@@ -1,7 +1,7 @@
 {
   "name": "codelapse-cli",
-  "version": "1.0.1",
-  "description": "Command-line interface for CodeLapse VSCode extension",
+  "version": "2.0.0",
+  "description": "Comprehensive command-line interface for CodeLapse VSCode extension with full feature parity",
   "main": "dist/cli.js",
   "bin": {
     "codelapse": "dist/cli.js",
@@ -10,6 +10,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
@@ -26,7 +29,12 @@
     "github",
     "codelapse",
     "codelapse-cli",
-    "codelapse cli"
+    "code-analysis",
+    "semantic-search",
+    "diagnostics",
+    "configuration",
+    "automation",
+    "developer-tools"
   ],
   "homepage": "https://github.com/YukioTheSage/code-snapshots",
   "bugs": {
@@ -43,6 +51,7 @@
   "author": "YukioTheSage",
   "license": "MIT",
   "dependencies": {
+    "codelapse-core": "^0.9.5",
     "commander": "^11.0.0",
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
@@ -59,10 +68,11 @@
     "@types/jest": "^29.0.0"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "files": [
     "dist/**/*",
-    "README.md"
+    "README.md",
+    "HELP.md"
   ]
 }

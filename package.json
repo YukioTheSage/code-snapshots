@@ -576,6 +576,7 @@
     "eslint-config-prettier": "^8.0.0",
     "eslint-plugin-prettier": "^4.0.0",
     "jest": "^29.0.0",
+    "jest-util": "^29.7.0",
     "npm-run-all": "^4.1.5",
     "prettier": "^2.8.0",
     "ts-jest": "^29.0.0",
@@ -583,6 +584,7 @@
     "vsce": "^2.15.0"
   },
   "dependencies": {
+    "codelapse-core": "^0.9.5",
     "@google/genai": "^0.10.0",
     "@google/generative-ai": "^0.24.0",
     "@pinecone-database/pinecone": "^5.1.2",

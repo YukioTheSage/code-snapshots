@@ -5,7 +5,7 @@
 [![Issues](https://img.shields.io/github/issues/YukioTheSage/code-snapshots)](https://github.com/YukioTheSage/code-snapshots/issues)
 [![License](https://img.shields.io/github/license/YukioTheSage/code-snapshots)](https://github.com/YukioTheSage/code-snapshots/blob/main/LICENSE)
 
-A comprehensive command-line interface for interacting with the CodeLapse VS Code extension, designed for developers, automation systems, and AI coding assistants.
+A comprehensive command-line interface for the CodeLapse VSCode extension with **FULL FEATURE PARITY** - bringing all extension capabilities to your terminal for automation, AI integration, and advanced workflows.
 
 > ⚠️ **EXPERIMENTAL FEATURE - SECURITY WARNING**: Semantic search is currently experimental with significant security and privacy risks:
 > - **Data Privacy**: Your code content is transmitted to external AI services (Pinecone, Gemini)
@@ -35,32 +35,29 @@ A comprehensive command-line interface for interacting with the CodeLapse VS Cod
 
 ## Prerequisites
 
-⚠️ **IMPORTANT**: This CLI requires the CodeLapse VS Code extension to function properly.
-
 ### Required Components
 
-- **VS Code**: Version 1.75.0 or higher
-- **CodeLapse Extension**: Must be installed from [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
-- **Node.js**: Version 14.0.0 or higher
+- **Node.js**: Version 18.0.0 or higher
+- **Optional**: VS Code & CodeLapse Extension (required only for IPC mode and AI features)
+
+### Modes of Operation
+
+The CLI supports two modes of operation:
+
+1. **Standalone Mode** (Default):
+   - Works independently without VS Code
+   - Manages snapshots directly on disk
+   - Supports core snapshot operations (create, list, restore, etc.)
+   - Ideal for CI/CD, servers, and headless environments
+
+2. **IPC Mode**:
+   - Requires VS Code extension running
+   - Connects to the extension via local server
+   - Enables AI features (Semantic Search) and real-time UI updates
 
 ### Step-by-Step Setup
 
-#### 1. Install VS Code
-If you don't have VS Code installed:
-- Download from [code.visualstudio.com](https://code.visualstudio.com/)
-- Install version 1.75.0 or higher
-
-#### 2. Install CodeLapse Extension
-**Option A: Via VS Code Marketplace**
-1. Open VS Code
-2. Go to Extensions (Ctrl+Shift+X / Cmd+Shift+X)
-3. Search for "CodeLapse" or "vscode-snapshots"
-4. Click "Install" on the extension by YukioTheSage
-
-**Option B: Direct Installation**
-- **Direct link**: [Install CodeLapse Extension](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
-
-#### 3. Install CLI Tool
+#### 1. Install CLI Tool
 ```bash
 # Global installation (recommended)
 npm install -g codelapse-cli
@@ -69,52 +66,51 @@ npm install -g codelapse-cli
 npx codelapse-cli --help
 ```
 
-### Verification Steps
+#### 2. (Optional) Install VS Code Extension
+For AI features and visual management:
+1. Open VS Code
+2. Search for "CodeLapse" in Extensions
+3. Install the extension by YukioTheSage
 
-After installation, verify your setup:
+### Verification Steps
 
 #### 1. Check CLI Installation
 ```bash
 # Verify CLI is installed
 codelapse --version
-
-# Should output version number like: 1.0.0
 ```
 
-#### 2. Verify VS Code Extension Connection
+#### 2. Verify Standalone Mode
 ```bash
-# Open VS Code with a project folder first
-# Then test connection
+# Go to any project folder
+cd my-project
+
+# Initialize/Check status
 codelapse status
-
-# Should show connection success and workspace info
+# Output: CodeLapse ready (standalone mode)
 ```
 
-#### 3. Complete Setup Verification
+#### 3. Verify IPC Mode (Optional)
 ```bash
-# Full verification with JSON output
-codelapse status --json --silent
+# Open VS Code with the project
+code .
 
-# Expected successful response:
-# {
-#   "success": true,
-#   "connected": true,
-#   "workspace": "/path/to/your/project",
-#   "totalSnapshots": 0
-# }
+# Check status (CLI will auto-detect extension)
+codelapse status
+# Output: CodeLapse ready (ipc mode)
 ```
 
 ### Troubleshooting Setup
 
 If verification fails:
 
-1. **Extension not found**: Ensure CodeLapse extension is installed and enabled in VS Code
-2. **Connection failed**: Make sure VS Code is running with a workspace/folder open
-3. **CLI not found**: Verify Node.js is installed and npm global packages are in your PATH
+1. **CLI not found**: Verify Node.js is installed and npm global packages are in your PATH
+2. **IPC Connection failed**: Make sure VS Code is running if you specifically need IPC features
+3. **Standalone issues**: Ensure you are in a valid project directory (has package.json or .git)
 
 ## Installation
 
-> ⚠️ **IMPORTANT**: Before installing the CLI, please complete the [Prerequisites](#prerequisites) section above to ensure the VS Code extension is properly installed and configured.
+> ⚠️ **NOTE**: The CLI can run in **Standalone Mode** without VS Code. However, for AI features and visual management, the VS Code extension is required.
 
 ### Install the CLI
 
@@ -148,7 +144,7 @@ codelapse status --json --silent
 
 If the connection test fails, refer to the [Prerequisites](#prerequisites) section above for detailed setup instructions and troubleshooting steps.
 
-> 💡 **Remember**: The CLI is a companion tool to the VS Code extension. Without the extension running, the CLI cannot function.
+> 💡 **Tip**: The CLI works great on its own! Use it in CI/CD pipelines, on servers, or for quick terminal operations. Connect to VS Code when you need visual tools.
 
 ## Quick Start
 
@@ -367,6 +363,7 @@ For AI agents interacting with `codelapse-cli`, adhere to these critical rules f
 - `--silent`: Suppress spinners and user-facing messages.
 - `--verbose`: Enable verbose output for debugging.
 - `--timeout <ms>`: Connection timeout in milliseconds (default: 5000).
+- `--mode <mode>`: Force operation mode: `auto` (default), `standalone`, or `ipc`.
 
 ### Connection & Status
 
@@ -557,11 +554,22 @@ Navigate to the `previous` or `next` snapshot.
 > - **AVOID** using with proprietary, sensitive, or confidential code
 
 #### `query <query>` ⚠️ **(Experimental - Use with Extreme Caution)**
-Search snapshots using natural language.
+Search snapshots using natural language (enhanced with AI-optimized features).
 - `-l, --limit <number>`: Limit results (default: 20).
 - `-t, --threshold <number>`: Score threshold 0-1 (default: 0.65).
 - `--snapshots <ids>`: Comma-separated list of snapshot IDs to search within.
 - `--languages <langs>`: Filter by languages (e.g., "typescript,python").
+- `-m, --mode <mode>`: Search mode: semantic, syntactic, behavioral, hybrid.
+- `--no-explanations`: Disable result explanations.
+- `--no-relationships`: Disable relationship information.
+- `--no-quality`: Disable quality metrics.
+- `-c, --context <lines>`: Context radius in lines (default: 5).
+- `-r, --ranking <strategy>`: Ranking strategy: relevance, quality, recency, usage.
+- `--complexity-min <number>`, `--complexity-max <number>`: Complexity score range.
+- `--quality-min <number>`: Minimum quality threshold.
+- `--semantic-types <types>`, `--patterns <patterns>`, `--exclude-smells <smells>`, `--domains <domains>`: Advanced filtering by types, patterns, smells, and domains.
+- `--max-per-file <number>`: Maximum results per file.
+- `--no-diversify`: Disable result diversification.
 
 **Returns**
 ```json
@@ -584,6 +592,19 @@ Search snapshots using natural language.
   "total": 1
 }
 ```
+
+#### `behavioral <description>`
+Search for code based on behavioral description.
+- Supports filtering options similar to `query` including `-l`, `-t`, `--snapshots`, `--languages`, `-c`, and quality/complexity filters.
+
+#### `pattern <pattern-type>`
+Search for specific design patterns or code structures.
+- Supports filtering options similar to `query`.
+
+#### `batch <queries-file>`
+Execute multiple search queries from a JSON file.
+- `--no-parallel`: Disable parallel processing.
+- `--concurrency <number>`: Maximum concurrent queries (default: 3).
 
 #### `index` ⚠️ **(Experimental)**
 Manage the semantic search index.
@@ -683,6 +704,199 @@ Export a snapshot to a file.
     "format": "zip"
   },
   "message": "Snapshot exported to /path/to/export.zip"
+}
+```
+
+### Enhanced Search (`codelapse search-enhanced`)
+
+Enhanced semantic search commands specifically designed for AI agents, providing advanced filtering, context, and quality metrics.
+
+#### `query <query>`
+Enhanced semantic search with AI-optimized features.
+- `-l, --limit <number>`: Limit results (default: 20).
+- `-t, --threshold <number>`: Score threshold 0-1 (default: 0.65).
+- `--snapshots <ids>`: Search specific snapshots.
+- `-m, --mode <mode>`: Search mode: semantic, syntactic, behavioral, hybrid.
+- `-c, --context <lines>`: Context radius in lines (default: 5).
+- `-r, --ranking <strategy>`: Ranking strategy: relevance, quality, recency, usage.
+
+#### `behavioral <description>`
+Search for code based on behavioral description.
+
+#### `pattern <pattern-type>`
+Search for specific design patterns or code structures.
+
+#### `batch <queries-file>`
+Execute multiple search queries from a JSON file.
+
+---
+
+### Code Analysis (`codelapse analyze`)
+
+Code analysis commands for AI agents to evaluate code quality, structure, and metrics.
+
+#### `chunk <chunk-id>`
+Analyze a specific code chunk.
+- `-s, --snapshot <id>`: Snapshot ID (required).
+- `-t, --type <type>`: Analysis type: full, quick, quality (default: full).
+
+#### `file <file-path>`
+Analyze a complete file.
+- `-s, --snapshot <id>`: Snapshot ID (required).
+
+#### `quality <target>`
+Analyze code quality metrics.
+- `-s, --snapshot <id>`: Snapshot ID (required).
+- `-m, --metrics <metrics>`: Specific metrics: readability, maintainability, complexity, documentation.
+
+#### `relationships <chunk-id>`
+Analyze chunk relationships and dependencies.
+- `-d, --depth <number>`: Maximum relationship depth (default: 3).
+
+#### `batch <input-file>`
+Execute multiple analysis operations from a JSON file.
+
+---
+
+### Code Chunking (`codelapse chunk`)
+
+Enhanced code chunking commands for context extraction and management.
+
+#### `file <file-path>`
+Chunk a specific file with enhanced strategies.
+- `-s, --snapshot <id>`: Snapshot ID (required).
+- `--strategy <strategy>`: Chunking strategy: semantic, hierarchical, context-aware.
+
+#### `snapshot <snapshot-id>`
+Chunk all files in a snapshot.
+
+#### `list <snapshot-id>`
+List chunks in a snapshot with filtering and pagination.
+
+#### `metadata <chunk-id>`
+Get detailed metadata for a chunk.
+
+#### `context <chunk-id>`
+Get contextual information for a chunk.
+
+#### `dependencies <chunk-id>`
+Get chunk dependencies and relationships.
+
+---
+
+### Git Integration (`codelapse git`)
+
+#### `commit <snapshot-id>`
+Create a Git commit from a snapshot.
+- `-m, --message <message>`: Commit message (auto-generated if omitted).
+- `-b, --branch <name>`: Create a new branch for the commit.
+- `-u, --include-untracked`: Include untracked files.
+- `-p, --push`: Push commit to remote.
+
+**Returns**
+```json
+{
+  "success": true,
+  "commit": {
+    "hash": "a1b2c3d",
+    "message": "My commit message",
+    "branch": "main"
+  },
+  "message": "Git commit created successfully"
+}
+```
+
+#### `auto-commit <operation>`
+Create an auto-snapshot before a Git operation.
+- `-d, --description <desc>`: Snapshot description.
+- `-u, --include-untracked`: Include untracked files.
+
+**Returns**
+```json
+{
+  "success": true,
+  "snapshot": {
+    "id": "snapshot-123",
+    "description": "Pre-operation backup"
+  }
+}
+```
+
+#### `info`
+Get current Git repository information.
+
+**Returns**
+```json
+{
+  "success": true,
+  "info": {
+    "branch": "main",
+    "commit": "a1b2c3d",
+    "isDirty": false
+  }
+}
+```
+
+#### `branches`
+List available Git branches.
+
+**Returns**
+```json
+{
+  "success": true,
+  "branches": ["main", "feature/auth", "develop"],
+  "currentBranch": "main"
+}
+```
+
+#### `branch <name>`
+Create a new Git branch.
+- `-c, --checkout`: Switch to branch after creating.
+
+**Returns**
+```json
+{
+  "success": true,
+  "message": "Branch 'feature/auth' created successfully"
+}
+```
+
+#### `checkout <name>`
+Switch to an existing Git branch.
+
+**Returns**
+```json
+{
+  "success": true,
+  "message": "Switched to branch 'feature/auth'"
+}
+```
+
+#### `delete-branch <name>`
+Delete a Git branch.
+- `-f, --force`: Force delete branch.
+
+**Returns**
+```json
+{
+  "success": true,
+  "message": "Branch 'feature/auth' deleted successfully"
+}
+```
+
+#### `compare <snapshot-id> <commit-hash>`
+Compare a snapshot with a Git commit.
+- `-f, --files`: Show file-level changes only.
+
+**Returns**
+```json
+{
+  "success": true,
+  "comparison": {
+    "addedFiles": ["src/new-feature.ts"],
+    "removedFiles": [],
+    "modifiedFiles": ["src/main.ts"]
+  }
 }
 ```
 

@@ -27,6 +27,8 @@ import { log } from '../logger';
 export class CliConnectorService implements vscode.Disposable {
   private server?: net.Server;
   private connections: Set<net.Socket> = new Set();
+  private authenticatedSockets: Set<net.Socket> = new Set();
+  private authToken: string;
   private terminalApiService: TerminalApiService;
   private context: vscode.ExtensionContext;
   private socketPath: string;
@@ -47,6 +49,9 @@ export class CliConnectorService implements vscode.Disposable {
     this.terminalApiService = terminalApiService;
     this.context = context;
     this.semanticSearchService = semanticSearchService;
+
+    // Generate authentication token for IPC security
+    this.authToken = crypto.randomBytes(32).toString('hex');
 
     // Initialize enhanced services
     this.enhancedCodeChunker = new EnhancedCodeChunker();
@@ -96,6 +101,45 @@ export class CliConnectorService implements vscode.Disposable {
 
             try {
               const message = JSON.parse(rawLine);
+
+              // Handle authentication
+              if (message.method === 'authenticate') {
+                if (message.data?.token === this.authToken) {
+                  this.authenticatedSockets.add(socket);
+                  socket.write(
+                    JSON.stringify({
+                      success: true,
+                      id: message.id,
+                      result: { authenticated: true },
+                    }) + '\n',
+                  );
+                } else {
+                  socket.write(
+                    JSON.stringify({
+                      success: false,
+                      id: message.id,
+                      error: 'Authentication failed: invalid token',
+                    }) + '\n',
+                  );
+                  socket.destroy();
+                }
+                continue;
+              }
+
+              // Reject unauthenticated requests
+              if (!this.authenticatedSockets.has(socket)) {
+                socket.write(
+                  JSON.stringify({
+                    success: false,
+                    id: message.id,
+                    error:
+                      'Not authenticated. Send authenticate message first.',
+                  }) + '\n',
+                );
+                socket.destroy();
+                continue;
+              }
+
               const response = await this.handleCliRequest(message);
               socket.write(JSON.stringify(response) + '\n');
             } catch (error) {
@@ -111,11 +155,13 @@ export class CliConnectorService implements vscode.Disposable {
         socket.on('close', () => {
           log(`CLI client disconnected`);
           this.connections.delete(socket);
+          this.authenticatedSockets.delete(socket);
         });
 
         socket.on('error', (error) => {
           log(`CLI client error: ${error.message}`);
           this.connections.delete(socket);
+          this.authenticatedSockets.delete(socket);
         });
       });
 
@@ -297,6 +343,7 @@ export class CliConnectorService implements vscode.Disposable {
         workspaceRoot,
         extensionVersion: this.context.extension.packageJSON.version,
         apiVersion: '1.0.0',
+        authToken: this.authToken,
         created: new Date().toISOString(),
       };
 

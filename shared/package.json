@@ -1,0 +1,39 @@
+{
+  "name": "codelapse-core",
+  "version": "0.9.5",
+  "description": "Shared core functionality for CodeLapse CLI and VS Code extension",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "snapshot",
+    "version-control",
+    "code-snapshots"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "minimatch": "^10.0.1",
+    "diff": "^5.0.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/diff": "^5.0.0",
+    "@types/uuid": "^9.0.0",
+    "typescript": "^5.3.3",
+    "rimraf": "^5.0.5"
+  }
+}

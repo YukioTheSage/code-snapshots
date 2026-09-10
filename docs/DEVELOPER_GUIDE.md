@@ -168,6 +168,17 @@ onDidChangeSnapshots: vscode.Event<void>
 - Click-to-action functionality
 - Progress indicators
 
+### CLI Architecture
+
+The CLI (`cli/`) is designed to work in two modes:
+1. **Standalone Mode**: Uses `StandaloneHandler` to directly interact with the file system and `SnapshotStorage` logic, bypassing VS Code APIs.
+2. **IPC Mode**: Uses `CodeLapseClient` to communicate with the running VS Code extension via a local server.
+
+**Key Components:**
+- **UnifiedClient**: The main entry point that abstracts the mode (Standalone vs IPC).
+- **StandaloneHandler**: Replicates core extension logic (SnapshotManager, SnapshotStorage) for the CLI environment.
+- **CodeLapseClient**: Handles IPC communication.
+
 ### Service Layer
 
 #### Semantic Search Services (Experimental)

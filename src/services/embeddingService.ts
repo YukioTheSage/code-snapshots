@@ -8,8 +8,10 @@ export class EmbeddingService {
   private readonly EMBEDDING_MODEL = 'gemini-embedding-exp-03-07'; // Update as needed
   private readonly MAX_BATCH_SIZE = 10; // Maximum number of chunks to embed at once
   private readonly MAX_RETRY_ATTEMPTS = 3;
+  private readonly MAX_INIT_ATTEMPTS = 3;
   private readonly RETRY_BACKOFF_BASE_MS = 10000;
   private readonly THROTTLE_DELAY_MS = 5000;
+  private readonly EMBEDDING_CACHE_LIMIT = 1000;
   private credentialsManager: CredentialsManager;
   private aiClient: GoogleGenAI | null = null;
   private embeddingDimension?: number = 3072;
@@ -23,31 +25,50 @@ export class EmbeddingService {
   }
 
   private async initialize(): Promise<void> {
-    try {
-      let apiKey = await this.credentialsManager.getGeminiApiKey();
+    for (let attempt = 1; attempt <= this.MAX_INIT_ATTEMPTS; attempt++) {
+      try {
+        let apiKey = await this.credentialsManager.getGeminiApiKey();
 
-      if (!apiKey) {
-        log('Gemini API key not found. Prompting for credentials.');
-        const got = await this.credentialsManager.promptForCredentials();
-        if (!got) throw new Error('Gemini API key required');
-        const newKey = await this.credentialsManager.getGeminiApiKey();
-        if (!newKey) throw new Error('Gemini API key required');
-        apiKey = newKey;
+        if (!apiKey) {
+          log('Gemini API key not found. Prompting for credentials.');
+          const got = await this.credentialsManager.promptForCredentials();
+          if (!got) {
+            throw new Error('Gemini API key required');
+          }
+          const newKey = await this.credentialsManager.getGeminiApiKey();
+          if (!newKey) {
+            throw new Error('Gemini API key required');
+          }
+          apiKey = newKey;
+        }
+
+        this.aiClient = new GoogleGenAI({ apiKey });
+        log('GenAI Embedding service initialized successfully');
+        return;
+      } catch (error) {
+        const isAuthError =
+          error instanceof Error && /401|Unauthorized/i.test(error.message);
+        if (isAuthError && attempt < this.MAX_INIT_ATTEMPTS) {
+          log(
+            `Embedding initialization authentication failure (attempt ${attempt}/${this.MAX_INIT_ATTEMPTS}). Prompting for credentials.`,
+          );
+          const got = await this.credentialsManager.promptForCredentials();
+          if (!got) {
+            throw error;
+          }
+          continue;
+        }
+
+        log(`Error initializing GenAI Embedding service: ${error}`);
+        throw new Error(
+          `Failed to initialize GenAI Embedding service after ${attempt} attempt(s): ${error}`,
+        );
       }
-
-      const validKey = apiKey;
-      this.aiClient = new GoogleGenAI({ apiKey: validKey });
-
-      log('GenAI Embedding service initialized successfully');
-    } catch (error) {
-      if (error instanceof Error && /401|Unauthorized/.test(error.message)) {
-        const got = await this.credentialsManager.promptForCredentials();
-        if (!got) throw error;
-        return this.initialize();
-      }
-      log(`Error initializing GenAI Embedding service: ${error}`);
-      throw new Error(`Failed to initialize GenAI Embedding service: ${error}`);
     }
+
+    throw new Error(
+      `Failed to initialize GenAI Embedding service after ${this.MAX_INIT_ATTEMPTS} attempts`,
+    );
   }
 
   /**
@@ -62,9 +83,10 @@ export class EmbeddingService {
    */
   async embedCodeChunk(chunk: CodeChunk): Promise<number[]> {
     // Check cache first
-    if (this.embeddingCache.has(chunk.id)) {
+    const cached = this.getCachedEmbedding(chunk.id);
+    if (cached) {
       logVerbose(`Using cached embedding for chunk ${chunk.id}`);
-      return this.embeddingCache.get(chunk.id) ?? [];
+      return cached;
     }
 
     const client = await this.ensureInitialized();
@@ -86,7 +108,7 @@ export class EmbeddingService {
         const embedding = response.embeddings?.[0]?.values ?? [];
 
         // Cache and throttle
-        this.embeddingCache.set(chunk.id, embedding);
+        this.setCachedEmbedding(chunk.id, embedding);
         await this.delay(this.THROTTLE_DELAY_MS);
         return embedding;
       } catch (error: unknown) {
@@ -118,8 +140,9 @@ export class EmbeddingService {
 
     // First check cache
     for (const chunk of chunks) {
-      if (this.embeddingCache.has(chunk.id)) {
-        results.set(chunk.id, this.embeddingCache.get(chunk.id) ?? []);
+      const cached = this.getCachedEmbedding(chunk.id);
+      if (cached) {
+        results.set(chunk.id, cached);
       } else {
         chunksToEmbed.push(chunk);
       }
@@ -286,6 +309,32 @@ export class EmbeddingService {
   clearCache(): void {
     this.embeddingCache.clear();
     log('Embedding cache cleared');
+  }
+
+  private getCachedEmbedding(key: string): number[] | undefined {
+    const value = this.embeddingCache.get(key);
+    if (!value) {
+      return undefined;
+    }
+
+    // Refresh recency for LRU behavior.
+    this.embeddingCache.delete(key);
+    this.embeddingCache.set(key, value);
+    return value;
+  }
+
+  private setCachedEmbedding(key: string, embedding: number[]): void {
+    if (this.embeddingCache.has(key)) {
+      this.embeddingCache.delete(key);
+    }
+    this.embeddingCache.set(key, embedding);
+
+    if (this.embeddingCache.size > this.EMBEDDING_CACHE_LIMIT) {
+      const oldestKey = this.embeddingCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.embeddingCache.delete(oldestKey);
+      }
+    }
   }
 
   /**

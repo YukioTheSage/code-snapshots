@@ -1,17 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as vscode from 'vscode';
+import { minimatch } from 'minimatch';
 
 /**
  * Simple .gitignore parser to determine if a file should be ignored
+ * Standalone version without VS Code dependencies
  */
 export class GitignoreParser {
   private patterns: string[] = [];
   private negatedPatterns: string[] = [];
   private workspaceRoot: string;
+  private snapshotLocation: string;
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, snapshotLocation: string = '.snapshots') {
     this.workspaceRoot = workspaceRoot;
+    this.snapshotLocation = snapshotLocation;
     this.loadGitignore();
   }
 
@@ -44,14 +47,7 @@ export class GitignoreParser {
     }
 
     // Add default patterns (always ignore these directories)
-    const config = vscode.workspace.getConfiguration('vscode-snapshots');
-    const snapshotLocationRelative = config.get<string>(
-      'snapshotLocation',
-      '.snapshots',
-    );
-
-    // Add critical always-ignored directories
-    this.patterns.push(snapshotLocationRelative);
+    this.patterns.push(this.snapshotLocation);
     this.patterns.push('node_modules');
     this.patterns.push('.git');
 
@@ -90,8 +86,65 @@ export class GitignoreParser {
   }
 
   /**
-   * Converts a single gitignore pattern to a glob pattern suitable for vscode.workspace.findFiles.
-   * Handles basic cases, might need refinement for complex gitignore syntax.
+   * Check if a file path should be ignored
+   * @param filePath Absolute or relative path to check
+   * @returns true if the file should be ignored
+   */
+  public shouldIgnore(filePath: string): boolean {
+    // Get relative path from workspace root
+    const relativePath = path.isAbsolute(filePath)
+      ? path.relative(this.workspaceRoot, filePath)
+      : filePath;
+
+    // Normalize path separators to forward slashes for consistent matching
+    const normalizedPath = relativePath.replace(/\\/g, '/');
+
+    // Check if any negated pattern matches (these files should NOT be ignored)
+    for (const pattern of this.negatedPatterns) {
+      if (this.matchPattern(normalizedPath, pattern)) {
+        return false;
+      }
+    }
+
+    // Check if any positive pattern matches (these files SHOULD be ignored)
+    for (const pattern of this.patterns) {
+      if (this.matchPattern(normalizedPath, pattern)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a path matches a gitignore pattern
+   */
+  private matchPattern(filePath: string, pattern: string): boolean {
+    // Convert gitignore pattern to minimatch compatible pattern
+    let globPattern = pattern;
+
+    // Handle leading slash (anchored to root)
+    if (globPattern.startsWith('/')) {
+      globPattern = globPattern.substring(1);
+    } else if (!globPattern.includes('/')) {
+      // No slashes - match anywhere
+      globPattern = `**/${globPattern}`;
+    }
+
+    // Handle trailing slash (directory only)
+    if (globPattern.endsWith('/')) {
+      globPattern = `${globPattern}**`;
+    }
+
+    // Use minimatch for pattern matching
+    return minimatch(filePath, globPattern, {
+      dot: true,
+      matchBase: true,
+    });
+  }
+
+  /**
+   * Converts a single gitignore pattern to a glob pattern.
    * @param pattern A single gitignore pattern string.
    * @returns A glob pattern string.
    */
@@ -119,15 +172,12 @@ export class GitignoreParser {
       globPattern = `${globPattern}**`;
     }
 
-    // Note: This basic conversion doesn't handle all gitignore nuances like character ranges [],
-    // escaped characters, or complex '**' interactions perfectly. It covers common cases.
-    // `vscode.workspace.findFiles` uses minimatch, so standard glob syntax applies.
     return globPattern;
   }
 
   /**
    * Generates a combined glob pattern string for excluding files based on positive ignore rules.
-   * @returns A string suitable for the `exclude` parameter of `vscode.workspace.findFiles`.
+   * @returns A string suitable for glob pattern matching.
    */
   public getExcludeGlobPattern(): string {
     if (this.patterns.length === 0) {
@@ -148,13 +198,25 @@ export class GitignoreParser {
 
   /**
    * Generates an array of glob patterns for re-including files based on negated ignore rules.
-   * @returns An array of glob pattern strings suitable for the `include` parameter of `vscode.workspace.findFiles`.
+   * @returns An array of glob pattern strings.
    */
   public getNegatedGlobs(): string[] {
     return this.negatedPatterns
-      .map((p) => this.convertGitignorePatternToGlob(p)) // Convert the pattern part (without '!')
-      .filter((p) => p !== ''); // Filter out empty results
+      .map((p) => this.convertGitignorePatternToGlob(p))
+      .filter((p) => p !== '');
   }
 
-  // Removed shouldIgnore, matchPattern, simplePatternMatch, convertGitignoreToRegex
+  /**
+   * Get all ignore patterns
+   */
+  public getPatterns(): string[] {
+    return [...this.patterns];
+  }
+
+  /**
+   * Get all negated patterns
+   */
+  public getNegatedPatterns(): string[] {
+    return [...this.negatedPatterns];
+  }
 }

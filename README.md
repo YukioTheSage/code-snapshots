@@ -9,7 +9,7 @@ CodeLapse is the missing link between your IDE's autosave and Git's formal commi
 ## 🛠️ Two Powerful Tools, One Seamless Experience
 
 **🎯 VS Code Extension**: Visual, interactive snapshot management right in your editor
-**⚡ CLI Tool**: Automation-ready command-line interface for developers, AI agents, and CI/CD pipelines
+**⚡ CLI Tool**: Automation-ready command-line interface that works **standalone** or connected to VS Code
 
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/YukioTheSage.vscode-snapshots)](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
 [![Downloads](https://img.shields.io/visual-studio-marketplace/d/YukioTheSage.vscode-snapshots)](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
@@ -80,7 +80,7 @@ CodeLapse is the missing link between your IDE's autosave and Git's formal commi
 
 ### CLI Tool Installation
 
-> ⚠️ **Prerequisites**: The CLI requires the VS Code extension to be installed and running to function properly.
+> 💡 **Note**: The CLI can now run independently in **Standalone Mode**! The VS Code extension is optional but recommended for AI features and visual management.
 
 ```bash
 # Install globally via npm
@@ -273,11 +273,13 @@ fi
 
 ### 🚀 Key CLI Features
 
+- **🎯 Standalone Mode**: Run independently without the VS Code extension
 - **🔄 Complete Snapshot Management**: Create, list, restore, delete, and compare snapshots
-- **🔍 Semantic Search**: Natural language code search across all snapshots _(Experimental)_
-- **📊 Workspace Monitoring**: Real-time workspace state and file change tracking
-- **🤖 AI-Friendly**: JSON output, silent mode, and structured error handling
-- **⚡ Batch Operations**: Execute multiple commands from configuration files
+- **🤝 Git Integration**: Native commands to manage commits, branches, and compare with Git history
+- **⚙️ Configuration Management**: Unified settings shared with the extension
+- **🔍 Semantic Search**: Natural language code search across all snapshots _(Experimental, Requires Extension)_
+- **📊 Code Analysis & Chunking**: Evaluate code quality and extract context for AI agents
+- **🤖 AI-Friendly**: JSON output, silent mode, structured error handling, and batch operations
 - **🛡️ Safety Features**: Automatic backups, validation, and rollback capabilities
 - **📈 Real-time Events**: Stream workspace and snapshot events for reactive workflows
 
@@ -297,14 +299,17 @@ codelapse snapshot compare snap-1 snap-2 --files    # Compare snapshots
 codelapse search query "authentication code" --limit 5
 codelapse search index --all                        # Build search index
 
-# Workspace Management
-codelapse workspace info --json --silent            # Workspace information
+# Git Integration & Workspace
+codelapse git commit snapshot-123 -m "My commit"    # Create Git commit
+codelapse git compare snapshot-123                  # Compare vs Git
 codelapse workspace files --changed                 # Show changed files
+codelapse filter favorite                           # Show favorite snapshots
 
-# Utilities
-codelapse utility validate snapshot-123             # Validate snapshot
-codelapse utility export snap-123 --format zip     # Export snapshot
-codelapse batch commands.json --json --silent      # Batch operations
+# Configuration & Utilities
+codelapse config set maxSnapshots 100               # Set configuration
+codelapse chunk file src/main.ts                    # Create code chunks
+codelapse utility export snap-123 --format zip      # Export snapshot
+codelapse batch commands.json --json --silent       # Batch operations
 ```
 
 ### 🔗 Integration Examples
@@ -374,7 +379,8 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 | 📖 [User Guide](docs/USER_GUIDE.md)           | 🤝 [Git Integration](docs/GIT_COMPANION.md)    | 🔧 [Developer Guide](docs/DEVELOPER_GUIDE.md)           |
 | 🚀 [Quick Start](#-quick-start)               | ⚙️ [Configuration](#-configuration)            | 🗺️ [Roadmap](docs/ROADMAP.md)                           |
 | ⚡ [CLI Guide](cli/README.md)                  | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing) |
-| ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 🤖 [AI Agent Guidelines](cli/README.md#ai-agent-guidelines) | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
+| 🏗️ [Standalone Mode](STANDALONE_MODE.md)     | 🤖 [AI Guidelines](cli/README.md#ai-agent-guidelines) | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
+| ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 📦 [Core Package](shared/README.md)           | 💬 [Issues](https://github.com/YukioTheSage/code-snapshots/issues) |
 
 ---
 

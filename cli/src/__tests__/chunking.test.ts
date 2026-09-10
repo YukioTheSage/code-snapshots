@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { ChunkingCommands } from '../commands/chunking';
 import { CodeLapseClient } from '../client';
 
@@ -35,25 +36,25 @@ describe('ChunkingCommands', () => {
             content: 'function test() {}',
             enhancedMetadata: {
               semanticType: 'function',
-              complexityScore: 5
+              complexityScore: 5,
             },
             qualityMetrics: {
-              overallScore: 85
+              overallScore: 85,
             },
             relationships: [],
-            contextInfo: {}
-          }
+            contextInfo: {},
+          },
         ],
         summary: {
           totalChunks: 1,
           averageSize: 24,
           semanticTypes: { function: 1 },
-          qualityDistribution: { excellent: 0, good: 1, fair: 0, poor: 0 }
+          qualityDistribution: { excellent: 0, good: 1, fair: 0, poor: 0 },
         },
         metadata: {
           chunkingTime: Date.now(),
-          version: '1.0.0'
-        }
+          version: '1.0.0',
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -69,35 +70,44 @@ describe('ChunkingCommands', () => {
           minChunkSize: 50,
           overlap: 0,
           preserveStructure: true,
-          includeContext: true
-        }
+          includeContext: true,
+        },
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        filePath: 'src/test.ts',
-        snapshotId: 'snap-456',
-        strategy: 'semantic',
-        chunks: mockResult.chunks,
-        summary: mockResult.summary,
-        metadata: mockResult.metadata
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          filePath: 'src/test.ts',
+          snapshotId: 'snap-456',
+          strategy: 'semantic',
+          chunks: mockResult.chunks,
+          summary: mockResult.summary,
+          metadata: mockResult.metadata,
+        }),
+      );
     });
 
     it('should require snapshot ID', async () => {
       await chunkingCommands.file('src/test.ts', {});
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: false,
-        error: 'Snapshot ID is required for file chunking',
-        suggestions: ['Use --snapshot <id> to specify snapshot']
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: false,
+          error: 'Snapshot ID is required for file chunking',
+          suggestions: ['Use --snapshot <id> to specify snapshot'],
+        }),
+      );
 
       expect(mockClient.callApi).not.toHaveBeenCalled();
     });
 
     it('should handle chunking options', async () => {
-      const mockResult = { success: true, chunks: [], summary: {}, metadata: {} };
+      const mockResult = {
+        success: true,
+        chunks: [],
+        summary: {},
+        metadata: {},
+      };
       mockClient.callApi.mockResolvedValue(mockResult);
 
       await chunkingCommands.file('src/test.ts', {
@@ -107,7 +117,7 @@ describe('ChunkingCommands', () => {
         minSize: '25',
         overlap: '10',
         preserveStructure: false,
-        context: false
+        context: false,
       });
 
       expect(mockClient.callApi).toHaveBeenCalledWith('enhancedChunkFile', {
@@ -119,8 +129,8 @@ describe('ChunkingCommands', () => {
           minChunkSize: 25,
           overlap: 10,
           preserveStructure: false,
-          includeContext: false
-        }
+          includeContext: false,
+        },
       });
     });
 
@@ -129,11 +139,17 @@ describe('ChunkingCommands', () => {
 
       await chunkingCommands.file('invalid.ts', { snapshot: 'snap-456' });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: false,
-        error: 'File not found',
-        suggestions: ['Verify file path exists', 'Check snapshot availability', 'Validate chunking strategy']
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: false,
+          error: 'File not found',
+          suggestions: [
+            'Verify file path exists',
+            'Check snapshot availability',
+            'Validate chunking strategy',
+          ],
+        }),
+      );
     });
   });
 
@@ -145,17 +161,17 @@ describe('ChunkingCommands', () => {
         strategy: 'semantic',
         results: [
           { filePath: 'src/test1.ts', chunks: 3, success: true },
-          { filePath: 'src/test2.ts', chunks: 2, success: true }
+          { filePath: 'src/test2.ts', chunks: 2, success: true },
         ],
         summary: {
           totalFiles: 2,
           successfulFiles: 2,
-          totalChunks: 5
+          totalChunks: 5,
         },
         metadata: {
           chunkingTime: Date.now(),
-          version: '1.0.0'
-        }
+          version: '1.0.0',
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -173,28 +189,35 @@ describe('ChunkingCommands', () => {
           preserveStructure: true,
           includeContext: true,
           excludeBinary: true,
-          excludeTests: false
-        }
+          excludeTests: false,
+        },
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        snapshotId: 'snap-456',
-        strategy: 'semantic',
-        results: mockResult.results,
-        summary: mockResult.summary,
-        metadata: mockResult.metadata
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          snapshotId: 'snap-456',
+          strategy: 'semantic',
+          results: mockResult.results,
+          summary: mockResult.summary,
+          metadata: mockResult.metadata,
+        }),
+      );
     });
 
     it('should handle file patterns', async () => {
-      const mockResult = { success: true, results: [], summary: {}, metadata: {} };
+      const mockResult = {
+        success: true,
+        results: [],
+        summary: {},
+        metadata: {},
+      };
       mockClient.callApi.mockResolvedValue(mockResult);
 
       await chunkingCommands.snapshot('snap-456', {
         patterns: '*.ts,*.js',
         excludeTests: true,
-        excludeBinary: false
+        excludeBinary: false,
       });
 
       expect(mockClient.callApi).toHaveBeenCalledWith('chunkSnapshot', {
@@ -208,8 +231,8 @@ describe('ChunkingCommands', () => {
           preserveStructure: true,
           includeContext: true,
           excludeBinary: false,
-          excludeTests: true
-        }
+          excludeTests: true,
+        },
       });
     });
   });
@@ -228,18 +251,18 @@ describe('ChunkingCommands', () => {
             semanticType: 'function',
             qualityScore: 85,
             complexityScore: 12,
-            lastModified: Date.now()
-          }
+            lastModified: Date.now(),
+          },
         ],
         pagination: {
           total: 1,
           page: 1,
-          limit: 50
+          limit: 50,
         },
         metadata: {
           queryTime: Date.now(),
-          version: '1.0.0'
-        }
+          version: '1.0.0',
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -254,34 +277,41 @@ describe('ChunkingCommands', () => {
           qualityThreshold: undefined,
           complexityRange: undefined,
           hasPatterns: undefined,
-          excludeSmells: undefined
+          excludeSmells: undefined,
         },
         pagination: {
           page: 1,
-          limit: 50
+          limit: 50,
         },
         sortBy: 'startLine',
-        sortOrder: 'asc'
+        sortOrder: 'asc',
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        snapshotId: 'snap-456',
-        chunks: mockResult.chunks,
-        pagination: mockResult.pagination,
-        filters: {
-          semanticTypes: undefined,
-          qualityThreshold: undefined,
-          complexityRange: undefined,
-          hasPatterns: undefined,
-          excludeSmells: undefined
-        },
-        metadata: mockResult.metadata
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          snapshotId: 'snap-456',
+          chunks: mockResult.chunks,
+          pagination: mockResult.pagination,
+          filters: {
+            semanticTypes: undefined,
+            qualityThreshold: undefined,
+            complexityRange: undefined,
+            hasPatterns: undefined,
+            excludeSmells: undefined,
+          },
+          metadata: mockResult.metadata,
+        }),
+      );
     });
 
     it('should handle filtering options', async () => {
-      const mockResult = { success: true, chunks: [], pagination: {}, metadata: {} };
+      const mockResult = {
+        success: true,
+        chunks: [],
+        pagination: {},
+        metadata: {},
+      };
       mockClient.callApi.mockResolvedValue(mockResult);
 
       await chunkingCommands.list('snap-456', {
@@ -295,7 +325,7 @@ describe('ChunkingCommands', () => {
         page: '2',
         limit: '25',
         sort: 'quality',
-        order: 'desc'
+        order: 'desc',
       });
 
       expect(mockClient.callApi).toHaveBeenCalledWith('listChunks', {
@@ -306,14 +336,14 @@ describe('ChunkingCommands', () => {
           qualityThreshold: 0.8,
           complexityRange: [5, 20],
           hasPatterns: ['Factory', 'Observer'],
-          excludeSmells: ['longMethod', 'duplicateCode']
+          excludeSmells: ['longMethod', 'duplicateCode'],
         },
         pagination: {
           page: 2,
-          limit: 25
+          limit: 25,
         },
         sortBy: 'quality',
-        sortOrder: 'desc'
+        sortOrder: 'desc',
       });
     });
   });
@@ -330,18 +360,18 @@ describe('ChunkingCommands', () => {
           dependencies: ['lodash', 'express'],
           designPatterns: ['Factory'],
           codeSmells: [],
-          securityConcerns: []
+          securityConcerns: [],
         },
         relationships: [],
         qualityMetrics: {
           overallScore: 82,
           readabilityScore: 0.85,
-          maintainabilityScore: 78
+          maintainabilityScore: 78,
         },
         responseMetadata: {
           retrievalTime: Date.now(),
-          version: '1.0.0'
-        }
+          version: '1.0.0',
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -353,17 +383,19 @@ describe('ChunkingCommands', () => {
         includeRelationships: true,
         includeQuality: true,
         includeContext: true,
-        contextRadius: 5
+        contextRadius: 5,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        chunkId: 'chunk-123',
-        metadata: mockResult.metadata,
-        relationships: mockResult.relationships,
-        qualityMetrics: mockResult.qualityMetrics,
-        responseMetadata: mockResult.responseMetadata
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          chunkId: 'chunk-123',
+          metadata: mockResult.metadata,
+          relationships: mockResult.relationships,
+          qualityMetrics: mockResult.qualityMetrics,
+          responseMetadata: mockResult.responseMetadata,
+        }),
+      );
     });
 
     it('should handle metadata options', async () => {
@@ -374,7 +406,7 @@ describe('ChunkingCommands', () => {
         relationships: false,
         quality: false,
         context: false,
-        contextRadius: '10'
+        contextRadius: '10',
       });
 
       expect(mockClient.callApi).toHaveBeenCalledWith('getChunkMetadata', {
@@ -382,7 +414,7 @@ describe('ChunkingCommands', () => {
         includeRelationships: false,
         includeQuality: false,
         includeContext: false,
-        contextRadius: 10
+        contextRadius: 10,
       });
     });
   });
@@ -401,14 +433,14 @@ describe('ChunkingCommands', () => {
             totalLines: 150,
             fileSize: 4500,
             lastModified: new Date(),
-            siblingChunks: ['chunk-2', 'chunk-3']
-          }
+            siblingChunks: ['chunk-2', 'chunk-3'],
+          },
         },
         metadata: {
           contextRadius: 5,
           retrievalTime: Date.now(),
-          version: '1.0.0'
-        }
+          version: '1.0.0',
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -420,15 +452,17 @@ describe('ChunkingCommands', () => {
         contextRadius: 5,
         includeFileContext: true,
         includeArchitecturalContext: true,
-        includeBusinessContext: true
+        includeBusinessContext: true,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        chunkId: 'chunk-123',
-        context: mockResult.context,
-        metadata: mockResult.metadata
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          chunkId: 'chunk-123',
+          context: mockResult.context,
+          metadata: mockResult.metadata,
+        }),
+      );
     });
 
     it('should handle context options', async () => {
@@ -439,7 +473,7 @@ describe('ChunkingCommands', () => {
         radius: '10',
         fileContext: false,
         architectural: false,
-        business: false
+        business: false,
       });
 
       expect(mockClient.callApi).toHaveBeenCalledWith('getChunkContext', {
@@ -447,7 +481,7 @@ describe('ChunkingCommands', () => {
         contextRadius: 10,
         includeFileContext: false,
         includeArchitecturalContext: false,
-        includeBusinessContext: false
+        includeBusinessContext: false,
       });
     });
   });
@@ -463,25 +497,25 @@ describe('ChunkingCommands', () => {
               chunkId: 'chunk-124',
               type: 'imports',
               strength: 0.9,
-              description: 'Imports utility functions'
-            }
+              description: 'Imports utility functions',
+            },
           ],
-          transitive: []
+          transitive: [],
         },
         dependents: [
           {
             chunkId: 'chunk-125',
             type: 'calls',
             strength: 0.8,
-            description: 'Called by main handler'
-          }
+            description: 'Called by main handler',
+          },
         ],
         metadata: {
           includeTransitive: true,
           maxDepth: 3,
           retrievalTime: Date.now(),
-          version: '1.0.0'
-        }
+          version: '1.0.0',
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -493,21 +527,23 @@ describe('ChunkingCommands', () => {
         includeTransitive: true,
         maxDepth: 3,
         dependencyTypes: undefined,
-        includeStrength: true
+        includeStrength: true,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        chunkId: 'chunk-123',
-        dependencies: mockResult.dependencies,
-        dependents: mockResult.dependents,
-        metadata: mockResult.metadata,
-        summary: {
-          directDependencies: 1,
-          transitiveDependencies: 0,
-          totalDependents: 1
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          chunkId: 'chunk-123',
+          dependencies: mockResult.dependencies,
+          dependents: mockResult.dependents,
+          metadata: mockResult.metadata,
+          summary: {
+            directDependencies: 1,
+            transitiveDependencies: 0,
+            totalDependents: 1,
+          },
+        }),
+      );
     });
 
     it('should handle dependency options', async () => {
@@ -515,7 +551,7 @@ describe('ChunkingCommands', () => {
         success: true,
         dependencies: { direct: [], transitive: undefined },
         dependents: [],
-        metadata: {}
+        metadata: {},
       };
       mockClient.callApi.mockResolvedValue(mockResult);
 
@@ -523,7 +559,7 @@ describe('ChunkingCommands', () => {
         transitive: false,
         depth: '2',
         types: 'imports,calls',
-        strength: false
+        strength: false,
       });
 
       expect(mockClient.callApi).toHaveBeenCalledWith('getChunkDependencies', {
@@ -531,7 +567,7 @@ describe('ChunkingCommands', () => {
         includeTransitive: false,
         maxDepth: 2,
         dependencyTypes: ['imports', 'calls'],
-        includeStrength: false
+        includeStrength: false,
       });
     });
   });

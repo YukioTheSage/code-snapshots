@@ -3,6 +3,10 @@ dist
 node_modules
 .vscode-test/
 *.vsix
+# Runtime discovery file written by CliConnectorService on every activation.
+# It contains a live IPC auth token; committing it leaks the credential and
+# makes every checkout look permanently dirty. See AUDIT_REPORT.md finding #10.
+.vscode/codelapse-connection.json
 combine_*
 combined_*
 gg.py
@@ -11,3 +15,4 @@ scripts
 .cursor
 GEMINI.md
 .kiro
+.claude

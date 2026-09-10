@@ -2189,7 +2189,7 @@ function registerCreateGitCommitCommand({
       );
 
       // 2. Get Commit Message
-      const defaultCommitMessage = `Snapshot: ${
+      const defaultCommitMessage = `Snapshot ${snapshot.id}: ${
         snapshot.description || new Date(snapshot.timestamp).toLocaleString()
       }`;
       const commitMessage = await vscode.window.showInputBox({

@@ -2,7 +2,6 @@ import { EventEmitter } from 'events';
 import * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 
 /**
  * Client interface for connecting to CodeLapse VSCode extension
@@ -16,7 +15,7 @@ export interface ConnectionStatus {
 
 export interface EventData {
   type: string;
-  data: any;
+  data: unknown;
 }
 
 interface ConnectionInfo {
@@ -32,9 +31,12 @@ export class CodeLapseClient extends EventEmitter {
   private connected = false;
   private connectionTimeout = 5000;
   private requestId = 0;
-  private pendingRequests = new Map<number, { resolve: Function; reject: Function }>();
+  private pendingRequests = new Map<
+    number,
+    { resolve: (value?: any) => void; reject: (reason?: any) => void }
+  >();
   private connectionInfo?: ConnectionInfo | null;
-  private messageBuffer: string = "";
+  private messageBuffer = '';
 
   constructor(options?: { timeout?: number }) {
     super();
@@ -56,7 +58,7 @@ export class CodeLapseClient extends EventEmitter {
    */
   async callApi(method: string, data: any): Promise<any> {
     await this.ensureConnection();
-    
+
     return new Promise((resolve, reject) => {
       const id = ++this.requestId;
       this.pendingRequests.set(id, { resolve, reject });
@@ -89,7 +91,7 @@ export class CodeLapseClient extends EventEmitter {
    */
   async executeCommand(command: any): Promise<any> {
     await this.ensureConnection();
-    
+
     // This would execute the command via the extension API
     return {
       command,
@@ -101,9 +103,12 @@ export class CodeLapseClient extends EventEmitter {
   /**
    * Watch for events from the extension
    */
-  async watchEvents(eventTypes: string[], callback: (event: EventData) => void): Promise<void> {
+  async watchEvents(
+    eventTypes: string[],
+    callback: (event: EventData) => void,
+  ): Promise<void> {
     await this.ensureConnection();
-    
+
     // Events are handled in the socket data handler
     this.on('event', callback);
   }
@@ -118,8 +123,12 @@ export class CodeLapseClient extends EventEmitter {
     let level = 0;
 
     while (level < maxLevels) {
-      const connectionFile = path.join(currentDir, '.vscode', 'codelapse-connection.json');
-      
+      const connectionFile = path.join(
+        currentDir,
+        '.vscode',
+        'codelapse-connection.json',
+      );
+
       if (fs.existsSync(connectionFile)) {
         try {
           const content = fs.readFileSync(connectionFile, 'utf8');
@@ -133,7 +142,7 @@ export class CodeLapseClient extends EventEmitter {
       if (parentDir === currentDir) {
         break; // Reached filesystem root
       }
-      
+
       currentDir = parentDir;
       level++;
     }
@@ -152,7 +161,9 @@ export class CodeLapseClient extends EventEmitter {
     // Find connection info
     this.connectionInfo = this.findConnectionInfo();
     if (!this.connectionInfo) {
-      throw new Error('Could not find CodeLapse extension connection. Make sure VSCode is running with the extension active.');
+      throw new Error(
+        'Could not find CodeLapse extension connection. Make sure VSCode is running with the extension active.',
+      );
     }
 
     return new Promise((resolve, reject) => {
@@ -160,16 +171,23 @@ export class CodeLapseClient extends EventEmitter {
         reject(new Error('Connection timeout'));
       }, this.connectionTimeout);
 
-      this.socket = net.createConnection(this.connectionInfo!.socketPath, () => {
-        clearTimeout(timeout);
-        this.connected = true;
-        resolve();
-      });
+      this.socket = net.createConnection(
+        this.connectionInfo!.socketPath,
+        () => {
+          clearTimeout(timeout);
+          this.connected = true;
+          resolve();
+        },
+      );
 
       this.socket.on('error', (error) => {
         clearTimeout(timeout);
         this.connected = false;
-        reject(new Error(`Failed to connect to CodeLapse extension: ${error.message}`));
+        reject(
+          new Error(
+            `Failed to connect to CodeLapse extension: ${error.message}`,
+          ),
+        );
       });
 
       this.socket.on('close', () => {
@@ -193,7 +211,12 @@ export class CodeLapseClient extends EventEmitter {
             const message = JSON.parse(rawLine);
             this.handleMessage(message);
           } catch (error) {
-            console.error('Failed to parse message from extension:', error, '\nRaw line:', rawLine);
+            console.error(
+              'Failed to parse message from extension:',
+              error,
+              '\nRaw line:',
+              rawLine,
+            );
           }
         }
       });
@@ -228,18 +251,18 @@ export class CodeLapseClient extends EventEmitter {
    */
   async disconnect(): Promise<void> {
     this.connected = false;
-    
+
     if (this.socket) {
       this.socket.destroy();
       this.socket = undefined;
     }
-    
+
     // Reject all pending requests
     for (const [id, { reject }] of this.pendingRequests) {
       reject(new Error('Connection closed'));
     }
     this.pendingRequests.clear();
-    
+
     this.removeAllListeners();
   }
-} 
+}

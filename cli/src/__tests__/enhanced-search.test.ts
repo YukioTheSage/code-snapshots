@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { EnhancedSearchCommands } from '../commands/enhanced-search';
 import { CodeLapseClient } from '../client';
 
@@ -28,12 +29,12 @@ describe('EnhancedSearchCommands', () => {
             id: 'chunk-1',
             content: 'function test() {}',
             score: 0.85,
-            explanation: { whyRelevant: 'Contains test function' }
-          }
+            explanation: { whyRelevant: 'Contains test function' },
+          },
         ],
         metadata: { totalResults: 1 },
         suggestions: [],
-        relatedQueries: []
+        relatedQueries: [],
       };
 
       mockClient.callApi.mockResolvedValue(mockResults);
@@ -54,21 +55,28 @@ describe('EnhancedSearchCommands', () => {
         rankingStrategy: 'relevance',
         filterCriteria: {},
         maxResultsPerFile: undefined,
-        enableDiversification: true
+        enableDiversification: true,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        query: 'test function',
-        results: mockResults,
-        metadata: mockResults.metadata,
-        suggestions: mockResults.suggestions,
-        relatedQueries: mockResults.relatedQueries
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          query: 'test function',
+          results: mockResults,
+          metadata: mockResults.metadata,
+          suggestions: mockResults.suggestions,
+          relatedQueries: mockResults.relatedQueries,
+        }),
+      );
     });
 
     it('should handle search options correctly', async () => {
-      const mockResults = { results: [], metadata: {}, suggestions: [], relatedQueries: [] };
+      const mockResults = {
+        results: [],
+        metadata: {},
+        suggestions: [],
+        relatedQueries: [],
+      };
       mockClient.callApi.mockResolvedValue(mockResults);
 
       const options = {
@@ -90,7 +98,7 @@ describe('EnhancedSearchCommands', () => {
         excludeSmells: 'longMethod,duplicateCode',
         domains: 'auth,payment',
         maxPerFile: '5',
-        diversify: false
+        diversify: false,
       };
 
       await enhancedSearchCommands.enhanced('search query', options);
@@ -113,23 +121,30 @@ describe('EnhancedSearchCommands', () => {
           semanticTypes: ['function', 'class'],
           designPatterns: ['Factory', 'Observer'],
           excludeCodeSmells: ['longMethod', 'duplicateCode'],
-          businessDomains: ['auth', 'payment']
+          businessDomains: ['auth', 'payment'],
         },
         maxResultsPerFile: 5,
-        enableDiversification: false
+        enableDiversification: false,
       });
     });
 
     it('should handle search errors', async () => {
-      mockClient.callApi.mockRejectedValue(new Error('Search service unavailable'));
+      mockClient.callApi.mockRejectedValue(
+        new Error('Search service unavailable'),
+      );
 
       await enhancedSearchCommands.enhanced('test query', {});
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: false,
-        error: 'Search service unavailable',
-        suggestions: ['Check semantic search service availability', 'Verify query parameters']
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: false,
+          error: 'Search service unavailable',
+          suggestions: [
+            'Check semantic search service availability',
+            'Verify query parameters',
+          ],
+        }),
+      );
     });
   });
 
@@ -140,10 +155,10 @@ describe('EnhancedSearchCommands', () => {
           {
             id: 'chunk-1',
             explanation: { matchedConcepts: ['authentication', 'validation'] },
-            metadata: { behaviorAnalysis: true }
-          }
+            metadata: { behaviorAnalysis: true },
+          },
         ],
-        metadata: { searchMode: 'behavioral' }
+        metadata: { searchMode: 'behavioral' },
       };
 
       mockClient.callApi.mockResolvedValue(mockResults);
@@ -159,20 +174,22 @@ describe('EnhancedSearchCommands', () => {
         languages: undefined,
         includeExplanations: true,
         includeRelationships: true,
-        contextRadius: 5
+        contextRadius: 5,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        description: 'validates user credentials',
-        searchMode: 'behavioral',
-        results: mockResults,
-        metadata: mockResults.metadata,
-        behaviorAnalysis: {
-          matchedBehaviors: [['authentication', 'validation']],
-          confidenceScores: [undefined]
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          description: 'validates user credentials',
+          searchMode: 'behavioral',
+          results: mockResults,
+          metadata: mockResults.metadata,
+          behaviorAnalysis: {
+            matchedBehaviors: [['authentication', 'validation']],
+            confidenceScores: [undefined],
+          },
+        }),
+      );
     });
   });
 
@@ -183,10 +200,10 @@ describe('EnhancedSearchCommands', () => {
           {
             id: 'chunk-1',
             enhancedMetadata: { designPatterns: ['Factory'] },
-            qualityMetrics: { overallScore: 85 }
-          }
+            qualityMetrics: { overallScore: 85 },
+          },
         ],
-        metadata: { patternType: 'Factory' }
+        metadata: { patternType: 'Factory' },
       };
 
       mockClient.callApi.mockResolvedValue(mockResults);
@@ -203,21 +220,23 @@ describe('EnhancedSearchCommands', () => {
         languages: undefined,
         includeExplanations: true,
         includeRelationships: true,
-        contextRadius: 8
+        contextRadius: 8,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        patternType: 'Factory',
-        searchMode: 'pattern',
-        results: mockResults,
-        metadata: mockResults.metadata,
-        patternAnalysis: {
-          foundPatterns: [['Factory']],
-          implementations: 1,
-          qualityScores: [85]
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          patternType: 'Factory',
+          searchMode: 'pattern',
+          results: mockResults,
+          metadata: mockResults.metadata,
+          patternAnalysis: {
+            foundPatterns: [['Factory']],
+            implementations: 1,
+            qualityScores: [85],
+          },
+        }),
+      );
     });
   });
 
@@ -225,7 +244,7 @@ describe('EnhancedSearchCommands', () => {
     it('should perform batch search from file', async () => {
       const mockQueries = [
         { id: 'q1', query: 'test function', searchMode: 'semantic' },
-        { id: 'q2', query: 'error handling', searchMode: 'behavioral' }
+        { id: 'q2', query: 'error handling', searchMode: 'behavioral' },
       ];
 
       const mockResults = {
@@ -234,13 +253,13 @@ describe('EnhancedSearchCommands', () => {
         failedQueries: 0,
         results: [
           { queryId: 'q1', success: true, result: { results: [] } },
-          { queryId: 'q2', success: true, result: { results: [] } }
-        ]
+          { queryId: 'q2', success: true, result: { results: [] } },
+        ],
       };
 
       // Mock fs.readFileSync
       const mockFs = {
-        readFileSync: jest.fn().mockReturnValue(JSON.stringify(mockQueries))
+        readFileSync: jest.fn().mockReturnValue(JSON.stringify(mockQueries)),
       };
       jest.doMock('fs', () => mockFs);
 
@@ -260,7 +279,7 @@ describe('EnhancedSearchCommands', () => {
             languages: undefined,
             includeExplanations: true,
             includeRelationships: true,
-            contextRadius: 5
+            contextRadius: 5,
           },
           {
             id: 'q2',
@@ -272,22 +291,24 @@ describe('EnhancedSearchCommands', () => {
             languages: undefined,
             includeExplanations: true,
             includeRelationships: true,
-            contextRadius: 5
-          }
+            contextRadius: 5,
+          },
         ],
         parallel: true,
-        maxConcurrency: 3
+        maxConcurrency: 3,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        batchResults: mockResults,
-        summary: {
-          totalQueries: 2,
-          successfulQueries: 2,
-          failedQueries: 0
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          batchResults: mockResults,
+          summary: {
+            totalQueries: 2,
+            successfulQueries: 2,
+            failedQueries: 0,
+          },
+        }),
+      );
     });
 
     it('should handle invalid queries file', async () => {
@@ -295,10 +316,14 @@ describe('EnhancedSearchCommands', () => {
 
       const callArgs = consoleSpy.mock.calls[0][0];
       const result = JSON.parse(callArgs);
-      
+
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(result.suggestions).toEqual(['Check queries file format', 'Verify file path', 'Validate query objects']);
+      expect(result.suggestions).toEqual([
+        'Check queries file format',
+        'Verify file path',
+        'Validate query objects',
+      ]);
     });
   });
 
@@ -311,10 +336,12 @@ describe('EnhancedSearchCommands', () => {
         semanticTypes: 'function,class',
         patterns: 'Factory,Observer',
         excludeSmells: 'longMethod',
-        domains: 'auth,payment'
+        domains: 'auth,payment',
       };
 
-      const result = (enhancedSearchCommands as any).parseFilterCriteria(options);
+      const result = (enhancedSearchCommands as any).parseFilterCriteria(
+        options,
+      );
 
       expect(result).toEqual({
         complexityRange: [5, 20],
@@ -322,7 +349,7 @@ describe('EnhancedSearchCommands', () => {
         semanticTypes: ['function', 'class'],
         designPatterns: ['Factory', 'Observer'],
         excludeCodeSmells: ['longMethod'],
-        businessDomains: ['auth', 'payment']
+        businessDomains: ['auth', 'payment'],
       });
     });
 
