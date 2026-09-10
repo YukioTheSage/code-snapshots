@@ -40,10 +40,12 @@ function buildHarness(): Harness {
     iconPath: undefined as unknown,
     html: '',
   };
-  (vscode.window as unknown as { createWebviewPanel: jest.Mock }).createWebviewPanel =
-    jest.fn(() => panel);
-  (vscode.window as unknown as { showInformationMessage: jest.Mock }).showInformationMessage =
-    jest.fn();
+  (
+    vscode.window as unknown as { createWebviewPanel: jest.Mock }
+  ).createWebviewPanel = jest.fn(() => panel);
+  (
+    vscode.window as unknown as { showInformationMessage: jest.Mock }
+  ).showInformationMessage = jest.fn();
   (vscode.window as unknown as { showQuickPick: jest.Mock }).showQuickPick =
     jest.fn().mockResolvedValue({ label: 'View in Current State' });
 
@@ -62,8 +64,9 @@ function buildHarness(): Harness {
     vscode.window as unknown as { showTextDocument: jest.Mock }
   ).showTextDocument = showTextDocument;
 
-  (vscode.workspace as unknown as { workspaceFolders: unknown[] }).workspaceFolders =
-    [{ uri: vscode.Uri.file(ROOT), name: 'ws', index: 0 }];
+  (
+    vscode.workspace as unknown as { workspaceFolders: unknown[] }
+  ).workspaceFolders = [{ uri: vscode.Uri.file(ROOT), name: 'ws', index: 0 }];
 
   const webview = new SemanticSearchWebview(
     { subscriptions: [], extensionUri: vscode.Uri.file('/ext') } as never,
@@ -76,14 +79,22 @@ function buildHarness(): Harness {
 
   const calls = panel.webview.onDidReceiveMessage.mock.calls;
   const handler = calls[0][0] as (message: unknown) => Promise<void>;
-  return { webview, panel, handler, openTextDocument, showTextDocument, revealRange };
+  return {
+    webview,
+    panel,
+    handler,
+    openTextDocument,
+    showTextDocument,
+    revealRange,
+  };
 }
 
 describe('SemanticSearchWebview messaging', () => {
   it('does not notify the user for every inbound message', async () => {
     const { handler } = buildHarness();
-    const show = (vscode.window as unknown as { showInformationMessage: jest.Mock })
-      .showInformationMessage;
+    const show = (
+      vscode.window as unknown as { showInformationMessage: jest.Mock }
+    ).showInformationMessage;
 
     await handler({ command: 'debug', args: [] });
 
@@ -94,8 +105,9 @@ describe('SemanticSearchWebview messaging', () => {
 
   it('does not toast on an unrecognised message', async () => {
     const { handler } = buildHarness();
-    const show = (vscode.window as unknown as { showInformationMessage: jest.Mock })
-      .showInformationMessage;
+    const show = (
+      vscode.window as unknown as { showInformationMessage: jest.Mock }
+    ).showInformationMessage;
 
     await handler({ command: 'somethingTheWebviewMadeUp' });
 

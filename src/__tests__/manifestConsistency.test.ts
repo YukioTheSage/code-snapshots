@@ -38,7 +38,7 @@ function collectTsFiles(dir: string): string[] {
 /** Command ids passed to `vscode.commands.registerCommand(...)`. */
 function registeredCommandIds(): Set<string> {
   const ids = new Set<string>();
-  const pattern = /registerCommand\(\s*['"`]([a-zA-Z0-9_.\-]+)['"`]/g;
+  const pattern = /registerCommand\(\s*['"`]([a-zA-Z0-9_.-]+)['"`]/g;
   for (const file of collectTsFiles(srcRoot)) {
     const source = fs.readFileSync(file, 'utf8');
     let match: RegExpExecArray | null;

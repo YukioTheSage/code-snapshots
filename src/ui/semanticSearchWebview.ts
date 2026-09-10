@@ -16,11 +16,7 @@ function resolveRequestedFile(
   workspaceRoot: string | undefined,
   filePath: unknown,
 ): vscode.Uri | undefined {
-  if (
-    !workspaceRoot ||
-    typeof filePath !== 'string' ||
-    filePath.length === 0
-  ) {
+  if (!workspaceRoot || typeof filePath !== 'string' || filePath.length === 0) {
     return undefined;
   }
   try {
@@ -176,11 +172,7 @@ export class SemanticSearchWebview {
   /**
    * Opens a file from search results
    */
-  private async openFile(
-    filePath: unknown,
-    snapshotId: string,
-    line: unknown,
-  ) {
+  private async openFile(filePath: unknown, snapshotId: string, line: unknown) {
     try {
       const fileUri = resolveRequestedFile(
         this.searchService.getWorkspaceRoot(),

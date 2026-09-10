@@ -22,7 +22,11 @@ describe('tree label formatting', () => {
   it('never emits a $() sequence for any combination', () => {
     for (const favorite of [true, false]) {
       for (const selective of [true, false]) {
-        const label = formatTreeLabel({ favorite, selective, time: '12:00:00' });
+        const label = formatTreeLabel({
+          favorite,
+          selective,
+          time: '12:00:00',
+        });
         expect(label).not.toMatch(/\$\(/);
       }
     }
@@ -35,9 +39,9 @@ describe('tree label formatting', () => {
   });
 
   it('maps every change type to a single letter', () => {
-    expect(formatTreeDescription({ directory: 'src', changeType: 'added' })).toBe(
-      'src  A',
-    );
+    expect(
+      formatTreeDescription({ directory: 'src', changeType: 'added' }),
+    ).toBe('src  A');
     expect(
       formatTreeDescription({ directory: 'src', changeType: 'deleted' }),
     ).toBe('src  D');

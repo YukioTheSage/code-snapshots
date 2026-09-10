@@ -13,7 +13,7 @@ import { SnapshotContentProvider } from './snapshotContentProvider'; // Import t
 import { registerCommands, CommandDependencies } from './commands'; // Import the new command registration function and interface
 import { ChangeNotifier } from './changeNotifier'; // Import the new notifier class
 import { GitExtension, API as GitAPI } from './types/git.d'; // Import Git API types
-import { getGitAutoSnapshotEnabled } from './config'; // Import config helper
+import { getGitAutoSnapshotEnabled, getUxSettings } from './config'; // Import config helper
 import { CredentialsManager } from './services/credentialsManager';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
@@ -347,10 +347,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // Add keyboard shortcut hints to status bar for better discoverability
     //
     // Gated on `ux.showKeyboardShortcutHints` as well as the one-time flag: the
-    // setting was previously ignored, so turning it off had no effect.
-    const shortcutHintsEnabled = vscode.workspace
-      .getConfiguration('vscode-snapshots')
-      .get<boolean>('ux.showKeyboardShortcutHints', true);
+    // setting was previously ignored, so turning it off had no effect. Read
+    // through getUxSettings() so all four ux.* settings share one accessor.
+    const shortcutHintsEnabled = getUxSettings().showKeyboardShortcutHints;
     const takingSnapshotHintShown = context.globalState.get<boolean>(
       'codeSnapshots.takingSnapshotHintShown',
       false,

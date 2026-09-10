@@ -13,6 +13,8 @@ import { AutoSnapshotRulesUI } from './ui/autoSnapshotRulesUI';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
 import { throwIfCancelled, isCancellationError } from './utils/cancellation';
+import { AnimationHelpers } from './utils';
+import { getUxSettings } from './config';
 
 // Structure to hold dependencies passed from activate
 export interface CommandDependencies {
@@ -400,32 +402,40 @@ function registerJumpToSnapshotCommand({
         description: 'Do not restore',
       };
 
-      const selectedOption = await vscode.window.showQuickPick(
-        [
-          CONFIRM_OPTION,
-          CANCEL_OPTION,
+      // `ux.confirmRestoreOperations` was declared and documented but read by
+      // nothing, so turning it off still produced this prompt.
+      if (getUxSettings().confirmRestoreOperations) {
+        const selectedOption = await vscode.window.showQuickPick(
+          [
+            CONFIRM_OPTION,
+            CANCEL_OPTION,
+            {
+              label: '--- Changes ---',
+              kind: vscode.QuickPickItemKind.Separator,
+            },
+            ...quickPickItems,
+          ],
           {
-            label: '--- Changes ---',
-            kind: vscode.QuickPickItemKind.Separator,
+            placeHolder: 'Review changes and confirm restore',
+            title: `Restore Snapshot '${snapshot.description || snapshot.id}'?`,
+            ignoreFocusOut: true,
           },
-          ...quickPickItems,
-        ],
-        {
-          placeHolder: 'Review changes and confirm restore',
-          title: `Restore Snapshot '${snapshot.description || snapshot.id}'?`,
-          ignoreFocusOut: true,
-        },
-      );
+        );
 
-      if (selectedOption !== CONFIRM_OPTION) {
-        log('User cancelled restore from preview.'); // Corrected: Use log
-        vscode.window.showInformationMessage('Snapshot restore cancelled.');
-        return;
+        if (selectedOption !== CONFIRM_OPTION) {
+          log('User cancelled restore from preview.'); // Corrected: Use log
+          vscode.window.showInformationMessage('Snapshot restore cancelled.');
+          return;
+        }
+        log('User confirmed restore from preview.'); // Corrected: Use log
       }
-      log('User confirmed restore from preview.'); // Corrected: Use log
       // --- End: Preview and Confirmation UI ---
 
       // --- Start: Conflict Resolution UI ---
+      // This prompt is deliberately NOT gated on ux.confirmRestoreOperations:
+      // it protects unsaved work, which is a different concern from routine
+      // confirmation. The setting turns off the convenience prompt above, not
+      // the data-loss guard.
       const affectedRelativePaths = new Set<string>(
         changes.map((c) => c.relativePath),
       ); // Use calculated changes for affected paths
@@ -1362,6 +1372,16 @@ function registerPreviousSnapshotCommand({
               increment: 20,
             });
 
+            // Decorative transition indicator, gated on ux.useAnimations:
+            // `animationHelpers` was dead code, so the setting had no effect.
+            // Cleared once the restore has settled rather than lingering.
+            if (getUxSettings().useAnimations) {
+              const indicator =
+                AnimationHelpers.showTransitionIndicators('backward');
+              context.subscriptions.push(indicator);
+              setTimeout(() => indicator.dispose(), 1500);
+            }
+
             // First, save view states of open editors
             const editorStates = await preserveEditorViewStates();
 
@@ -1480,6 +1500,15 @@ function registerNextSnapshotCommand({
               message: 'Preparing files...',
               increment: 20,
             });
+
+            // Decorative transition indicator, gated on ux.useAnimations; see
+            // the previous-snapshot command for the rationale.
+            if (getUxSettings().useAnimations) {
+              const indicator =
+                AnimationHelpers.showTransitionIndicators('forward');
+              context.subscriptions.push(indicator);
+              setTimeout(() => indicator.dispose(), 1500);
+            }
 
             // First, save view states of open editors
             const editorStates = await preserveEditorViewStates();
