@@ -4,6 +4,7 @@ import { SnapshotManager } from './snapshotManager';
 import { log, logVerbose } from './logger';
 import { getAutoSnapshotRules } from './config';
 import { pathMatchesPattern } from './utils/pathMatching';
+import { RuleScheduleStore, shouldFireRule } from './services/ruleSchedule';
 
 const NOTIFICATION_THRESHOLD_MINUTES = 15; // Configurable? For now, 15 minutes
 const CHECK_INTERVAL_MINUTES = 5; // Check every 5 minutes
@@ -23,8 +24,20 @@ export class ChangeNotifier implements vscode.Disposable {
   private notificationTimer: NodeJS.Timeout | null = null;
   private rulesCheckTimer: NodeJS.Timeout | null = null;
 
-  // Add tracking for rule-based snapshots
-  private lastRuleBasedSnapshotTimes: Map<string, number> = new Map();
+  /**
+   * Last-fired times per rule pattern, persisted in workspace state.
+   *
+   * In memory this was `Map<string, number>` defaulting to 0, so every rule
+   * was due on every activation.
+   */
+  private ruleSchedule: RuleScheduleStore;
+
+  /**
+   * Guards against overlapping rule passes. The interval callback was an
+   * un-awaited async function, so a pass that took longer than a minute ran
+   * concurrently with the next one and both could fire the same rule.
+   */
+  private rulesCheckInFlight = false;
 
   constructor(
     context: vscode.ExtensionContext,
@@ -32,6 +45,7 @@ export class ChangeNotifier implements vscode.Disposable {
   ) {
     this.context = context;
     this.snapshotManager = snapshotManager;
+    this.ruleSchedule = new RuleScheduleStore(context);
 
     this.initialize();
 
@@ -66,7 +80,7 @@ export class ChangeNotifier implements vscode.Disposable {
     }, CHECK_INTERVAL_MINUTES * 60 * 1000); // Check interval
 
     this.rulesCheckTimer = setInterval(() => {
-      this.checkAllRuleBasedAutoSnapshots();
+      this.runRulePass();
     }, 60 * 1000); // Check rules every minute
 
     this.disposables.push({
@@ -86,6 +100,23 @@ export class ChangeNotifier implements vscode.Disposable {
   }
 
   /**
+   * Runs one pass over the configured rules, unless the previous one is still
+   * going. The interval callback was previously an un-awaited async function,
+   * so a pass that outlived the minute boundary ran concurrently with the next
+   * one and both could fire the same rule.
+   */
+  private runRulePass(): void {
+    if (this.rulesCheckInFlight) {
+      logVerbose('Skipping rule check: the previous pass is still running.');
+      return;
+    }
+    this.rulesCheckInFlight = true;
+    this.checkAllRuleBasedAutoSnapshots().finally(() => {
+      this.rulesCheckInFlight = false;
+    });
+  }
+
+  /**
    * Evaluate all configured auto-snapshot rules and trigger snapshots when matched.
    */
   private async checkAllRuleBasedAutoSnapshots(): Promise<void> {
@@ -101,6 +132,7 @@ export class ChangeNotifier implements vscode.Disposable {
       // No rules configured, skip processing
       return;
     }
+    await this.ruleSchedule.pruneTo(rules.map((rule) => rule.pattern));
 
     const now = Date.now();
     logVerbose(`Periodically checking ${rules.length} auto-snapshot rules`);
@@ -108,8 +140,7 @@ export class ChangeNotifier implements vscode.Disposable {
     // Process each rule
     for (const rule of rules) {
       try {
-        const lastSnapshotTime =
-          this.lastRuleBasedSnapshotTimes.get(rule.pattern) || 0;
+        const lastSnapshotTime = this.ruleSchedule.get(rule.pattern);
         const minutesSinceLastSnapshot = (now - lastSnapshotTime) / (1000 * 60);
 
         logVerbose(
@@ -121,7 +152,7 @@ export class ChangeNotifier implements vscode.Disposable {
         );
 
         // Check if enough time has passed for this rule
-        if (minutesSinceLastSnapshot >= rule.intervalMinutes) {
+        if (shouldFireRule(lastSnapshotTime, rule.intervalMinutes, now)) {
           // Find files matching pattern
           const matchingFiles = await this.findFilesMatchingRule(
             workspaceRoot,
@@ -141,7 +172,7 @@ export class ChangeNotifier implements vscode.Disposable {
 
           try {
             // Take a snapshot with rule information
-            await this.snapshotManager.takeSnapshot(
+            const outcome = await this.snapshotManager.takeSnapshot(
               `Auto-snapshot for ${rule.pattern}`,
               {
                 tags: ['auto', 'rule-based', 'time-triggered'],
@@ -153,8 +184,18 @@ export class ChangeNotifier implements vscode.Disposable {
               },
             );
 
-            // Update last snapshot time for this rule
-            this.lastRuleBasedSnapshotTimes.set(rule.pattern, now);
+            // Record the fire only when a snapshot was actually created.
+            // takeSnapshot reports {created:false} when it finds nothing to
+            // record, and recording that as a fire would suppress the next
+            // real one for a whole interval.
+            if (!outcome.created) {
+              log(
+                `Rule ${rule.pattern} matched but nothing changed; not consuming the interval.`,
+              );
+              continue;
+            }
+
+            await this.ruleSchedule.set(rule.pattern, Date.now());
             this.resetNotificationState(); // Reset normal notification state as well
 
             log(`Rule-based auto-snapshot taken for pattern: ${rule.pattern}`);
@@ -255,12 +296,12 @@ export class ChangeNotifier implements vscode.Disposable {
       return;
     }
 
-    // Only track if a snapshot exists and we haven't tracked a save since the last one
-    if (
-      (this.lastSnapshotTimestamp !== null ||
-        this.lastSnapshotTimestamp === null) &&
-      this.firstSaveTimestampAfterLastSnapshot === null
-    ) {
+    // Track the first save since the last snapshot, whether or not a snapshot
+    // exists yet. The previous condition was
+    // `(this.lastSnapshotTimestamp !== null ||
+    //   this.lastSnapshotTimestamp === null) && ...`, whose first clause is
+    // always true -- it read as a check and was none.
+    if (this.firstSaveTimestampAfterLastSnapshot === null) {
       this.firstSaveTimestampAfterLastSnapshot = Date.now();
       log(
         `ChangeNotifier: First save detected${
@@ -290,11 +331,13 @@ export class ChangeNotifier implements vscode.Disposable {
           )} min). Showing notification.`,
         );
         this.notificationShownSinceLastSnapshot = true; // Set flag to prevent repeat until next snapshot
+        // With no snapshot yet, "since your last snapshot" describes one that
+        // does not exist.
+        const message = this.lastSnapshotTimestamp
+          ? `It's been over ${NOTIFICATION_THRESHOLD_MINUTES} minutes since your last snapshot and changes were saved. Consider taking one now.`
+          : `You have changes that were saved over ${NOTIFICATION_THRESHOLD_MINUTES} minutes ago and have never been snapshotted. Consider taking your first snapshot.`;
         vscode.window
-          .showInformationMessage(
-            `It's been over ${NOTIFICATION_THRESHOLD_MINUTES} minutes since your last snapshot and changes were saved. Consider taking one now.`,
-            'Take Snapshot',
-          )
+          .showInformationMessage(message, 'Take Snapshot')
           .then((selection) => {
             if (selection === 'Take Snapshot') {
               // Execute command - assumes command is registered
@@ -349,8 +392,7 @@ export class ChangeNotifier implements vscode.Disposable {
         // Check if file matches this rule's pattern using pathMatchesPattern helper
         if (this.pathMatchesPattern(relativePath, rule.pattern)) {
           const now = Date.now();
-          const lastSnapshotTime =
-            this.lastRuleBasedSnapshotTimes.get(rule.pattern) || 0;
+          const lastSnapshotTime = this.ruleSchedule.get(rule.pattern);
           const minutesSinceLastSnapshot =
             (now - lastSnapshotTime) / (1000 * 60);
 
@@ -363,7 +405,7 @@ export class ChangeNotifier implements vscode.Disposable {
           );
 
           // Check if enough time has passed for this rule
-          if (minutesSinceLastSnapshot >= rule.intervalMinutes) {
+          if (shouldFireRule(lastSnapshotTime, rule.intervalMinutes, now)) {
             log(`Save-triggered auto-snapshot for pattern: ${rule.pattern}`);
 
             try {
@@ -374,7 +416,7 @@ export class ChangeNotifier implements vscode.Disposable {
               );
 
               // Take a snapshot with rule information
-              await this.snapshotManager.takeSnapshot(
+              const outcome = await this.snapshotManager.takeSnapshot(
                 `Auto-snapshot for ${rule.pattern}`,
                 {
                   tags: ['auto', 'rule-based', 'save-triggered'],
@@ -384,8 +426,18 @@ export class ChangeNotifier implements vscode.Disposable {
                 },
               );
 
-              // Update last snapshot time for this rule
-              this.lastRuleBasedSnapshotTimes.set(rule.pattern, now);
+              // takeSnapshot reports {created:false} when it decides there is
+              // nothing to record. Recording that as a fire would consume the
+              // interval without producing a snapshot, so the next real change
+              // would be ignored for the whole interval.
+              if (!outcome.created) {
+                log(
+                  `Rule ${rule.pattern} matched but nothing changed; not consuming the interval.`,
+                );
+                continue;
+              }
+
+              await this.ruleSchedule.set(rule.pattern, Date.now());
               this.resetNotificationState(); // Reset normal notification state as well
 
               log(
