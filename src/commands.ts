@@ -478,8 +478,21 @@ function registerJumpToSnapshotCommand({
           'Cancel',
         );
 
-        if (result === 'Cancel') {
-          log('Restore cancelled due to unsaved changes conflict.');
+        // Fail closed. Dismissing a modal returns `undefined`, which matched
+        // neither branch below, so closing the dialog -- the least deliberate
+        // action available -- was read as consent and the restore proceeded,
+        // overwriting the unsaved changes this prompt exists to protect. The
+        // confirmation prompt above already treats "not the confirm option" as
+        // cancel; this one now does the same.
+        if (
+          result !== 'Restore (Overwrite Unsaved)' &&
+          result !== 'Take Snapshot & Restore'
+        ) {
+          log(
+            `Restore cancelled due to unsaved changes conflict (dialog result: ${String(
+              result,
+            )}).`,
+          );
           vscode.window.showInformationMessage('Snapshot restore cancelled.');
           return;
         }

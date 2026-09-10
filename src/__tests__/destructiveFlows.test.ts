@@ -230,4 +230,38 @@ describe('Take Snapshot & Restore', () => {
 
     expect(applySnapshotRestore).toHaveBeenCalledWith('snap-1');
   });
+
+  it('treats a dismissed dialog as cancel, not as consent', async () => {
+    const { handlers, applySnapshotRestore } = buildHarness({
+      created: true,
+      snapshot: { id: 'snap-2' },
+    });
+    // Dismissing a modal resolves with undefined.
+    (
+      vscode.window as unknown as { showWarningMessage: jest.Mock }
+    ).showWarningMessage = jest.fn().mockResolvedValue(undefined);
+
+    await handlers['vscode-snapshots.jumpToSnapshot']('snap-1');
+
+    // Closing the dialog used to match neither branch, so the restore ran and
+    // overwrote the unsaved changes the prompt exists to protect.
+    expect(applySnapshotRestore).not.toHaveBeenCalled();
+  });
+
+  it('restores when the user explicitly accepts the overwrite', async () => {
+    const { handlers, applySnapshotRestore } = buildHarness({
+      created: true,
+      snapshot: { id: 'snap-2' },
+    });
+    (
+      vscode.window as unknown as { showWarningMessage: jest.Mock }
+    ).showWarningMessage = jest
+      .fn()
+      .mockResolvedValue('Restore (Overwrite Unsaved)');
+
+    await handlers['vscode-snapshots.jumpToSnapshot']('snap-1');
+
+    // Failing closed must not fail always.
+    expect(applySnapshotRestore).toHaveBeenCalledWith('snap-1');
+  });
 });

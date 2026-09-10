@@ -478,11 +478,14 @@ If you save changes and haven't taken a snapshot in a while (default > 15 minute
 
 #### Status Bar Indicator
 
-The main status bar item (bottom-left) shows: `$(history) <Time Ago> | <Current/Total> Snapshots`.
+The main status bar item (bottom-left) shows `$(history) <Time Ago> | <count>`, where the two forms mean different things:
 
-- `<Time Ago>`: Time since the _very last_ snapshot was taken (e.g., `5m ago`).
-- `<Current/Total>`: Index of the currently restored snapshot and total count (e.g., `3/10`), or just the total count if viewing the latest workspace state (e.g., `10 Snapshots`).
-- Clicking it opens the "View Snapshots" Quick Pick. Hovering shows more details.
+- `5m ago | 3/10` — the workspace is **at** snapshot 3 of 10. This is the state after a restore.
+- `5m ago | 10 snapshots` — the workspace is **not** at any snapshot. This is the state in a fresh window, and after the snapshot you were viewing is deleted or pruned.
+
+`<Time Ago>` is the time since the _very last_ snapshot was taken (e.g., `5m ago`). Clicking the item opens the "View Snapshots" Quick Pick. Hovering shows more details, including whether the workspace is at a snapshot.
+
+Taking a snapshot makes it the active one, so the count form becomes the `n/10` form.
 
 #### Diagnostics and Logging
 
