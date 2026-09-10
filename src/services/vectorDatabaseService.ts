@@ -253,10 +253,10 @@ export class VectorDatabaseService {
       metadata: match.metadata as CodeChunkMetadata,
     }));
 
-    // Initial filtering with a lower threshold for diversity
-    results = results.filter(
-      (r) => r.score >= Math.max(0.5, scoreThreshold - 0.2),
-    );
+    // Filter on the threshold the caller asked for. Previously this was
+    // lowered to max(0.5, scoreThreshold - 0.2), which combined with a second
+    // reduction upstream meant the caller's precision setting was discarded.
+    results = results.filter((r) => r.score >= scoreThreshold);
 
     // Group by file to diversify results
     const fileGroups = new Map<string, SearchResult[]>();

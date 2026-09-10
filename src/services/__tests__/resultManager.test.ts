@@ -383,11 +383,16 @@ describe('ResultManager', () => {
 
       expect(rankedResults.length).toBeGreaterThan(0);
 
-      // Results should be sorted by score (descending)
+      // Ordering follows the composite ranking value, NOT the raw similarity.
+      // This previously asserted that `score` was descending, which held only
+      // because the normalized composite was written back over `score`. Now
+      // that `score` is the cosine similarity the user is shown, a boost
+      // factor can legitimately rank a lower-similarity result first.
       for (let i = 1; i < rankedResults.length; i++) {
-        expect(rankedResults[i - 1].score).toBeGreaterThanOrEqual(
-          rankedResults[i].score,
-        );
+        const previous =
+          rankedResults[i - 1].rankingScore ?? rankedResults[i - 1].score;
+        const current = rankedResults[i].rankingScore ?? rankedResults[i].score;
+        expect(previous).toBeGreaterThanOrEqual(current);
       }
     });
 

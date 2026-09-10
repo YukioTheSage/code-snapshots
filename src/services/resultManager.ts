@@ -272,7 +272,10 @@ export class ResultManager {
 
     return thresholdResults.map((item) => ({
       ...item.result,
-      score: item.compositeScore, // Update the score with composite score
+      // Normalization is a ranking device: it makes composite scores
+      // comparable across a result set and must not overwrite `score`, which
+      // is surfaced to the user and to API consumers as a similarity.
+      rankingScore: item.compositeScore,
     }));
   }
 
@@ -1129,7 +1132,12 @@ export class ResultManager {
       diversifiedResults.push(...groupResults.slice(0, maxPerGroup));
     }
 
-    return diversifiedResults.sort((a, b) => b.score - a.score);
+    // Order by the ranking value, not by `score`, which is the raw similarity
+    // and is no longer the composite. Falls back to `score` for results that
+    // have not been through rankResults.
+    return diversifiedResults.sort(
+      (a, b) => (b.rankingScore ?? b.score) - (a.rankingScore ?? a.score),
+    );
   }
 
   private calculateDiversityScore(
@@ -1494,16 +1502,19 @@ export class ResultManager {
     const score = result.score;
     const enhancedQuery = processedQuery.enhancedQuery;
 
-    if (score > 0.8) {
+    // Describes a similarity, not a rank. These thresholds used to be applied
+    // to the min-max normalized score, so the top hit always crossed 0.8 and
+    // was reported as a strong match regardless of the query.
+    if (score >= 0.8) {
       return `Strong semantic match (${(score * 100).toFixed(
         1,
       )}%) with the enhanced query: "${enhancedQuery}"`;
-    } else if (score > 0.6) {
-      return `Good semantic match (${(score * 100).toFixed(
+    } else if (score >= 0.6) {
+      return `Moderate semantic match (${(score * 100).toFixed(
         1,
       )}%) with the enhanced query: "${enhancedQuery}"`;
     } else {
-      return `Moderate semantic match (${(score * 100).toFixed(
+      return `Weak semantic match (${(score * 100).toFixed(
         1,
       )}%) with the enhanced query: "${enhancedQuery}"`;
     }

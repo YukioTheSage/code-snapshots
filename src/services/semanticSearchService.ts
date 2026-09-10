@@ -46,9 +46,36 @@ export interface SemanticSearchResult {
   filePath: string;
   startLine: number;
   endLine: number;
+  /**
+   * Raw cosine similarity from the vector store. Never a rescaled value:
+   * min-max normalization is a ranking device and lives in `rankingScore`.
+   */
   score: number;
+  /**
+   * Internally normalized score used to order results, set by ResultManager.
+   * Kept separate from `score` because `score` is shown to users as a
+   * similarity percentage and averaged into `averageRelevanceScore` for API
+   * consumers; overwriting it made the top hit always report 100%.
+   */
+  rankingScore?: number;
   content: string;
   timestamp: number;
+}
+
+/**
+ * Returns the caller's score threshold unchanged, clamped to [0, 1].
+ *
+ * Previously the threshold was lowered twice -- by 0.15 in
+ * SemanticSearchService and by 0.2 in VectorDatabaseService -- giving an
+ * effective floor of max(0.5, requested - 0.35), which made a slider at 0.95
+ * admit 0.60-similarity code with no indication that the requested precision
+ * had been discarded.
+ */
+export function resolveScoreThreshold(requested: number): number {
+  if (!Number.isFinite(requested)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, requested));
 }
 
 export class SemanticSearchService implements vscode.Disposable {
@@ -181,7 +208,7 @@ export class SemanticSearchService implements vscode.Disposable {
         limit: Math.min(100, limit * 2), // Request more results to allow for diverse filtering
         snapshotIds: snapshotIdsToSearch,
         languages,
-        scoreThreshold: Math.max(0.5, scoreThreshold - 0.15), // Slightly lower threshold to get more candidates
+        scoreThreshold: resolveScoreThreshold(scoreThreshold),
       },
     );
 
