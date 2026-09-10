@@ -861,14 +861,10 @@ export class QueryProcessor {
   private getPenaltyFactors(intent: QueryIntent): PenaltyFactor[] {
     const factors: PenaltyFactor[] = [];
 
-    // Common penalties
-    factors.push({
-      condition: 'hasCodeSmells',
-      multiplier: 0.7,
-      description: 'Penalize code with detected smells',
-      weight: 0.6,
-    });
-
+    // `hasCodeSmells` used to be registered here for every intent while
+    // `evaluateCondition` returned a literal `false` for it, so the penalty was
+    // undiscoverable dead configuration that read as a working safety net.
+    // Removed rather than left; it can come back when a smell signal exists.
     if (intent.primary === 'find_examples') {
       factors.push({
         condition: 'noDocumentation',

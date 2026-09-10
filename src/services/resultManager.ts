@@ -248,14 +248,18 @@ export class ResultManager {
       ),
     }));
 
-    // Sort by composite score (descending)
-    scoredResults.sort((a, b) => b.compositeScore - a.compositeScore);
-
     // Apply boost and penalty factors
     const adjustedResults = this.applyBoostAndPenaltyFactors(
       scoredResults,
       rankingConfig,
     );
+
+    // Sort by composite score (descending). This belongs *after* the factors:
+    // a boost or a penalty changes a result's composite, so sorting first
+    // returned results ordered by a composite they no longer had. The diluted
+    // factors made that rare rather than impossible -- `analyze_quality`'s
+    // configured 1.5x came through the old arithmetic unchanged.
+    adjustedResults.sort((a, b) => b.compositeScore - a.compositeScore);
 
     // Filter by the minimum threshold FIRST, on the un-normalized composite.
     // The composite is an absolute [0, 1] score -- a weighted sum whose weights
@@ -843,17 +847,20 @@ export class ResultManager {
     return scoredResults.map((item) => {
       let adjustedScore = item.compositeScore;
 
-      // Apply boost factors
+      // A factor is "how strong the effect is" (multiplier) and "how much of it
+      // applies" (weight), so the effect is interpolated: a 1.3x boost at
+      // weight 0.8 is 1 + 0.3 * 0.8 = 1.24. Multiplying the two together made
+      // the weight a second, hidden multiplier -- 1.3 * 0.8 = 1.04 -- so every
+      // configured boost was silently diluted and every penalty likewise.
       for (const boost of config.boostFactors) {
         if (this.evaluateCondition(boost.condition, item.result)) {
-          adjustedScore *= boost.multiplier * boost.weight;
+          adjustedScore *= 1 + (boost.multiplier - 1) * boost.weight;
         }
       }
 
-      // Apply penalty factors
       for (const penalty of config.penaltyFactors) {
         if (this.evaluateCondition(penalty.condition, item.result)) {
-          adjustedScore *= penalty.multiplier * penalty.weight;
+          adjustedScore *= 1 + (penalty.multiplier - 1) * penalty.weight;
         }
       }
 
@@ -886,9 +893,6 @@ export class ResultManager {
           result.content.includes('catch') ||
           result.content.includes('error')
         );
-      case 'hasCodeSmells':
-        // Placeholder - would need actual code smell detection
-        return false;
       case 'noDocumentation':
         // documentationRatio is the one ratio field: no conversion.
         return result.qualityMetrics.documentationRatio < 0.2;
@@ -1064,7 +1068,14 @@ export class ResultManager {
       if (other === result) continue;
 
       const similarity = this.calculateSimilarity(result, other);
-      if (similarity > 0.6 && similarity < 0.9) {
+      // Expressed against the achievable range, not against 1. The lower bound
+      // is half of it: below that the two chunks share little. The upper bound
+      // is nine tenths, which excludes two functions in the same file whose
+      // scores are close -- those approach the ceiling, and one is not an
+      // alternative implementation of the other.
+      const tooDifferent = ResultManager.MAX_SIMILARITY * 0.5;
+      const tooSimilar = ResultManager.MAX_SIMILARITY * 0.9;
+      if (similarity > tooDifferent && similarity < tooSimilar) {
         const differences = this.identifyDifferences(result, other);
 
         alternatives.push({
@@ -1529,6 +1540,17 @@ export class ResultManager {
   ): string {
     return `Behavioral analysis indicates this code performs similar operations to what was requested in the query.`;
   }
+
+  /**
+   * Maximum value `calculateSimilarity` can return.
+   *
+   * The function averages three terms (file path 0.3, semantic type 0.2, score
+   * proximity 0.3) and divides by the factor count, so its ceiling is 0.2667.
+   * Thresholds must be expressed against this, not against 1: the previous
+   * 0.6 made `alternatives` permanently empty while the API kept advertising
+   * it.
+   */
+  private static readonly MAX_SIMILARITY = (0.3 + 0.2 + 0.3) / 3;
 
   private calculateSimilarity(
     result1: EnhancedSemanticSearchResult,
