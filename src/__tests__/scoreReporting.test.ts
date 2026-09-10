@@ -118,7 +118,9 @@ describe('score reporting', () => {
     // not be what the user is shown as a similarity.
     const rankingScores = processed.results.map((r) => r.rankingScore);
     expect(rankingScores.every((s) => typeof s === 'number')).toBe(true);
-    expect(Number.isFinite(Math.max(...(rankingScores as number[])))).toBe(true);
+    expect(Number.isFinite(Math.max(...(rankingScores as number[])))).toBe(
+      true,
+    );
   });
 
   it('orders by rankingScore, so the composite ranking survives', async () => {
@@ -247,7 +249,10 @@ describe('VectorDatabaseService.searchSimilarCode threshold', () => {
   it('honours the threshold it is given instead of lowering it', async () => {
     // 0.8 passes the old floor max(0.5, 0.95 - 0.2) = 0.75 but must not pass
     // a requested 0.95. This is the discriminating case.
-    const service = serviceWithMatches([match('kept', 0.97), match('dropped', 0.8)]);
+    const service = serviceWithMatches([
+      match('kept', 0.97),
+      match('dropped', 0.8),
+    ]);
 
     const results = await service.searchSimilarCode([0.1, 0.2], {
       limit: 10,
@@ -277,7 +282,9 @@ describe('SemanticSearchService threshold plumbing', () => {
         hasCredentials: jest.fn().mockResolvedValue(true),
         promptForCredentials: jest.fn(),
       } as never,
-      { workspaceState: { get: jest.fn(() => []), update: jest.fn() } } as never,
+      {
+        workspaceState: { get: jest.fn(() => []), update: jest.fn() },
+      } as never,
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 

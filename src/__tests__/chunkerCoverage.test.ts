@@ -7,8 +7,8 @@ function configureChunker(chunkSize: number, chunkOverlap: number) {
       key === 'chunkSize'
         ? chunkSize
         : key === 'chunkOverlap'
-          ? chunkOverlap
-          : fallback,
+        ? chunkOverlap
+        : fallback,
     update: jest.fn(),
   });
 }
@@ -87,7 +87,9 @@ describe('CodeChunker line coverage', () => {
   });
 
   it('never emits a chunk that runs past the end of the file', async () => {
-    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n');
+    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
+      '\n',
+    );
     const chunker = new CodeChunker();
     const chunks = await chunker.chunkFile('long.txt', content, 'snap1');
 
@@ -100,7 +102,9 @@ describe('CodeChunker line coverage', () => {
   });
 
   it('covers every line of a file larger than one chunk', async () => {
-    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n');
+    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
+      '\n',
+    );
     const chunker = new CodeChunker();
     const chunks = await chunker.chunkFile('long.txt', content, 'snap1');
 
@@ -110,7 +114,9 @@ describe('CodeChunker line coverage', () => {
   it('gives each chunk a distinct id', async () => {
     // Two chunks of the same file share a snapshot and path; only the line
     // span and content hash separate them.
-    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n');
+    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
+      '\n',
+    );
     const chunker = new CodeChunker();
     const chunks = await chunker.chunkFile('long.txt', content, 'snap1');
 

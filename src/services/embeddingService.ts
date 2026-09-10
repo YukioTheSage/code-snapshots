@@ -88,9 +88,7 @@ export class EmbeddingService {
    * change takes effect without reloading the window.
    */
   private config(): vscode.WorkspaceConfiguration {
-    return vscode.workspace.getConfiguration(
-      'vscode-snapshots.semanticSearch',
-    );
+    return vscode.workspace.getConfiguration('vscode-snapshots.semanticSearch');
   }
 
   /**

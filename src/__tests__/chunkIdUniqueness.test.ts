@@ -44,7 +44,13 @@ describe('buildChunkId', () => {
     // Without this a chunk indexed on Windows and the same chunk on Linux
     // produce different record keys for identical content.
     const posix = buildChunkId('snap1', 'src/a/util.js', 0, 2, 'let x = 1;');
-    const windows = buildChunkId('snap1', 'src\\a\\util.js', 0, 2, 'let x = 1;');
+    const windows = buildChunkId(
+      'snap1',
+      'src\\a\\util.js',
+      0,
+      2,
+      'let x = 1;',
+    );
     expect(windows).toBe(posix);
   });
 });
