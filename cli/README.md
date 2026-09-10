@@ -363,7 +363,13 @@ For AI agents interacting with `codelapse-cli`, adhere to these critical rules f
 - `--silent`: Suppress spinners and user-facing messages.
 - `--verbose`: Enable verbose output for debugging.
 - `--timeout <ms>`: Connection timeout in milliseconds (default: 5000).
-- `--mode <mode>`: Force operation mode: `auto` (default), `standalone`, or `ipc`.
+
+> **There is no `--mode` flag.** Mode selection is automatic — standalone if a
+> snapshot store is present, IPC otherwise. It cannot be exposed as `--mode`
+> because a program-level option shadows the same-named subcommand option, and
+> `search query` / `search-enhanced query` declare `-m, --mode` for search
+> strategy; adding it silently reset that to its default. Any future selector
+> needs a non-colliding name such as `--client-mode`.
 
 ### Connection & Status
 

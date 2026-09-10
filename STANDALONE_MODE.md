@@ -52,11 +52,19 @@ The CLI automatically chooses the best mode:
    - Uses extension's APIs
    - Required for AI-powered features
 
-3. **Manual Mode Selection**:
+3. **Mode Selection Is Automatic**:
    ```bash
-   codelapse --mode standalone snapshot take
-   codelapse --mode ipc search "authentication"
+   # No flag exists; the CLI tries standalone, then falls back to IPC.
+   codelapse snapshot take
+   codelapse search "authentication"
    ```
+
+   > The `--mode standalone` / `--mode ipc` examples that used to appear here
+   > never worked — no such flag is registered. It also cannot be added under
+   > that name, because a program-level option shadows the same-named
+   > subcommand option and `search query` declares `-m, --mode` for search
+   > strategy. A future selector would need a non-colliding name such as
+   > `--client-mode`.
 
 ## Shared Components (codelapse-core)
 
@@ -267,8 +275,9 @@ npm run build
 ### Testing Standalone Mode
 
 ```bash
-# Force standalone mode
-codelapse --mode standalone snapshot take
+# Standalone mode is selected automatically when a snapshot store is present.
+# Run from a workspace containing .snapshots/ (there is no --mode flag).
+codelapse snapshot take
 
 # Check which mode is active
 codelapse status
@@ -293,7 +302,9 @@ codelapse status
 **Solutions**:
 1. Check you're in a valid workspace
 2. For IPC mode, ensure VS Code extension is running
-3. Try forcing standalone mode: `--mode standalone`
+3. There is no flag to force a mode (`--mode` is not a real option). To force
+   standalone, run from a directory containing a `.snapshots/` store; to force
+   IPC, run where no store exists and ensure the extension is active.
 
 ### Configuration Not Shared
 

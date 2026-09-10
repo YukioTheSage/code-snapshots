@@ -27,7 +27,12 @@ codelapse <command> --help
 - `--silent` - Silent mode - no user prompts or status messages
 - `--verbose` - Verbose output for debugging
 - `--timeout <ms>` - Connection timeout in milliseconds (default: 5000)
-- `--mode <mode>` - Force mode: `auto` (default), `standalone`, or `ipc`
+
+> There is **no** global `--mode`. Mode selection is automatic: standalone
+> first, then IPC if the extension is running. The flag cannot be added under
+> that name because it would shadow the `-m, --mode` that `search query` and
+> `search-enhanced query` use for search strategy; a future selector would need
+> a non-colliding name such as `--client-mode`.
 
 ## Command Groups
 
