@@ -175,6 +175,7 @@ export async function activate(context: vscode.ExtensionContext) {
       terminalApiService,
       context,
       semanticSearchService,
+      gitApi,
     );
     context.subscriptions.push(cliConnectorService);
     log('CliConnectorService initialized successfully');

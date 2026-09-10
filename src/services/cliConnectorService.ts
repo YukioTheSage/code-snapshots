@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as diff from 'diff';
 import { TerminalApiService } from './terminalApiService';
 import { SemanticSearchService } from './semanticSearchService';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
@@ -20,6 +21,58 @@ import {
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunk } from '../types/enhancedChunking';
 import { log } from '../logger';
+import type { Snapshot } from '../snapshotManager';
+import type {
+  API as GitAPI,
+  GitExtension,
+  RefType as GitRefType,
+  Repository as GitRepository,
+} from '../types/git';
+
+/**
+ * `RefType.Head` of the built-in Git extension API.
+ *
+ * `src/types/git.d.ts` is ambient, so it has no runtime module: importing the
+ * const enum as a value would emit a `require()` for a file that does not exist
+ * once the extension is bundled. The numeric member value is repeated here and
+ * typed against the ambient enum instead.
+ */
+const GIT_REF_TYPE_HEAD: GitRefType = 0;
+
+/** Result of the `getGitBranchInfo` / `listBranches` IPC methods. */
+interface GitBranchInfoResult {
+  currentBranch: string;
+  commitHash: string;
+  remoteUrl: string;
+  hasChanges: boolean;
+  branches: string[];
+}
+
+/** Result of the `createGitCommitFromSnapshot` IPC method. */
+interface GitCommitFromSnapshotResult {
+  commitHash: string;
+  branch: string;
+  message: string;
+}
+
+type GitFileChangeType = 'added' | 'modified' | 'deleted';
+
+interface GitFileDifference {
+  file: string;
+  changeType: GitFileChangeType;
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+/** Result of the `compareSnapshotWithGitCommit` IPC method. */
+interface GitComparisonResult {
+  differences: GitFileDifference[];
+  fileChanges?: {
+    added: string[];
+    modified: string[];
+    deleted: string[];
+  };
+}
 
 /**
  * Service that enables CLI tools to communicate with the VSCode extension
@@ -32,6 +85,9 @@ export class CliConnectorService implements vscode.Disposable {
   private terminalApiService: TerminalApiService;
   private context: vscode.ExtensionContext;
   private socketPath: string;
+  // Git API: injected by the extension when it already resolved one, otherwise
+  // looked up lazily from the built-in `vscode.git` extension.
+  private gitApi: GitAPI | null;
 
   // Enhanced services for AI agent optimization
   private semanticSearchService?: SemanticSearchService;
@@ -45,10 +101,12 @@ export class CliConnectorService implements vscode.Disposable {
     terminalApiService: TerminalApiService,
     context: vscode.ExtensionContext,
     semanticSearchService?: SemanticSearchService,
+    gitApi?: GitAPI | null,
   ) {
     this.terminalApiService = terminalApiService;
     this.context = context;
     this.semanticSearchService = semanticSearchService;
+    this.gitApi = gitApi ?? null;
 
     // Generate authentication token for IPC security
     this.authToken = crypto.randomBytes(32).toString('hex');
@@ -259,6 +317,32 @@ export class CliConnectorService implements vscode.Disposable {
           );
           break;
 
+        // Git integration (used by `codelapse git ...`)
+        case 'getGitBranchInfo':
+          result = await this.handleGetGitBranchInfo();
+          break;
+        case 'listBranches':
+          result = await this.handleListBranches();
+          break;
+        case 'createBranch':
+          result = await this.handleCreateBranch(data);
+          break;
+        case 'switchBranch':
+          result = await this.handleSwitchBranch(data);
+          break;
+        case 'deleteBranch':
+          result = await this.handleDeleteBranch(data);
+          break;
+        case 'createGitCommitFromSnapshot':
+          result = await this.handleCreateGitCommitFromSnapshot(data);
+          break;
+        case 'autoSnapshotBeforeGitOperation':
+          result = await this.handleAutoSnapshotBeforeGitOperation(data);
+          break;
+        case 'compareSnapshotWithGitCommit':
+          result = await this.handleCompareSnapshotWithGitCommit(data);
+          break;
+
         // Enhanced AI-optimized methods
         case 'enhancedSearch':
           result = await this.handleEnhancedSearch(data);
@@ -328,6 +412,691 @@ export class CliConnectorService implements vscode.Disposable {
       extensionVersion: this.context.extension.packageJSON.version,
       apiVersion: '1.0.0',
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Git integration
+  //
+  // Everything below runs against the built-in VS Code Git extension API rather
+  // than shelling out to git: the synchronous `execFileSync` calls of
+  // `codelapse-core`'s GitIntegration would block the extension host.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resolve the built-in VS Code Git extension API.
+   *
+   * `getAPI` throws when git is disabled, so every failure mode is converted
+   * into an actionable error. Git commands refuse to run rather than reporting
+   * empty results the CLI would present as real data.
+   */
+  private async getGitApi(): Promise<GitAPI> {
+    if (this.gitApi) {
+      return this.gitApi;
+    }
+
+    const extension =
+      vscode.extensions.getExtension<GitExtension>('vscode.git');
+    if (!extension) {
+      throw new Error(
+        'The built-in VS Code Git extension is not available; git commands require VS Code with the Git extension installed and enabled.',
+      );
+    }
+
+    // Accessing `exports` before activation is invalid, so activate first.
+    if (!extension.isActive) {
+      await extension.activate();
+    }
+
+    const gitExtension = extension.exports;
+    if (gitExtension?.enabled === false) {
+      throw new Error(
+        'The VS Code Git extension is disabled, so git commands are unavailable. Enable Git (setting "git.enabled") and try again.',
+      );
+    }
+
+    try {
+      const api = gitExtension.getAPI(1);
+      if (!api) {
+        throw new Error('Git API version 1 is unavailable');
+      }
+      return api;
+    } catch (error) {
+      throw new Error(
+        `Failed to obtain the VS Code Git API: ${this.describeError(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Find the Git repository that contains the workspace folder.
+   */
+  private async getGitRepository(): Promise<GitRepository> {
+    const workspaceFolder = this.getWorkspaceFolder();
+    const api = await this.getGitApi();
+    const repository = api.getRepository(workspaceFolder.uri);
+
+    if (!repository) {
+      throw new Error(
+        'No Git repository found for this workspace; git commands require the workspace to be inside a Git repository.',
+      );
+    }
+
+    return repository;
+  }
+
+  /**
+   * The workspace folder every relative snapshot path is resolved against.
+   */
+  private getWorkspaceFolder(): vscode.WorkspaceFolder {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      throw new Error(
+        'No workspace folder is open; git commands require the workspace to be inside a Git repository.',
+      );
+    }
+    return workspaceFolder;
+  }
+
+  /**
+   * Local branch names, in the order the Git extension reports them.
+   *
+   * `Ref.name` is optional and remote heads are not branches of this
+   * repository, so both are filtered out: the CLI compares the entries of this
+   * array directly against the current branch name.
+   */
+  private async collectBranchNames(
+    repository: GitRepository,
+  ): Promise<string[]> {
+    const refs = await repository.getBranches({});
+
+    return refs
+      .filter((ref) => ref.type === GIT_REF_TYPE_HEAD)
+      .map((ref) => ref.name)
+      .filter(
+        (name): name is string => typeof name === 'string' && name.length > 0,
+      );
+  }
+
+  /**
+   * The URL the workspace pushes to, preferring `origin` like
+   * `git remote get-url origin` does. Empty when the repository has no remote.
+   */
+  private getRemoteUrl(repository: GitRepository): string {
+    const remotes = repository.state.remotes;
+    const remote =
+      remotes.find((candidate) => candidate.name === 'origin') ?? remotes[0];
+
+    return remote?.fetchUrl ?? remote?.pushUrl ?? '';
+  }
+
+  /**
+   * Whether the working tree has anything to commit. Untracked files count, as
+   * they do for `git status --porcelain`.
+   */
+  private hasWorkingTreeChanges(repository: GitRepository): boolean {
+    const state = repository.state;
+
+    return (
+      state.workingTreeChanges.length +
+        state.indexChanges.length +
+        state.mergeChanges.length +
+        state.untrackedChanges.length >
+      0
+    );
+  }
+
+  /**
+   * Handle `getGitBranchInfo`: the repository's branch, commit and remote, plus
+   * the comparison state the CLI reports.
+   */
+  private async handleGetGitBranchInfo(): Promise<GitBranchInfoResult> {
+    const repository = await this.getGitRepository();
+    const head = repository.state.HEAD;
+
+    if (!head?.commit) {
+      throw new Error(
+        `Git repository at "${repository.rootUri.fsPath}" has no commits yet, so there is no current branch or commit hash to report. Create an initial commit first.`,
+      );
+    }
+
+    return {
+      // `head.name` is undefined while HEAD is detached; `git rev-parse
+      // --abbrev-ref HEAD` reports `HEAD` in that case, so match that.
+      currentBranch: head.name ?? 'HEAD',
+      commitHash: head.commit,
+      remoteUrl: this.getRemoteUrl(repository),
+      hasChanges: this.hasWorkingTreeChanges(repository),
+      branches: await this.collectBranchNames(repository),
+    };
+  }
+
+  /**
+   * Handle `listBranches`.
+   */
+  private async handleListBranches(): Promise<{ branches: string[] }> {
+    const repository = await this.getGitRepository();
+
+    return { branches: await this.collectBranchNames(repository) };
+  }
+
+  /**
+   * Handle `createBranch`.
+   */
+  private async handleCreateBranch(data: any): Promise<{
+    branch: string;
+    created: boolean;
+    checkout: boolean;
+  }> {
+    const name = this.requireNonEmptyString(data?.name, 'name');
+    const checkout = data?.checkout === true;
+    const repository = await this.getGitRepository();
+
+    try {
+      await repository.createBranch(name, checkout);
+    } catch (error) {
+      throw new Error(
+        `Failed to create branch "${name}": ${this.describeError(error)}`,
+      );
+    }
+
+    return { branch: name, created: true, checkout };
+  }
+
+  /**
+   * Handle `switchBranch`.
+   */
+  private async handleSwitchBranch(data: any): Promise<{
+    branch: string;
+    switched: boolean;
+  }> {
+    const name = this.requireNonEmptyString(data?.name, 'name');
+    const repository = await this.getGitRepository();
+
+    try {
+      await repository.checkout(name);
+    } catch (error) {
+      throw new Error(
+        `Failed to switch to branch "${name}": ${this.describeError(error)}`,
+      );
+    }
+
+    return { branch: name, switched: true };
+  }
+
+  /**
+   * Handle `deleteBranch`.
+   */
+  private async handleDeleteBranch(data: any): Promise<{
+    branch: string;
+    deleted: boolean;
+    force: boolean;
+  }> {
+    const name = this.requireNonEmptyString(data?.name, 'name');
+    const force = data?.force === true;
+    const repository = await this.getGitRepository();
+
+    try {
+      await repository.deleteBranch(name, force);
+    } catch (error) {
+      throw new Error(
+        `Failed to delete branch "${name}": ${this.describeError(error)}`,
+      );
+    }
+
+    return { branch: name, deleted: true, force };
+  }
+
+  /**
+   * Handle `createGitCommitFromSnapshot`: put a snapshot's files into the
+   * working tree, commit them, and report the commit git actually created.
+   */
+  private async handleCreateGitCommitFromSnapshot(
+    data: any,
+  ): Promise<GitCommitFromSnapshotResult> {
+    const snapshotId = this.requireNonEmptyString(
+      data?.snapshotId,
+      'snapshotId',
+    );
+    const includeUntracked = data?.includeUntracked === true;
+    const push = data?.push === true;
+    const branchToCreate =
+      data?.createBranch === undefined ||
+      data?.createBranch === null ||
+      data?.createBranch === ''
+        ? undefined
+        : this.requireNonEmptyString(data.createBranch, 'createBranch');
+
+    const repository = await this.getGitRepository();
+    const workspaceRoot = this.getWorkspaceFolder().uri.fsPath;
+
+    const snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+    if (!snapshot) {
+      throw new Error(
+        `Snapshot ${snapshotId} not found; there is nothing to commit.`,
+      );
+    }
+
+    // Create (and check out) the branch before touching the working tree, so a
+    // dirty tree cannot make the checkout fail halfway through the operation.
+    if (branchToCreate) {
+      try {
+        await repository.createBranch(branchToCreate, true);
+      } catch (error) {
+        throw new Error(
+          `Failed to create branch "${branchToCreate}": ${this.describeError(
+            error,
+          )}`,
+        );
+      }
+    }
+
+    // Put the snapshot's files into the working tree. Restoring via the same
+    // snapshot service the rest of this class uses also removes the files the
+    // snapshot records as deleted, so the commit represents the snapshot rather
+    // than whatever the workspace happened to contain.
+    const restore = await this.terminalApiService.restoreSnapshot(snapshotId, {
+      silent: true,
+    });
+    if (!restore.success) {
+      throw new Error(
+        `Failed to restore snapshot ${snapshotId} into the working tree: ${
+          restore.error ?? 'unknown error'
+        }`,
+      );
+    }
+
+    // Stage exactly the files the snapshot contains. `add([])` runs
+    // `git add --` and stages nothing, so pass explicit paths and skip the call
+    // entirely when the snapshot has no committable files.
+    const pathsToStage = this.resolveSnapshotPaths(
+      repository,
+      workspaceRoot,
+      snapshot.files,
+      includeUntracked,
+    );
+    if (pathsToStage.length > 0) {
+      await repository.add(pathsToStage);
+    }
+
+    const message = this.buildCommitMessage(snapshot, data?.commitMessage);
+
+    try {
+      await repository.commit(message);
+    } catch (error) {
+      throw new Error(
+        `Failed to commit snapshot ${snapshotId}: ${this.describeError(error)}`,
+      );
+    }
+
+    if (push) {
+      const branchToPush = branchToCreate ?? repository.state.HEAD?.name;
+      try {
+        await repository.push(undefined, branchToPush, true);
+      } catch (error) {
+        throw new Error(
+          `Committed ${snapshotId} but failed to push${
+            branchToPush ? ` branch "${branchToPush}"` : ''
+          }: ${this.describeError(error)}`,
+        );
+      }
+    }
+
+    // Read the result back from git: `repository.state` can lag behind the
+    // commit that was just created, and the CLI prints these values verbatim.
+    // The branch we checked out is known exactly, so it wins over cached state.
+    const commit = await repository.getCommit('HEAD');
+    const branch = branchToCreate ?? repository.state.HEAD?.name ?? 'HEAD';
+
+    if (!commit.hash) {
+      throw new Error(
+        `Git did not report a commit hash after committing snapshot ${snapshotId}.`,
+      );
+    }
+
+    return { commitHash: commit.hash, branch, message };
+  }
+
+  /**
+   * Handle `autoSnapshotBeforeGitOperation`: snapshot the workspace before a
+   * git operation and report the snapshot that was created.
+   */
+  private async handleAutoSnapshotBeforeGitOperation(
+    data: any,
+  ): Promise<{ snapshot: { id: string; description: string } }> {
+    const operation = this.requireNonEmptyString(data?.operation, 'operation');
+    const includeUntracked = data?.includeUntracked === true;
+    const description =
+      typeof data?.description === 'string' &&
+      data.description.trim().length > 0
+        ? data.description
+        : `Auto-snapshot before ${operation}`;
+
+    const response = await this.terminalApiService.takeSnapshot({
+      description,
+      tags: ['auto-snapshot', 'git'],
+      notes: `Created automatically before the git operation "${operation}" (includeUntracked: ${includeUntracked}).`,
+      silent: true,
+    });
+
+    if (!response.success || !response.snapshot) {
+      throw new Error(
+        `Failed to take a snapshot before "${operation}": ${
+          response.error ?? 'unknown error'
+        }`,
+      );
+    }
+
+    // The CLI prints both fields, so an incomplete snapshot is an error rather
+    // than something to paper over.
+    const { id, description: createdDescription } = response.snapshot;
+    if (!id || !createdDescription) {
+      throw new Error(
+        `The snapshot service returned a snapshot without an id or description after "${operation}"; refusing to report an incomplete snapshot.`,
+      );
+    }
+
+    return { snapshot: { id, description: createdDescription } };
+  }
+
+  /**
+   * Handle `compareSnapshotWithGitCommit`: compare the snapshot's file contents
+   * with the tree of a commit.
+   *
+   * The Git API exposes no tree listing, so the comparison walks the paths the
+   * snapshot records. Files that exist in the commit but are absent from the
+   * snapshot entirely cannot be seen; files that were deleted at snapshot time
+   * are recorded explicitly by the snapshot service (as `deleted`), so those
+   * are still reported.
+   */
+  private async handleCompareSnapshotWithGitCommit(
+    data: any,
+  ): Promise<GitComparisonResult> {
+    const snapshotId = this.requireNonEmptyString(
+      data?.snapshotId,
+      'snapshotId',
+    );
+    const commitHash = this.requireCommitHash(data?.commitHash);
+    const includeFileList = data?.includeFileList === true;
+
+    const repository = await this.getGitRepository();
+    const workspaceRoot = this.getWorkspaceFolder().uri.fsPath;
+    const snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+
+    if (!snapshot) {
+      throw new Error(`Snapshot ${snapshotId} not found.`);
+    }
+
+    const differences: GitFileDifference[] = [];
+    const fileChanges = {
+      added: [] as string[],
+      modified: [] as string[],
+      deleted: [] as string[],
+    };
+
+    const record = (
+      file: string,
+      changeType: GitFileChangeType,
+      counts?: { linesAdded: number; linesRemoved: number },
+    ): void => {
+      differences.push(
+        includeFileList && counts
+          ? { file, changeType, ...counts }
+          : { file, changeType },
+      );
+      fileChanges[changeType].push(file);
+    };
+
+    for (const [snapshotPath, fileData] of Object.entries(snapshot.files)) {
+      const repositoryPath = this.toRepositoryPath(
+        repository,
+        workspaceRoot,
+        snapshotPath,
+      );
+      if (!repositoryPath) {
+        continue;
+      }
+
+      // `show` rejects when the path is not in that commit's tree, which is how
+      // a file is recognised as added or deleted. A ref that matches the hash
+      // format but does not resolve in the repository fails the same way, so
+      // such a ref reads as "every snapshot file was added" — the CLI's
+      // standalone mode, which shells out to `git show`, behaves identically.
+      const committed = await this.readCommittedFile(
+        repository,
+        commitHash,
+        repositoryPath,
+      );
+
+      if (fileData.deleted) {
+        if (committed !== null) {
+          record(repositoryPath, 'deleted', {
+            linesAdded: 0,
+            linesRemoved: this.countLines(committed),
+          });
+        }
+        continue;
+      }
+
+      if (fileData.isBinary) {
+        // Binary content is not comparable through the text-based Git API, so
+        // only the file's presence can be compared.
+        if (committed === null) {
+          record(repositoryPath, 'added');
+        }
+        continue;
+      }
+
+      const content = await this.terminalApiService.getSnapshotFileContent(
+        snapshotId,
+        snapshotPath,
+      );
+      if (content === null) {
+        // The file cannot be reconstructed from the snapshot (for example an
+        // unresolved diff), so there is nothing to compare it against.
+        continue;
+      }
+
+      if (committed === null) {
+        record(repositoryPath, 'added', {
+          linesAdded: this.countLines(content),
+          linesRemoved: 0,
+        });
+      } else if (content !== committed) {
+        record(
+          repositoryPath,
+          'modified',
+          this.countChangedLines(committed, content),
+        );
+      }
+    }
+
+    differences.sort((a, b) => a.file.localeCompare(b.file));
+
+    return includeFileList ? { differences, fileChanges } : { differences };
+  }
+
+  /**
+   * Map the files a snapshot records to repository-relative paths git can
+   * stage.
+   *
+   * Files recorded as deleted are skipped (the snapshot stores their removal,
+   * not their content) and untracked files are only staged when the caller
+   * asked for untracked files to be included.
+   */
+  private resolveSnapshotPaths(
+    repository: GitRepository,
+    workspaceRoot: string,
+    files: Snapshot['files'],
+    includeUntracked: boolean,
+  ): string[] {
+    const untracked = includeUntracked
+      ? undefined
+      : this.collectUntrackedPaths(repository);
+    const stageable = new Set<string>();
+
+    for (const [snapshotPath, fileData] of Object.entries(files)) {
+      if (fileData.deleted) {
+        continue;
+      }
+
+      const repositoryPath = this.toRepositoryPath(
+        repository,
+        workspaceRoot,
+        snapshotPath,
+      );
+      if (!repositoryPath || untracked?.has(repositoryPath)) {
+        continue;
+      }
+
+      stageable.add(repositoryPath);
+    }
+
+    return Array.from(stageable).sort();
+  }
+
+  /**
+   * The paths git currently reports as untracked, repository-relative.
+   */
+  private collectUntrackedPaths(repository: GitRepository): Set<string> {
+    const repositoryRoot = repository.rootUri.fsPath;
+
+    return new Set(
+      repository.state.untrackedChanges
+        .map((change) =>
+          this.toRepositoryPath(repository, repositoryRoot, change.uri.fsPath),
+        )
+        .filter((filePath): filePath is string => typeof filePath === 'string'),
+    );
+  }
+
+  /**
+   * Translate a snapshot path (workspace-relative, native separators) into a
+   * repository-relative path with POSIX separators.
+   *
+   * Returns undefined for anything outside the repository root, which git
+   * cannot stage — the workspace can be a subdirectory of the repository, or
+   * contain files the repository does not track at all.
+   */
+  private toRepositoryPath(
+    repository: GitRepository,
+    workspaceRoot: string,
+    filePath: string,
+  ): string | undefined {
+    const absolutePath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(workspaceRoot, filePath);
+    const relativePath = path.relative(repository.rootUri.fsPath, absolutePath);
+
+    if (
+      !relativePath ||
+      relativePath === '..' ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      return undefined;
+    }
+
+    return relativePath.split(path.sep).join('/');
+  }
+
+  /**
+   * The commit message for a snapshot: the caller's when given, otherwise one
+   * derived from the snapshot's description and id.
+   */
+  private buildCommitMessage(snapshot: Snapshot, requested?: unknown): string {
+    if (typeof requested === 'string' && requested.trim().length > 0) {
+      return requested;
+    }
+
+    const description = snapshot.description?.trim();
+
+    return description
+      ? `Snapshot: ${description} [${snapshot.id}]`
+      : `Snapshot ${snapshot.id}`;
+  }
+
+  /**
+   * Read a file from a commit's tree, or null when that commit does not contain
+   * the path (`git show <commit>:<path>` fails).
+   */
+  private async readCommittedFile(
+    repository: GitRepository,
+    commitHash: string,
+    repositoryPath: string,
+  ): Promise<string | null> {
+    try {
+      return await repository.show(commitHash, repositoryPath);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Count the lines of a file, ignoring a trailing newline.
+   */
+  private countLines(content: string): number {
+    if (content.length === 0) {
+      return 0;
+    }
+
+    const lines = content.split(/\r\n|\r|\n/);
+    if (lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+
+    return lines.length;
+  }
+
+  /**
+   * Count the lines a change adds and removes.
+   */
+  private countChangedLines(
+    previous: string,
+    current: string,
+  ): { linesAdded: number; linesRemoved: number } {
+    let linesAdded = 0;
+    let linesRemoved = 0;
+
+    for (const change of diff.diffLines(previous, current)) {
+      const count = change.count ?? this.countLines(change.value);
+      if (change.added) {
+        linesAdded += count;
+      } else if (change.removed) {
+        linesRemoved += count;
+      }
+    }
+
+    return { linesAdded, linesRemoved };
+  }
+
+  /**
+   * Validate a required string field of an IPC payload.
+   */
+  private requireNonEmptyString(value: unknown, field: string): string {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(
+        `Missing or invalid "${field}": expected a non-empty string.`,
+      );
+    }
+    return value;
+  }
+
+  /**
+   * Validate a commit hash before it reaches git. Mirrors the validation
+   * `codelapse-core`'s GitIntegration applies to the same input.
+   */
+  private requireCommitHash(value: unknown): string {
+    if (typeof value !== 'string' || !/^[a-fA-F0-9]{4,40}$/.test(value)) {
+      throw new Error(`Invalid commit hash: "${String(value)}"`);
+    }
+    return value;
+  }
+
+  /**
+   * Best-effort message for anything that was thrown.
+   */
+  private describeError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   /**

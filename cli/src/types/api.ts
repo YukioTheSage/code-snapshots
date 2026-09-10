@@ -845,11 +845,30 @@ export interface GitCommitResponse extends ApiResponse<GitCommitResult> {
 }
 
 /**
- * Git comparison result
+ * Git comparison result.
+ *
+ * The difference shape here is deliberately **not** `FileDifference` above.
+ * `compareSnapshotWithGitCommit` returns one entry per changed *file*, and
+ * `commands/git.ts` reads `diff.file`, `diff.changeType`, `diff.linesAdded` and
+ * `diff.linesRemoved`. `FileDifference` describes a per-line edit
+ * (`lineNumber`, `type`, `oldContent`, `newContent`) and would silently mistype
+ * every field. This matches `GitComparisonResult` in
+ * `src/services/cliConnectorService.ts` on the extension side.
  */
+export interface GitFileDifference {
+  /** Repository-relative path of the changed file */
+  file: string;
+  /** How the file changed */
+  changeType: 'added' | 'modified' | 'deleted';
+  /** Lines added, when the caller asked for the file list */
+  linesAdded?: number;
+  /** Lines removed, when the caller asked for the file list */
+  linesRemoved?: number;
+}
+
 export interface GitComparisonResult {
   /** Differences found */
-  differences: FileDifference[];
+  differences: GitFileDifference[];
   /** File changes summary */
   fileChanges?: {
     added: string[];

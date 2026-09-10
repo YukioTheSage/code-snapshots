@@ -2303,18 +2303,21 @@ function registerCreateGitCommitCommand({
         },
         async (progress) => {
           try {
-            progress.report({ message: 'Staging changes...' });
-            log('Staging all changes after restore...');
-
-            // On macOS, ensure we're using path strings correctly
-            await repo.add([]); // Stage all changes in the repository root
-
             progress.report({ message: 'Committing...' });
-            log(`Committing with message: "${commitMessage}"`);
+            log('Committing all changes after restore...');
 
             // Additional logging to help diagnose any issues
             try {
-              await repo.commit(commitMessage);
+              // `{ all: true }` stages the working tree as part of the commit.
+              //
+              // This previously read `await repo.add([])` with a comment
+              // claiming it staged all changes. It did not: an empty path list
+              // reaches git as `git add --`, which stages nothing. The commit
+              // then contained only whatever was already staged — either
+              // nothing, or unrelated pre-staged files, depending on the
+              // workspace. `CommitOptions.all` is the supported way to express
+              // this and does not depend on empty-array semantics.
+              await repo.commit(commitMessage, { all: true });
               log(`Git commit operation completed successfully`);
             } catch (commitErr: unknown) {
               log(
