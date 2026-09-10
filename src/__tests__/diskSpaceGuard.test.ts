@@ -1,6 +1,7 @@
 import { promises as fsPromises } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as logger from '../logger';
 import {
   assertSufficientDiskSpace,
   getFreeDiskBytes,
@@ -145,10 +146,11 @@ describe('the skip is reported once rather than per write', () => {
     delete (fsPromises as any).statfs;
     resetDiskSpaceWarningForTesting();
 
-    // Reach the logger through the module's own import so the assertion is
-    // about what the guard emits, not about console noise.
-    const logger = require('../logger');
-    const logSpy = jest.spyOn(logger, 'log').mockImplementation(() => {});
+    // Spy on the logger the guard actually uses, so the assertion is about what
+    // the guard emits rather than about console noise.
+    const logSpy = jest
+      .spyOn(logger, 'log')
+      .mockImplementation(() => undefined);
 
     try {
       const dir = await fsPromises.mkdtemp(
