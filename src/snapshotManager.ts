@@ -11,6 +11,7 @@ import { SnapshotStorage } from './snapshotStorage';
 import { API as GitAPI } from './types/git'; // Import Git API type
 import { assertNoSymlinkPath, ensureWithinDirectory } from './pathSecurity';
 import { MAX_FILE_SIZE_BYTES } from './security/limits';
+import { getUnrecoverableFiles } from './snapshotVerification';
 
 // Keep Snapshot interface definition here as it's central to the manager
 export interface Snapshot {
@@ -36,6 +37,27 @@ export interface Snapshot {
       isBinary?: boolean;
     };
   };
+}
+
+/**
+ * Outcome of a restore.
+ *
+ * `skipped` and `refusedDeletions` are the reason this is not a boolean: a
+ * snapshot whose delta chain is broken does not describe the whole workspace,
+ * so a restore can neither reconstruct every file nor safely delete the files
+ * it does not know about. Reporting both separately is what lets a caller tell
+ * "restored everything" from "restored what it could and left the rest alone".
+ */
+export interface RestoreResult {
+  success: boolean;
+  /** Relative paths written to disk. */
+  restored: string[];
+  /** Relative paths present in the snapshot whose content could not be reconstructed. */
+  skipped: string[];
+  /** Relative paths left in place because deleting them was unsafe. */
+  refusedDeletions: string[];
+  /** Relative paths deleted from the workspace. */
+  deleted: string[];
 }
 
 export class SnapshotManager {
@@ -788,7 +810,9 @@ export class SnapshotManager {
    * @returns A promise resolving to true if successful, false otherwise.
    * @throws Error if workspace root is not found or snapshot is invalid.
    */
-  public async applySnapshotRestore(snapshotId: string): Promise<boolean> {
+  public async applySnapshotRestore(
+    snapshotId: string,
+  ): Promise<RestoreResult> {
     return await this.withWriteLock(() =>
       this.applySnapshotRestoreInternal(snapshotId),
     );
@@ -796,7 +820,7 @@ export class SnapshotManager {
 
   private async applySnapshotRestoreInternal(
     snapshotId: string,
-  ): Promise<boolean> {
+  ): Promise<RestoreResult> {
     // Find the snapshot
     const index = this.snapshots.findIndex((s) => s.id === snapshotId);
     if (index === -1) {
@@ -861,100 +885,130 @@ export class SnapshotManager {
       });
     });
 
-    let restoredCount = 0;
-    let deletedCount = 0;
-    const fileOpPromises: Promise<void>[] = [];
+    // Files whose baseSnapshotId chain cannot be resolved. Their content is
+    // gone from the store, which makes this snapshot an incomplete description
+    // of the workspace -- so it is also what forbids deleting anything below.
+    const unrecoverable = new Set(
+      getUnrecoverableFiles(snapshot, this.snapshots),
+    );
+    if (unrecoverable.size > 0) {
+      log(
+        `Restore: ${unrecoverable.size} file(s) in snapshot ${snapshotId} have unresolvable base references and will not be restored.`,
+      );
+    }
+
+    const restored: string[] = [];
+    const deleted: string[] = [];
+    const skipped: string[] = [];
+    const refusedDeletions: string[] = [];
 
     // 1. Handle Deletions: Files in workspace but not in snapshot (or marked deleted)
-    currentWorkspaceFilesRelative.forEach((relativePath) => {
-      if (
-        !expectedSnapshotFiles.has(relativePath) ||
-        expectedSnapshotFiles.get(relativePath)?.deleted
-      ) {
-        const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
-
-        // CRITICAL FIX: Preserve binary files even if they weren't in the snapshot
-        if (this.storage.isBinaryFile(fullPath)) {
-          logVerbose(
-            `Restore Apply: Preserving binary file not tracked in snapshot: ${relativePath}`,
-          );
-          // Don't add to deletion operations
-        } else {
-          logVerbose(
-            `Restore Apply: Deleting extraneous/marked-deleted file: ${relativePath}`,
-          );
-          fileOpPromises.push(
-            this.storage.deleteWorkspaceFile(fullPath).then(() => {
-              deletedCount++;
-            }),
-          );
-        }
+    //
+    // Sequential rather than a forEach that pushes promises: the callback could
+    // not be awaited, so a rejection had nowhere to go, and every deletion was
+    // started at once with no back-pressure.
+    for (const relativePath of currentWorkspaceFilesRelative) {
+      const inSnapshot = expectedSnapshotFiles.has(relativePath);
+      const markedDeleted = expectedSnapshotFiles.get(relativePath)?.deleted;
+      // Delete only when the file is not in the snapshot at all, or the
+      // snapshot explicitly records it as deleted. This is the negation of the
+      // original `!inSnapshot || markedDeleted`, kept as an early-continue so
+      // the rest of the loop body has no nesting.
+      if (inSnapshot && !markedDeleted) {
+        continue;
       }
-    });
+
+      const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
+
+      // Preserve binary files even if they weren't in the snapshot
+      if (this.storage.isBinaryFile(fullPath)) {
+        logVerbose(
+          `Restore Apply: Preserving binary file not tracked in snapshot: ${relativePath}`,
+        );
+        continue;
+      }
+
+      if (unrecoverable.size > 0) {
+        // The snapshot is incomplete: it does not describe the whole
+        // workspace, so "absent from the snapshot" is not evidence that the
+        // file is extraneous. Deleting live work on the strength of a broken
+        // record is exactly the failure this guard exists to prevent.
+        refusedDeletions.push(relativePath);
+        logVerbose(
+          `Restore Apply: Refusing to delete ${relativePath} because the snapshot has ${unrecoverable.size} unreadable file(s).`,
+        );
+        continue;
+      }
+
+      logVerbose(
+        `Restore Apply: Deleting extraneous/marked-deleted file: ${relativePath}`,
+      );
+      try {
+        await this.storage.deleteWorkspaceFile(fullPath);
+        deleted.push(relativePath);
+      } catch (error) {
+        // A failed deletion is reported rather than swallowed: the caller
+        // needs to know the workspace no longer matches the snapshot.
+        skipped.push(relativePath);
+        log(`Restore Apply: Error deleting ${relativePath}: ${error}`);
+      }
+    }
 
     // 2. Handle Restorations/Additions: Files in snapshot (and not marked deleted)
-    expectedSnapshotFiles.forEach(async (fileData, relativePath) => {
-      if (!fileData.deleted) {
-        const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
-
-        if (fileData.isBinary) {
-          // Don't attempt to restore content for binary files
-          // They're just tracked for existence, not content
+    for (const [relativePath, fileData] of expectedSnapshotFiles) {
+      if (fileData.deleted) {
+        if (!currentWorkspaceFilesRelative.has(relativePath)) {
           logVerbose(
-            `Restore Apply: Binary file in snapshot, no content to restore: ${relativePath}`,
+            `Restore Apply: File marked deleted and not in workspace, no action needed: ${relativePath}`,
           );
-          return; // Skip content restoration for binary files
         }
+        continue;
+      }
+      if (fileData.isBinary) {
+        // Don't attempt to restore content for binary files.
+        // They're just tracked for existence, not content.
+        logVerbose(
+          `Restore Apply: Binary file in snapshot, no content to restore: ${relativePath}`,
+        );
+        continue;
+      }
+      if (unrecoverable.has(relativePath)) {
+        skipped.push(relativePath);
+        continue;
+      }
 
-        // Get content (this handles diff application internally via storage method)
-        const contentPromise = this.storage.getSnapshotFileContent(
+      const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
+      try {
+        const content = await this.storage.getSnapshotFileContent(
           snapshot.id,
           relativePath,
           this.snapshots,
         );
-        fileOpPromises.push(
-          contentPromise
-            .then(async (content) => {
-              if (content !== null) {
-                logVerbose(
-                  `Restore Apply: Writing content for file: ${relativePath}`,
-                );
-                await this.storage.writeFileContent(fullPath, content);
-                restoredCount++;
-              } else {
-                log(
-                  `Restore Apply: Skipping file with null/unresolved content: ${relativePath}`,
-                );
-              }
-            })
-            .catch((error) => {
-              // Log error but allow other operations to continue
-              log(
-                `Restore Apply: Error processing file ${relativePath}: ${error}`,
-              );
-              // Optionally re-throw if one failure should stop the whole process
-            }),
-        );
-      } else if (!currentWorkspaceFilesRelative.has(relativePath)) {
-        // Also ensure files marked deleted in snapshot *and* not present in workspace are handled (idempotency)
-        logVerbose(
-          `Restore Apply: File marked deleted and not in workspace, no action needed: ${relativePath}`,
-        );
+        if (content === null) {
+          // Not in the known-broken set but still unresolvable: a resolution
+          // failure deeper in the chain, or an I/O error reading a base.
+          skipped.push(relativePath);
+          log(
+            `Restore Apply: Skipping unresolvable content for ${relativePath}`,
+          );
+          continue;
+        }
+        await this.storage.writeFileContent(fullPath, content);
+        restored.push(relativePath);
+      } catch (error) {
+        skipped.push(relativePath);
+        log(`Restore Apply: Error restoring ${relativePath}: ${error}`);
       }
-    });
+    }
 
-    // Wait for all file operations to complete
-    try {
-      await Promise.all(fileOpPromises);
+    log(
+      `Restore Apply summary for ${snapshotId}: ${restored.length} restored, ${deleted.length} deleted, ${skipped.length} skipped, ${refusedDeletions.length} deletions refused.`,
+    );
+
+    if (skipped.length > 0 || refusedDeletions.length > 0) {
       log(
-        `Restore Apply summary for ${snapshotId}: ${restoredCount} files restored/added, ${deletedCount} files deleted.`,
+        `Restore Apply: snapshot ${snapshotId} is partially unreadable. Skipped: ${skipped.length}, refused deletions: ${refusedDeletions.length}.`,
       );
-    } catch (error) {
-      log(
-        `Restore Apply: Error during file operations for ${snapshotId}: ${error}`,
-      );
-      // Re-throw the error to indicate failure to the caller (command handler)
-      throw new Error(`Failed to apply snapshot restore: ${error}`);
     }
 
     // --- UI Summary Message REMOVED ---
@@ -971,7 +1025,7 @@ export class SnapshotManager {
     this._onDidChangeSnapshots.fire();
     log(`Successfully applied restore for snapshot ${snapshotId}`);
 
-    return true; // Indicate success
+    return { success: true, restored, skipped, refusedDeletions, deleted };
   }
 
   /**
@@ -990,7 +1044,10 @@ export class SnapshotManager {
     // 'previousSnapshot' should orchestrate the full flow if needed.
     // For now, assume direct application is intended for nav commands.
     // Consider if nav commands should also have preview/confirm.
-    return await this.applySnapshotRestore(prevSnapshotId);
+    // `applySnapshotRestore` returns a RestoreResult; navigation only reports
+    // whether the restore succeeded, and Plan 06 owns the detach-tolerant
+    // index semantics for these two methods.
+    return (await this.applySnapshotRestore(prevSnapshotId)).success;
   }
 
   /**
@@ -1005,7 +1062,7 @@ export class SnapshotManager {
     const nextSnapshotId = this.snapshots[this.currentSnapshotIndex + 1].id;
     log(`Navigating to next snapshot: ${nextSnapshotId}`);
     // See note in navigateToPreviousSnapshot regarding UI/confirmation bypass.
-    return await this.applySnapshotRestore(nextSnapshotId);
+    return (await this.applySnapshotRestore(nextSnapshotId)).success;
   }
 
   /**

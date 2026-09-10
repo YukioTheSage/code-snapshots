@@ -115,6 +115,18 @@ export interface RestoreResponse {
   filesSkipped: number;
   error?: string;
   conflicts?: string[]; // Files with unsaved changes
+  /**
+   * True when the snapshot could not be fully applied because part of its delta
+   * chain is missing. The restore still ran; `filesSkipped` and
+   * `refusedDeletions` say how much of it did.
+   *
+   * Without this, a partial restore was indistinguishable from a complete one:
+   * the response said `success: true` and the caller had no way to tell that
+   * some files were left at whatever the workspace already contained.
+   */
+  incomplete?: boolean;
+  /** Files left in place because an incomplete snapshot cannot prove they are extraneous. */
+  refusedDeletions?: number;
 }
 
 /**

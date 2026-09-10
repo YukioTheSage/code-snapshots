@@ -469,7 +469,7 @@ function registerJumpToSnapshotCommand({
             const startTime = Date.now();
 
             // Actual restore operation
-            const success = await snapshotManager.applySnapshotRestore(
+            const result = await snapshotManager.applySnapshotRestore(
               targetSnapshotId,
             );
 
@@ -477,14 +477,26 @@ function registerJumpToSnapshotCommand({
             const duration = Date.now() - startTime;
             log(`Snapshot restore completed in ${duration}ms`);
 
-            if (!success) {
+            if (!result.success) {
               log(
-                `applySnapshotRestore returned false for ${targetSnapshotId}`,
+                `applySnapshotRestore returned success=false for ${targetSnapshotId}`,
               );
               vscode.window.showErrorMessage(
                 `Failed to apply snapshot restore.`,
               );
               return;
+            }
+
+            if (
+              result.skipped.length > 0 ||
+              result.refusedDeletions.length > 0
+            ) {
+              // The restore did what it could. Saying nothing would repeat the
+              // original bug: the user would believe the workspace now matches
+              // the snapshot when part of it could not be reconstructed.
+              vscode.window.showWarningMessage(
+                `Restored ${result.restored.length} file(s). ${result.skipped.length} file(s) could not be restored because this snapshot's history is incomplete, and ${result.refusedDeletions.length} file(s) were left untouched for the same reason.`,
+              );
             }
 
             progress.report({

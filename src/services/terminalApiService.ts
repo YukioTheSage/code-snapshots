@@ -198,7 +198,8 @@ export class TerminalApiService implements TerminalApiInterface {
       }
 
       // Perform the restore
-      const success = await this.snapshotManager.applySnapshotRestore(id);
+      const restore = await this.snapshotManager.applySnapshotRestore(id);
+      const success = restore.success;
 
       if (!success) {
         return {
@@ -206,6 +207,22 @@ export class TerminalApiService implements TerminalApiInterface {
           filesRestored: 0,
           filesSkipped: 0,
           error: 'Failed to restore snapshot',
+          conflicts,
+        };
+      }
+
+      // Report files the snapshot could not reconstruct, rather than claiming a
+      // clean restore. This keeps `success` honest: the operation did run.
+      const incomplete =
+        restore.skipped.length > 0 || restore.refusedDeletions.length > 0;
+
+      if (incomplete) {
+        return {
+          success: true,
+          filesRestored: restore.restored.length,
+          filesSkipped: restore.skipped.length,
+          incomplete: true,
+          refusedDeletions: restore.refusedDeletions.length,
           conflicts,
         };
       }
