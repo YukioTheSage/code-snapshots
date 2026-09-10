@@ -31,6 +31,7 @@ import { QualityMetricsCalculator } from './qualityMetricsCalculator';
 import { RelationshipAnalyzer } from './relationshipAnalyzer';
 import { QueryProcessor, QueryContext } from './queryProcessor';
 import { ResultManager } from './resultManager';
+import { throwIfCancelled } from '../utils/cancellation';
 
 export interface SemanticSearchOptions {
   query: string;
@@ -38,6 +39,19 @@ export interface SemanticSearchOptions {
   limit?: number;
   languages?: string[];
   scoreThreshold?: number;
+}
+
+/**
+ * What an indexing run actually did.
+ *
+ * `attempted` counts snapshots the run tried; `succeeded` counts the ones that
+ * were indexed. They differ whenever a snapshot failed, which the previous
+ * reporting hid.
+ */
+export interface IndexingOutcome {
+  attempted: number;
+  succeeded: number;
+  failed: Array<{ snapshotId: string; error: string }>;
 }
 
 export interface SemanticSearchResult {
@@ -880,12 +894,17 @@ export class SemanticSearchService implements vscode.Disposable {
 
   /**
    * Indexes all existing snapshots
+   *
+   * Returns a count of what actually happened. Previously this reported
+   * `Successfully indexed ${current} snapshots`, where `current` counted
+   * *attempts*: every per-snapshot error was caught and logged, so the user was
+   * told everything had been indexed when an unknown subset had failed.
    */
-  async indexAllSnapshots(): Promise<void> {
+  async indexAllSnapshots(): Promise<IndexingOutcome> {
     const snapshots = this.snapshotManager.getSnapshots();
 
     if (snapshots.length === 0) {
-      return;
+      return { attempted: 0, succeeded: 0, failed: [] };
     }
 
     // Ensure credentials are set up
@@ -898,19 +917,13 @@ export class SemanticSearchService implements vscode.Disposable {
       }
     }
 
-    return vscode.window.withProgress(
+    return vscode.window.withProgress<IndexingOutcome>(
       {
         location: vscode.ProgressLocation.Notification,
         title: 'Indexing snapshots for semantic search',
         cancellable: true,
       },
       async (progress, token) => {
-        // Set up cancellation handler
-        token.onCancellationRequested(() => {
-          this.processingQueue = [];
-          vscode.window.showInformationMessage('Indexing cancelled.');
-        });
-
         // Filter to non-indexed snapshots
         const unindexedSnapshots = snapshots
           .filter((snapshot) => !this.indexedSnapshots.has(snapshot.id))
@@ -920,21 +933,27 @@ export class SemanticSearchService implements vscode.Disposable {
           vscode.window.showInformationMessage(
             'All snapshots are already indexed.',
           );
-          return;
+          return { attempted: 0, succeeded: 0, failed: [] };
         }
 
         const total = unindexedSnapshots.length;
-        let current = 0;
+        let attempted = 0;
+        let succeeded = 0;
+        const failed: Array<{ snapshotId: string; error: string }> = [];
 
-        // Process snapshots sequentially with cancellation support
+        // Process snapshots sequentially, checking cancellation at each
+        // boundary. The previous implementation registered a listener that
+        // showed a toast but could not stop the loop, so a cancelled run still
+        // ran to completion.
         for (const snapshotId of unindexedSnapshots) {
-          if (token.isCancellationRequested) {
-            throw new Error('Indexing cancelled by user');
-          }
+          throwIfCancelled(token);
+
           progress.report({
-            message: `Processing snapshot ${++current} of ${total}`,
+            message: `Processing snapshot ${attempted + 1} of ${total}`,
             increment: 100 / total,
           });
+          attempted++;
+
           try {
             await this.indexSnapshot(snapshotId);
             this.indexedSnapshots.add(snapshotId);
@@ -943,16 +962,34 @@ export class SemanticSearchService implements vscode.Disposable {
               'semanticSearch.indexedSnapshots',
               Array.from(this.indexedSnapshots),
             );
+            succeeded++;
           } catch (error) {
-            log(`Error indexing snapshot ${snapshotId}: ${error}`);
+            const message =
+              error instanceof Error ? error.message : String(error);
+            failed.push({ snapshotId, error: message });
+            log(`Error indexing snapshot ${snapshotId}: ${message}`);
           }
         }
 
-        if (!token.isCancellationRequested) {
+        if (failed.length === 0) {
           vscode.window.showInformationMessage(
-            `Successfully indexed ${current} snapshots for semantic search.`,
+            `Indexed ${succeeded} snapshot(s) for semantic search.`,
+          );
+        } else if (succeeded === 0) {
+          vscode.window.showErrorMessage(
+            `Indexing failed for all ${failed.length} snapshot(s). See the CodeLapse output channel for details.`,
+          );
+        } else {
+          vscode.window.showWarningMessage(
+            `Indexed ${succeeded} of ${
+              failed.length + succeeded
+            } snapshot(s); ${
+              failed.length
+            } failed. See the CodeLapse output channel for details.`,
           );
         }
+
+        return { attempted, succeeded, failed };
       },
     );
   }

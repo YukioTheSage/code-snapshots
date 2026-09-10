@@ -516,11 +516,28 @@ export class TerminalApiService implements TerminalApiInterface {
         };
       } else {
         // Index all snapshots
-        await this.semanticSearchService.indexAllSnapshots();
+        const outcome = await this.semanticSearchService.indexAllSnapshots();
+
+        // Report what happened, not what was attempted. This used to return
+        // success with the *total* snapshot count no matter how many failed,
+        // which is the same false claim the progress notification made.
+        if (outcome.failed.length > 0) {
+          return {
+            success: false,
+            snapshotsIndexed: outcome.succeeded,
+            filesIndexed: 0, // Would need to track this
+            error: `Failed to index ${outcome.failed.length} of ${
+              outcome.attempted
+            } snapshot(s): ${outcome.failed
+              .map((failure) => `${failure.snapshotId} (${failure.error})`)
+              .join('; ')}`,
+            timeElapsed: Date.now() - startTime,
+          };
+        }
 
         return {
           success: true,
-          snapshotsIndexed: this.snapshotManager.getSnapshots().length,
+          snapshotsIndexed: outcome.succeeded,
           filesIndexed: 0, // Would need to track this
           timeElapsed: Date.now() - startTime,
         };

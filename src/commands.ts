@@ -2115,6 +2115,13 @@ function registerSemanticIndexCommand({
       try {
         await semanticSearchService.indexAllSnapshots();
       } catch (error) {
+        // A user-initiated cancel is not a failure. The indexing run now stops
+        // at a cancellation boundary instead of running to completion behind a
+        // toast, so it reaches here as a CancellationError.
+        if (isCancellationError(error)) {
+          vscode.window.showInformationMessage('Indexing cancelled');
+          return;
+        }
         vscode.window.showErrorMessage(`Indexing failed: ${error}`);
       }
     },

@@ -272,9 +272,25 @@ export class SearchCommands {
 
   async index(options: any): Promise<void> {
     try {
-      const result = await this.client.callApi('indexSnapshots', {
+      const result = (await this.client.callApi('indexSnapshots', {
         snapshotIds: options.all ? undefined : [],
-      });
+      })) as { success?: boolean; error?: string } | undefined;
+
+      // Propagate the extension's own verdict. Hardcoding success here meant a
+      // run that failed to index anything still printed "Snapshots indexed
+      // successfully" and exited 0.
+      if (result?.success === false) {
+        printResult(
+          {
+            success: false,
+            indexing: result,
+            error: result.error ?? 'Indexing failed',
+          },
+          options,
+        );
+        return;
+      }
+
       printResult(
         {
           success: true,
