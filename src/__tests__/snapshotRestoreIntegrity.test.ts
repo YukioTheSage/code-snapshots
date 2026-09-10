@@ -41,6 +41,10 @@ describe('applySnapshotRestoreInternal integrity guard', () => {
     );
 
     manager = new SnapshotManager(null);
+    // The constructor calls loadSnapshots() without awaiting it, and that load
+    // clears `snapshots` to [] when storage returns nothing. Without settling it
+    // first, the fixtures below are overwritten one microtask later.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     // Inject a storage double with a resolvable workspace root.
     const storage: any = {
       getWorkspaceRoot: () => workspaceRoot,
@@ -149,6 +153,9 @@ describe('applySnapshotRestoreInternal on a complete snapshot', () => {
     await fsPromises.writeFile(path.join(workspaceRoot, 'keep.ts'), 'keep');
 
     manager = new SnapshotManager(null);
+    // See the note in the first beforeEach: settle the constructor's un-awaited
+    // loadSnapshots() before replacing storage and fixtures.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const storage: any = {
       getWorkspaceRoot: () => workspaceRoot,
       getSnapshotFileContent: jest.fn(async (_id: string, rel: string) =>

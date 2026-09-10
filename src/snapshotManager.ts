@@ -1166,7 +1166,7 @@ export class SnapshotManager {
       }
 
       const snapshotToDelete = this.snapshots[lockedIndex];
-      await this.storage.deleteSnapshotData(snapshotToDelete.id);
+      await this.purgeSnapshot(snapshotToDelete.id);
 
       this.snapshots.splice(lockedIndex, 1);
       log(`Removed snapshot ${snapshotId} from in-memory list.`);
@@ -1181,17 +1181,6 @@ export class SnapshotManager {
         );
       }
 
-      const semanticSearchService = (this as any).semanticSearchService;
-      if (semanticSearchService) {
-        try {
-          await semanticSearchService.deleteSnapshotIndexing(
-            snapshotToDelete.id,
-          );
-        } catch (error) {
-          log(`Error deleting semantic search data: ${error}`);
-        }
-      }
-
       await this.saveSnapshotIndex();
       log(`Snapshot index saved after deleting ${snapshotId}.`);
 
@@ -1203,6 +1192,39 @@ export class SnapshotManager {
       );
       return true;
     });
+  }
+
+  /**
+   * Removes a snapshot from storage, the content cache and the semantic search
+   * index. Every path that discards a snapshot must go through here, so that no
+   * derived store keeps referencing it.
+   *
+   * `enforceSnapshotLimit` previously called `storage.deleteSnapshotData`
+   * directly and never told the search service, so pruned snapshots kept their
+   * vectors and stayed reachable in search results after their content was
+   * gone. The content cache was fine -- `deleteSnapshotData` already clears it
+   * by exact `"<snapshotId>::"` prefix, which is why the cache assertions for
+   * this task already passed.
+   */
+  private async purgeSnapshot(snapshotId: string): Promise<void> {
+    await this.storage.deleteSnapshotData(snapshotId);
+
+    const semanticSearchService = (this as any).semanticSearchService as
+      | { deleteSnapshotIndexing?: (id: string) => Promise<void> }
+      | undefined;
+
+    if (typeof semanticSearchService?.deleteSnapshotIndexing === 'function') {
+      try {
+        await semanticSearchService.deleteSnapshotIndexing(snapshotId);
+      } catch (error) {
+        // Purge is best-effort on the derived store: a failure to clear vectors
+        // must not stop the snapshot itself from being removed, but it must be
+        // visible rather than swallowed.
+        log(
+          `Purge: failed to remove search index entries for ${snapshotId}: ${error}`,
+        );
+      }
+    }
   }
 
   /**
@@ -1423,7 +1445,7 @@ export class SnapshotManager {
 
     // Delete snapshot data using storage
     for (const snapshot of removedSnapshots) {
-      await this.storage.deleteSnapshotData(snapshot.id);
+      await this.purgeSnapshot(snapshot.id);
     }
 
     // Update index since snapshots were removed
