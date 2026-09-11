@@ -1,5 +1,8 @@
 out
 dist
+# Compiled integration tests (tsc -p tsconfig.integration.json). Build output,
+# so it must not dirty the tree between runs.
+test-out
 node_modules
 .vscode-test/
 *.vsix
