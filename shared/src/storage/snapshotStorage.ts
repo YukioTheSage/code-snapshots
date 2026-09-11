@@ -275,15 +275,20 @@ export class SnapshotStorage {
     validateSnapshotId(snapshotId);
     const snapshotDir = path.join(this.snapshotDirectory, snapshotId);
 
+    // Absence is an error, not a no-op. Returning quietly here is what let the
+    // CLI answer "Snapshot 999 deleted successfully" for an id that never
+    // existed, and rewrite its index as if the delete had happened.
+    if (!fs.existsSync(snapshotDir)) {
+      throw new Error(`Snapshot ${snapshotId} not found`);
+    }
+
     try {
-      if (fs.existsSync(snapshotDir)) {
-        assertNoSymlinkPath(this.snapshotDirectory, snapshotDir);
-        const stats = fs.lstatSync(snapshotDir);
-        if (stats.isSymbolicLink()) {
-          throw new Error(`Refusing to delete symlink snapshot directory: ${snapshotDir}`);
-        }
-        fs.rmSync(snapshotDir, { recursive: true, force: true });
+      assertNoSymlinkPath(this.snapshotDirectory, snapshotDir);
+      const stats = fs.lstatSync(snapshotDir);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`Refusing to delete symlink snapshot directory: ${snapshotDir}`);
       }
+      fs.rmSync(snapshotDir, { recursive: true, force: true });
     } catch (error) {
       throw new Error(`Failed to delete snapshot ${snapshotId}: ${error}`);
     }

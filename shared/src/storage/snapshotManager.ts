@@ -342,7 +342,17 @@ export class SnapshotManager {
       const toDelete = this.snapshots.length - maxSnapshots;
       for (let i = 0; i < toDelete; i++) {
         const oldSnapshot = this.snapshots.shift()!;
-        await this.storage.deleteSnapshot(oldSnapshot.id);
+        try {
+          await this.storage.deleteSnapshot(oldSnapshot.id);
+        } catch (error) {
+          // Pruning is best-effort: a stale index entry whose directory is
+          // already gone must not fail the snapshot that was just created.
+          // The entry is dropped from the index either way. Real failures
+          // (permissions, symlink refusals) still surface.
+          if (!/not found/i.test(String(error))) {
+            throw error;
+          }
+        }
       }
       this.currentSnapshotIndex -= toDelete;
       await this.saveSnapshotIndex();
