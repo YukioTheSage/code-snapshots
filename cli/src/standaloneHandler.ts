@@ -639,15 +639,34 @@ export class StandaloneHandler {
       throw new Error('No snapshots available');
     }
 
+    let target: Snapshot;
     // For standalone, just return the newest (for 'next') or second-newest (for 'previous')
     if (direction === 'next') {
-      return snapshots[snapshots.length - 1];
+      target = snapshots[snapshots.length - 1];
     } else {
       if (snapshots.length < 2) {
         throw new Error('No previous snapshot available');
       }
-      return snapshots[snapshots.length - 2];
+      target = snapshots[snapshots.length - 2];
     }
+
+    // Record the position. Navigation that returns a snapshot while leaving
+    // `status` reporting "Current snapshot: None" made the two commands
+    // disagree about where the store is positioned.
+    await this.snapshotManager.setCurrentSnapshot(target.id);
+
+    return target;
+  }
+
+  /**
+   * The snapshot the store is currently positioned at, if any.
+   */
+  public getCurrentSnapshot(): Snapshot | null {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+
+    return this.snapshotManager.getCurrentSnapshot();
   }
 
   // ── Git write operations ───────────────────────────────────────────

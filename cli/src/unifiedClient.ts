@@ -184,7 +184,9 @@ export class UnifiedClient {
         mode: 'standalone',
         workspace: this.standaloneHandler.getWorkspaceRoot(),
         totalSnapshots: stats.snapshotCount,
-        currentSnapshot: null,
+        // Was hardcoded to null, so `status` reported "Current snapshot: None"
+        // immediately after `snapshot navigate` positioned the store.
+        currentSnapshot: this.standaloneHandler.getCurrentSnapshot()?.id ?? null,
       };
     } else if (this.activeMode === 'ipc') {
       const status = await this.ipcClient.getStatus();

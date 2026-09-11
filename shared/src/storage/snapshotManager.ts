@@ -110,6 +110,42 @@ export class SnapshotManager {
   }
 
   /**
+   * The snapshot the store is currently positioned at, if any.
+   *
+   * The index already persisted `currentIndex`, but nothing exposed it: the
+   * CLI hardcoded `currentSnapshot: null` in its status payload, so navigating
+   * and then asking for status disagreed with each other.
+   */
+  public getCurrentSnapshot(): Snapshot | null {
+    if (
+      this.currentSnapshotIndex < 0 ||
+      this.currentSnapshotIndex >= this.snapshots.length
+    ) {
+      return null;
+    }
+    return this.snapshots[this.currentSnapshotIndex];
+  }
+
+  /**
+   * Move the current-snapshot pointer and persist it.
+   */
+  public async setCurrentSnapshot(snapshotId: string): Promise<void> {
+    await this.ensureInitialized();
+
+    const index = this.snapshots.findIndex(
+      (snapshot) => snapshot.id === snapshotId,
+    );
+    if (index === -1) {
+      throw new Error(`Snapshot ${snapshotId} not found`);
+    }
+
+    await this.withWriteLock(async () => {
+      this.currentSnapshotIndex = index;
+      await this.saveSnapshotIndex();
+    });
+  }
+
+  /**
    * Get all files in workspace (respecting gitignore)
    */
   private async getAllFiles(selectedFiles?: string[]): Promise<string[]> {
