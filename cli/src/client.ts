@@ -27,15 +27,22 @@ interface ConnectionInfo {
   created: string;
 }
 
+interface PendingRequest {
+  resolve: (value?: any) => void;
+  reject: (reason?: any) => void;
+  /**
+   * The request's timeout, kept so that whichever path settles the request
+   * first can cancel it. See `takePendingRequest`.
+   */
+  timer?: NodeJS.Timeout;
+}
+
 export class CodeLapseClient extends EventEmitter {
   private socket?: net.Socket;
   private connected = false;
   private connectionTimeout = 5000;
   private requestId = 0;
-  private pendingRequests = new Map<
-    number,
-    { resolve: (value?: any) => void; reject: (reason?: any) => void }
-  >();
+  private pendingRequests = new Map<number, PendingRequest>();
   private connectionInfo?: ConnectionInfo | null;
   private messageBuffer = '';
   /**
@@ -60,14 +67,50 @@ export class CodeLapseClient extends EventEmitter {
   }
 
   /**
+   * Take a pending request out of the map, cancelling its timeout on the way.
+   *
+   * Every settle path goes through here: a reply (`handleMessage`), a
+   * `disconnect`, and the timeout itself. An armed timer that outlives its
+   * request keeps the Node event loop alive after the work is finished -- that
+   * is what made jest force-exit a worker ("failed to exit gracefully"), and it
+   * would keep a real `codelapse` process alive for up to `connectionTimeout`
+   * after its last request.
+   *
+   * Returns undefined for an unknown or already-settled id, so a late reply or
+   * a second settle is a no-op rather than a double resolve.
+   */
+  private takePendingRequest(id: number): PendingRequest | undefined {
+    const entry = this.pendingRequests.get(id);
+    if (!entry) {
+      return undefined;
+    }
+
+    this.pendingRequests.delete(id);
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+
+    return entry;
+  }
+
+  /**
    * Execute a direct API call to the extension
    */
   async callApi(method: string, data: any): Promise<any> {
     await this.ensureConnection();
 
     return new Promise((resolve, reject) => {
+      // Checked before registering, so a request that never reaches the wire
+      // does not leave an entry behind waiting for a reply that cannot come.
+      if (!this.socket) {
+        reject(new Error('No socket connection'));
+        return;
+      }
+
       const id = ++this.requestId;
-      this.pendingRequests.set(id, { resolve, reject });
+      const entry: PendingRequest = { resolve, reject };
+      this.pendingRequests.set(id, entry);
 
       const message = {
         id,
@@ -75,19 +118,11 @@ export class CodeLapseClient extends EventEmitter {
         data: data || {},
       };
 
-      if (!this.socket) {
-        reject(new Error('No socket connection'));
-        return;
-      }
-
       this.socket.write(JSON.stringify(message) + '\n');
 
-      // Set timeout for the request
-      setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
-          reject(new Error('Request timeout'));
-        }
+      // Cancelled by `takePendingRequest` on whichever path settles first.
+      entry.timer = setTimeout(() => {
+        this.takePendingRequest(id)?.reject(new Error('Request timeout'));
       }, this.connectionTimeout);
     });
   }
@@ -267,15 +302,17 @@ export class CodeLapseClient extends EventEmitter {
 
     const id = ++this.requestId;
     const result = await new Promise<any>((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
+      const entry: PendingRequest = { resolve, reject };
+      this.pendingRequests.set(id, entry);
+
       this.socket!.write(
         JSON.stringify({ id, method: 'authenticate', data: { token } }) + '\n',
       );
-      setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
-          reject(new Error('Authentication timed out'));
-        }
+
+      entry.timer = setTimeout(() => {
+        this.takePendingRequest(id)?.reject(
+          new Error('Authentication timed out'),
+        );
       }, this.connectionTimeout);
     });
 
@@ -299,15 +336,18 @@ export class CodeLapseClient extends EventEmitter {
       return;
     }
 
-    // Handle API response
-    if (message.id !== undefined && this.pendingRequests.has(message.id)) {
-      const { resolve, reject } = this.pendingRequests.get(message.id)!;
-      this.pendingRequests.delete(message.id);
+    // Handle API response. `takePendingRequest` cancels the request's timeout,
+    // so a reply that arrives in time leaves no timer behind.
+    const entry =
+      message.id === undefined
+        ? undefined
+        : this.takePendingRequest(message.id);
 
+    if (entry) {
       if (message.success) {
-        resolve(message.result);
+        entry.resolve(message.result);
       } else {
-        reject(new Error(message.error || 'Unknown error'));
+        entry.reject(new Error(message.error || 'Unknown error'));
       }
     }
   }
@@ -323,11 +363,11 @@ export class CodeLapseClient extends EventEmitter {
       this.socket = undefined;
     }
 
-    // Reject all pending requests
-    for (const [id, { reject }] of this.pendingRequests) {
-      reject(new Error('Connection closed'));
+    // Reject all pending requests, cancelling each one's timeout as it goes.
+    // Iterating a copy of the keys, because `takePendingRequest` deletes.
+    for (const id of [...this.pendingRequests.keys()]) {
+      this.takePendingRequest(id)?.reject(new Error('Connection closed'));
     }
-    this.pendingRequests.clear();
 
     this.removeAllListeners();
   }
