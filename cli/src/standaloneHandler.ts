@@ -20,6 +20,47 @@ import {
 import * as path from 'path';
 import * as fs from 'fs';
 
+/** Directory names that mark the root of a project the CLI can snapshot. */
+const WORKSPACE_INDICATORS = [
+  '.git',
+  'package.json',
+  '.snapshots',
+  'tsconfig.json',
+  '.vscode',
+];
+
+/**
+ * Find the nearest ancestor directory (including `startDir`) that looks like a
+ * project root, or `null` when no indicator exists up the tree.
+ *
+ * Both the handler's root search and `isStandaloneModeAvailable` must use this
+ * same walk. They used to disagree: the availability check looked only at the
+ * current directory while the handler walked up ten levels, so the CLI refused
+ * standalone mode in every subdirectory and fell back to a dead IPC path.
+ */
+export function findWorkspaceRootFrom(startDir: string): string | null {
+  let currentDir = startDir;
+
+  for (let level = 0; level < 10; level++) {
+    if (
+      WORKSPACE_INDICATORS.some((indicator) =>
+        fs.existsSync(path.join(currentDir, indicator)),
+      )
+    ) {
+      return currentDir;
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      // Reached the filesystem root.
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  return null;
+}
+
 export class StandaloneHandler {
   private snapshotManager: SnapshotManager | null = null;
   private configManager: ConfigManager | null = null;
@@ -57,46 +98,9 @@ export class StandaloneHandler {
    * Find workspace root by looking for project indicators
    */
   private findWorkspaceRoot(): string | null {
-    let currentDir = process.cwd();
-    const maxLevels = 10;
-    let level = 0;
-
-    while (level < maxLevels) {
-      // Check for project indicators
-      const indicators = [
-        '.git',
-        'package.json',
-        '.snapshots',
-        'tsconfig.json',
-        '.vscode',
-      ];
-
-      let hasIndicator = false;
-      for (const indicator of indicators) {
-        const indicatorPath = path.join(currentDir, indicator);
-        if (fs.existsSync(indicatorPath)) {
-          hasIndicator = true;
-          break;
-        }
-      }
-
-      if (hasIndicator) {
-        return currentDir;
-      }
-
-      // Move to parent directory
-      const parentDir = path.dirname(currentDir);
-      if (parentDir === currentDir) {
-        // Reached filesystem root
-        break;
-      }
-
-      currentDir = parentDir;
-      level++;
-    }
-
-    // Fallback to current directory
-    return process.cwd();
+    // Fallback to the current directory keeps the previous contract: the
+    // handler always initialized somewhere, even outside any project marker.
+    return findWorkspaceRootFrom(process.cwd()) ?? process.cwd();
   }
 
   /**
@@ -1073,17 +1077,9 @@ export async function getStandaloneHandler(): Promise<StandaloneHandler> {
  */
 export function isStandaloneModeAvailable(): boolean {
   try {
-    const currentDir = process.cwd();
-    const indicators = ['.git', 'package.json', '.snapshots', 'tsconfig.json'];
-
-    for (const indicator of indicators) {
-      const indicatorPath = path.join(currentDir, indicator);
-      if (fs.existsSync(indicatorPath)) {
-        return true;
-      }
-    }
-
-    return false;
+    // Same walk as the handler's root search: a project marker anywhere up the
+    // tree means standalone mode can serve this invocation.
+    return findWorkspaceRootFrom(process.cwd()) !== null;
   } catch {
     return false;
   }
