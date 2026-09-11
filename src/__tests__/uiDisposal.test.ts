@@ -4,19 +4,32 @@ import { FilterStatusBar } from '../ui/filterStatusBar';
 import { SnapshotManager } from '../snapshotManager';
 
 describe('UI component disposal', () => {
-  it('StatusBarController registers no interval and disposes its item', () => {
+  it('StatusBarController registers a 60s clock and disposes both timer and item', () => {
     const setIntervalSpy = jest.spyOn(global, 'setInterval');
+    const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
     const manager = new SnapshotManager(null);
     const controller = new StatusBarController(manager);
 
-    expect(setIntervalSpy).not.toHaveBeenCalled();
+    // Task 4 replaced the removed 5s poll with a single coarse clock tick that
+    // keeps the "time ago" text fresh without rewriting the item 12x a minute.
+    // See statusBarClock.test.ts for the behaviour it buys.
+    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    const clockCall = setIntervalSpy.mock.calls[0];
+    expect(typeof clockCall[0]).toBe('function');
+    expect(clockCall[1]).toBe(60_000);
+    const handle = setIntervalSpy.mock.results[0].value;
 
     const item = (controller as any).statusBarItem;
     const disposeSpy = jest.spyOn(item, 'dispose');
     controller.dispose();
     expect(disposeSpy).toHaveBeenCalled();
 
+    // This file runs on real timers, so an interval left behind would outlive
+    // the test and keep the jest worker alive.
+    expect(clearIntervalSpy).toHaveBeenCalledWith(handle);
+
     setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
   });
 
   it('SnapshotTreeDataProvider disposes its configuration listener', () => {

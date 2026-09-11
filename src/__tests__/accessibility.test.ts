@@ -104,6 +104,22 @@ describe('status bar accessibility', () => {
     return item;
   }
 
+  // Every StatusBarController owns a 60s clock interval, so an undisposed one
+  // leaves a live timer that keeps the jest worker alive. These are disposed in
+  // afterEach rather than at the end of each test so that a failed assertion
+  // cannot strand the timer either.
+  const controllers: StatusBarController[] = [];
+  function track(controller: StatusBarController): StatusBarController {
+    controllers.push(controller);
+    return controller;
+  }
+  afterEach(() => {
+    for (const controller of controllers) {
+      controller.dispose();
+    }
+    controllers.length = 0;
+  });
+
   it('announces that the workspace is not at a snapshot', async () => {
     const item = statusBarHarness();
     const manager = new SnapshotManager(null);
@@ -113,7 +129,7 @@ describe('status bar accessibility', () => {
     ];
     (manager as any).activeSnapshotId = null;
 
-    new StatusBarController(manager);
+    track(new StatusBarController(manager));
 
     // The text is `$(history) now | 1 snapshots`, which a screen reader reads
     // verbatim -- codicon and all.
@@ -132,7 +148,7 @@ describe('status bar accessibility', () => {
     ];
     (manager as any).activeSnapshotId = 'a';
 
-    new StatusBarController(manager);
+    track(new StatusBarController(manager));
 
     expect(String(item.accessibilityInformation?.label)).toMatch(
       /at snapshot 1 of 1/i,
@@ -145,7 +161,7 @@ describe('status bar accessibility', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     (manager as any).snapshots = [];
 
-    new StatusBarController(manager);
+    track(new StatusBarController(manager));
 
     expect(String(item.accessibilityInformation?.label)).toMatch(
       /no snapshots/i,

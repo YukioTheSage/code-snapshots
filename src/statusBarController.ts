@@ -20,10 +20,18 @@ function formatTimeAgo(timestamp: number): string {
   }
 }
 
+// Time-ago text is a function of the wall clock, not of snapshot events, so
+// something has to wake the controller even when nothing happens. A 60s poll is
+// the coarse compromise: the old 5s poll woke the host 12 times a minute for
+// mostly-unchanged text, while 60s keeps the "5m ago" semantics honest at worst
+// one minute stale and costs one recompute per minute while idle.
+const CLOCK_POLL_INTERVAL_MS = 60_000;
+
 export class StatusBarController implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
   private snapshotManager: SnapshotManager;
   private disposables: vscode.Disposable[] = [];
+  private clockTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(snapshotManager: SnapshotManager) {
     this.snapshotManager = snapshotManager;
@@ -36,16 +44,21 @@ export class StatusBarController implements vscode.Disposable {
     const viewSnapshotsCommand = 'vscode-snapshots.viewSnapshots';
     this.statusBarItem.command = viewSnapshotsCommand;
 
-    // Update on change rather than on a timer.
-    //
-    // The previous implementation polled every 5 seconds -- rewriting the item
-    // 12 times a minute whether or not anything had changed, and still leaving
-    // the "time ago" text up to 5 seconds stale. A subscription updates exactly
-    // when the snapshot list changes, and the interval that kept the extension
-    // host awake is gone.
+    // Hybrid refresh: the subscription handles list changes exactly when they
+    // happen, and a coarse clock tick exists only so the "time ago" text does
+    // not freeze between events. Neither half is sufficient on its own -- a
+    // subscription alone leaves "5m ago" on screen forever until some unrelated
+    // event fires, and the 5-second poll this replaced rewrote the item 12
+    // times a minute whether or not anything had changed.
     this.disposables.push(
       this.snapshotManager.onDidChangeSnapshots(() => this.updateStatusBar()),
     );
+
+    // Time-ago freshness only: one recompute a minute, unconditionally, so the
+    // empty state refreshes too.
+    this.clockTimer = setInterval(() => {
+      this.updateStatusBar();
+    }, CLOCK_POLL_INTERVAL_MS);
 
     // Update the status bar immediately
     this.updateStatusBar();
@@ -108,6 +121,10 @@ export class StatusBarController implements vscode.Disposable {
    * Dispose of this controller
    */
   public dispose(): void {
+    if (this.clockTimer) {
+      clearInterval(this.clockTimer);
+      this.clockTimer = undefined;
+    }
     this.statusBarItem.dispose();
     for (const d of this.disposables) {
       d.dispose();
