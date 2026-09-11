@@ -173,22 +173,37 @@ export function buildProgram(): Command {
         : ora('Checking connection...').start();
 
       try {
-        const status = await getClient().getStatus();
+        const client = getClient();
+        const status = await client.getStatus();
 
-        if (spinner) spinner.succeed('Connected to CodeLapse extension');
+        // `getClient()` is a proxy whose members resolve asynchronously, so
+        // these must be awaited: an un-awaited call is a truthy Promise, which
+        // claimed standalone mode even over IPC and serialised as `{}`.
+        const activeMode = await client.getActiveMode();
+
+        // Standalone mode talks to .snapshots/ directly -- claiming the VS Code
+        // extension is connected there is simply false, and it sent anyone
+        // debugging a missing extension down the wrong path.
+        const connectedMessage =
+          activeMode === 'standalone'
+            ? 'Connected (standalone mode)'
+            : 'Connected to CodeLapse extension';
+
+        if (spinner) spinner.succeed(connectedMessage);
 
         if (globalOpts.json) {
           console.log(
             JSON.stringify({
               success: true,
               connected: status.connected,
+              mode: activeMode,
               workspace: status.workspace,
               totalSnapshots: status.totalSnapshots,
               currentSnapshot: status.currentSnapshot,
             }),
           );
         } else {
-          console.log(chalk.green('✓ Connected to CodeLapse extension'));
+          console.log(chalk.green('✓ ' + connectedMessage));
           console.log(`Workspace: ${status.workspace || 'None'}`);
           console.log(`Total snapshots: ${status.totalSnapshots}`);
           console.log(`Current snapshot: ${status.currentSnapshot || 'None'}`);
