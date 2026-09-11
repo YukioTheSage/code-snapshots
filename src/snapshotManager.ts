@@ -1615,7 +1615,7 @@ export class SnapshotManager {
    */
   public async deleteSnapshot(
     snapshotId: string,
-    options?: { skipConfirm?: boolean },
+    options?: { skipConfirm?: boolean; force?: boolean },
   ): Promise<boolean> {
     log(`Attempting to delete snapshot: ${snapshotId}`);
     const index = this.snapshots.findIndex((s) => s.id === snapshotId);
@@ -1651,6 +1651,46 @@ export class SnapshotManager {
       }
 
       const snapshotToDelete = this.snapshots[lockedIndex];
+
+      // Deleting a snapshot that a survivor stored a delta against would lose
+      // every file the survivor inherited, so rebuild the survivors first --
+      // exactly as `enforceSnapshotLimit` does before pruning. Refusing leaves
+      // the store untouched; forcing deletes anyway and lets the integrity
+      // report name what is now unrecoverable.
+      const survivors = this.snapshots.filter(
+        (s) =>
+          s.id !== snapshotId &&
+          Object.values(s.files).some(
+            (fileData) =>
+              !fileData.deleted &&
+              fileData.baseSnapshotId === snapshotId,
+          ),
+      );
+
+      if (survivors.length > 0) {
+        const materialization = await this.materializeDependents(
+          new Set([snapshotId]),
+        );
+        if (!materialization.ok) {
+          if (!options?.force) {
+            log(
+              `Delete refused for ${snapshotId}: ${survivors.length} later snapshot(s) cannot be rebuilt.`,
+            );
+            vscode.window.showErrorMessage(
+              `Cannot delete "${snapshotToDelete.description || snapshotId}": ${survivors.length} later snapshot(s) inherit files from it and cannot be rebuilt. Nothing was deleted.`,
+            );
+            return false;
+          }
+          log(
+            `Delete forced for ${snapshotId}: ${survivors.length} snapshot(s) keep an unresolvable base.`,
+          );
+        } else {
+          for (const survivor of materialization.touched) {
+            await this.storage.saveSnapshotData(survivor);
+          }
+        }
+      }
+
       await this.purgeSnapshot(snapshotToDelete.id);
 
       this.snapshots.splice(lockedIndex, 1);

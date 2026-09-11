@@ -70,14 +70,14 @@ describe('the report is refreshed by real mutation paths', () => {
 
     (manager as any).storage = {
       getWorkspaceRoot: () => '/ws',
+      // The survivor's delta cannot be resolved through the base, so the
+      // delete is only allowed through the explicit force path.
+      getSnapshotFileContent: jest.fn().mockResolvedValue(null),
       deleteSnapshotData: jest.fn().mockResolvedValue(undefined),
       saveSnapshotIndex: jest.fn().mockResolvedValue(undefined),
     };
-    (vscode.window.showWarningMessage as unknown as jest.Mock) = jest
-      .fn()
-      .mockResolvedValue('Delete');
 
-    await manager.deleteSnapshot('base');
+    await manager.deleteSnapshot('base', { skipConfirm: true, force: true });
 
     const report = manager.getIntegrityReport();
     expect(report.unrecoverableFileCount).toBe(1);
