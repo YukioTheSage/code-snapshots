@@ -691,4 +691,57 @@ describe('CliConnectorService - Batch Operations', () => {
       });
     });
   });
+
+  describe('getStatus', () => {
+    /**
+     * `status.currentSnapshot` is the snapshot's *identity*: the standalone
+     * client sends `getCurrentSnapshot()?.id`, and `cli/src/client.ts` types the
+     * field `string | null`. The IPC payload has to send the same thing, or one
+     * field of one command means two different things depending on whether an
+     * extension happens to be connected. Descriptions are display text (empty or
+     * duplicated is normal), so a caller cannot branch on them.
+     */
+    it('reports the snapshot id, not its description, over IPC', async () => {
+      mockTerminalApiService.getWorkspaceInfo.mockResolvedValue({
+        workspaceRoot: '/test/workspace',
+        totalSnapshots: 3,
+        currentSnapshotIndex: 2,
+        currentSnapshot: {
+          id: 'snapshot-123',
+          description: 'before refactor',
+          timestamp: 1,
+          files: {},
+        },
+      });
+
+      // Drive the request dispatcher, exactly as the CLI's IPC client does.
+      const response = await (cliConnectorService as any).handleCliRequest({
+        id: 'status-request',
+        method: 'getStatus',
+        data: {},
+      });
+
+      expect(response.success).toBe(true);
+      expect(response.result.currentSnapshot).toBe('snapshot-123');
+      expect(response.result.currentSnapshot).not.toBe('before refactor');
+    });
+
+    it('reports null when the workspace has no current snapshot', async () => {
+      mockTerminalApiService.getWorkspaceInfo.mockResolvedValue({
+        workspaceRoot: '/test/workspace',
+        totalSnapshots: 0,
+        currentSnapshotIndex: -1,
+        currentSnapshot: undefined,
+      });
+
+      const response = await (cliConnectorService as any).handleCliRequest({
+        id: 'status-request',
+        method: 'getStatus',
+        data: {},
+      });
+
+      expect(response.success).toBe(true);
+      expect(response.result.currentSnapshot).toBeNull();
+    });
+  });
 });

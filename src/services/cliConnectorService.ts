@@ -408,7 +408,13 @@ export class CliConnectorService implements vscode.Disposable {
       connected: true,
       workspace: workspaceInfo.workspaceRoot,
       totalSnapshots: workspaceInfo.totalSnapshots,
-      currentSnapshot: workspaceInfo.currentSnapshot?.description || null,
+      // The status payload reports the snapshot's *identity*, matching
+      // standalone mode (unifiedClient.getStatus sends
+      // `getCurrentSnapshot()?.id`). It previously reported the description, so
+      // this one field meant two different things depending on whether an
+      // extension happened to be connected. Descriptions are display text and
+      // may be empty or duplicated, so callers cannot branch on them.
+      currentSnapshot: workspaceInfo.currentSnapshot?.id ?? null,
       extensionVersion: this.context.extension.packageJSON.version,
       apiVersion: '1.0.0',
     };

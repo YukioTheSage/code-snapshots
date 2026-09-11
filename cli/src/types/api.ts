@@ -1268,7 +1268,17 @@ export type NavigationDirection = 'next' | 'previous' | 'first' | 'last';
  * Response from snapshot navigation
  */
 export interface NavigateSnapshotResponse extends ApiResponse {
-  /** Current snapshot after navigation */
+  /**
+   * Current snapshot after navigation.
+   *
+   * This one really is an object: navigating returns the snapshot itself
+   * (`terminalApiService.navigateSnapshot` hands back the entry from the
+   * snapshot list), and `snapshot navigate` forwards the whole result.
+   *
+   * It is NOT the same field as `status`'s `currentSnapshot`, which is a
+   * snapshot *id* (`string | null` in `client.ts`). Same name, different
+   * envelope — do not "unify" them.
+   */
   currentSnapshot?: SnapshotMetadata;
   /** Whether navigation was possible */
   success: boolean;
