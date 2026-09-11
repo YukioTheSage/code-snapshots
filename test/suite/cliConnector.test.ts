@@ -10,38 +10,44 @@ import * as vscode from "vscode";
  * opens on a named pipe so external tools can drive it.
  *
  * Contract read out of `src/services/cliConnectorService.ts` before asserting
- * anything here:
+ * anything here. Anchored to symbols rather than line numbers: Task 5/6/12
+ * shifted this file's targets by 12-19 lines and left every numeric cite
+ * confidently wrong, which is a failure mode a symbol cannot have.
  *
- *  - `:1105-1136` -- once `server.listen` succeeds the service publishes
+ *  - `createConnectionFile()` -- once `startServer`'s `server.listen` callback
+ *    runs, the service publishes
  *    `<workspaceRoot>/.vscode/codelapse-connection.json` with
  *    `{ socketPath, workspaceRoot, extensionVersion, apiVersion, authToken, created }`.
- *  - `:122-128` -- on Windows `socketPath` is `\\.\pipe\codelapse-<workspaceId>`,
- *    where `workspaceId` is the first 8 hex characters of the MD5 of the
- *    workspace root (`:1141-1149`).
- *  - `:150-211` -- framing is one JSON object per line: the server accumulates
- *    chunks, splits on `\n`, and writes exactly one line per request.
- *  - `:164-173` -- authentication is a handshake *message*, not a header, and
- *    the success reply is `{ success: true, id, result: { authenticated: true } }`.
- *  - `:174-183` -- a wrong token is answered
+ *  - the connector's constructor -- on Windows `socketPath` is
+ *    `\\.\pipe\codelapse-<workspaceId>`, where `getWorkspaceId()` is the first 8
+ *    hex characters of the MD5 of the workspace root.
+ *  - `startServer`'s socket handler -- framing is one JSON object per line: the
+ *    server accumulates chunks, splits on `\n`, and writes exactly one line per
+ *    request.
+ *  - `startServer`'s socket handler -- authentication is a handshake *message*,
+ *    not a header, and the success reply is
+ *    `{ success: true, id, result: { authenticated: true } }`.
+ *  - `startServer`'s socket handler -- a wrong token is answered
  *    `{ success: false, id, error: "Authentication failed: invalid token" }`
  *    and the socket is destroyed.
- *  - `:187-199` -- any request before authenticating is answered
+ *  - `startServer`'s socket handler -- any request before authenticating is
+ *    answered
  *    `{ success: false, id, error: "Not authenticated. Send authenticate message first." }`
  *    and the socket is destroyed.
- *  - `:250-385` -- the method table. `getStatus` (`:404-415`) and
- *    `getWorkspaceInfo` (`terminalApiService.ts:582-607`) are read-only, so this
- *    suite never mutates the store the other suites share.
+ *  - `handleCliRequest` -- the method table. `getConnectionStatus` and
+ *    `terminalApiService.getWorkspaceInfo` are read-only, so this suite never
+ *    mutates the store the other suites share.
  *
  * Every socket is bounded by a timeout and destroyed in a `finally`: a test that
  * failed halfway must not leave the pipe -- and the mocha run -- hanging.
  *
- * Not covered here, deliberately: `dispose()` (`:2932-2973`) closes the server,
- * destroys live sockets and unlinks the connection file, but the service is
- * disposed through `context.subscriptions` when the extension host shuts down --
- * after mocha has finished -- and VS Code exposes no way to deactivate an
- * extension from inside a test. Asserting that path without being able to reach
- * it would mean asserting something other than the code under test, so it is
- * reported as a coverage gap instead.
+ * Not covered here, deliberately: `dispose()` in the connector service closes
+ * the server, destroys live sockets and unlinks the connection file, but the
+ * service is disposed through `context.subscriptions` when the extension host
+ * shuts down -- after mocha has finished -- and VS Code exposes no way to
+ * deactivate an extension from inside a test. Asserting that path without being
+ * able to reach it would mean asserting something other than the code under
+ * test, so it is reported as a coverage gap instead.
  */
 
 const EXPECTED_ID = process.env.CODELAPSE_EXPECTED_ID as string;
@@ -52,7 +58,7 @@ const CONNECTION_FILE = path.join(
   "codelapse-connection.json",
 );
 
-/** Published by `cliConnectorService.ts:1114` and reported by `getStatus` (`:413`). */
+/** Published by `createConnectionFile()` and reported by `getConnectionStatus`. */
 const API_VERSION = "1.0.0";
 /** The connection file is written from a `listen` callback activation does not await. */
 const CONNECTION_FILE_TIMEOUT_MS = 15000;
@@ -89,8 +95,8 @@ function readConnectionFile(): ConnectionInfo {
 }
 
 /**
- * The handshake message (`cliConnectorService.ts:164-173`): the request envelope
- * is `{ id, method, data }`, and the token travels inside `data` -- it is a
+ * The handshake message (`startServer` in the connector service): the request
+ * envelope is `{ id, method, data }`, and the token travels inside `data` -- it is a
  * handshake *message*, not an `authToken` header and not a `type`-identified
  * frame. The first RED run of this file asserted the latter and was answered
  * `Not authenticated. Send authenticate message first.`
@@ -476,7 +482,7 @@ suite("CLI connector", function () {
         `authentication failed on a fresh connection: ${JSON.stringify(auth)}`,
       );
 
-      // `getStatus` -- `cliConnectorService.ts:404-415`.
+      // `getStatus` -- `getConnectionStatus` in the connector service.
       const statusReply = await client.request(
         { id: 11, method: "getStatus" },
         "the getStatus reply",
@@ -535,7 +541,7 @@ suite("CLI connector", function () {
       );
       assert.strictEqual(workspaceReply.id, 12);
 
-      // `getWorkspaceInfo` -- `terminalApiService.ts:582-607`.
+      // `getWorkspaceInfo` -- `terminalApiService.getWorkspaceInfo`.
       const workspace = workspaceReply.result;
       assert.strictEqual(
         canonicalPath(String(workspace.workspaceRoot)),
