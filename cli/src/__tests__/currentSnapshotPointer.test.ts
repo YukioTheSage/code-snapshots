@@ -50,9 +50,9 @@ describe('SnapshotManager current-snapshot pointer', () => {
   it('rejects an unknown id and leaves the pointer alone', async () => {
     const created = await manager.takeSnapshot({ description: 'first' });
 
-    await expect(manager.setCurrentSnapshot('snapshot-missing')).rejects.toThrow(
-      /not found/i,
-    );
+    await expect(
+      manager.setCurrentSnapshot('snapshot-missing'),
+    ).rejects.toThrow(/not found/i);
     expect(manager.getCurrentSnapshot()?.id).toBe(created.id);
   });
 

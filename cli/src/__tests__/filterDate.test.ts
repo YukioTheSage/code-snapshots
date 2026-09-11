@@ -18,9 +18,9 @@ function commandsWith(client: Partial<UnifiedClient>): FilterCommands {
 
 /** Reach the private parser under test. */
 function parse(commands: FilterCommands, input: string): string {
-  return (commands as unknown as { parseDate: (s: string) => string }).parseDate(
-    input,
-  );
+  return (
+    commands as unknown as { parseDate: (s: string) => string }
+  ).parseDate(input);
 }
 
 describe('filter date parseDate (BUG-4)', () => {

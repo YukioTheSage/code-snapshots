@@ -37,13 +37,19 @@ describe('toWorkspaceRelativeOutputPath', () => {
 
   it('rejects an absolute path outside the workspace root', () => {
     expect(() =>
-      toWorkspaceRelativeOutputPath(ROOT, path.resolve('C:/elsewhere/out.json')),
+      toWorkspaceRelativeOutputPath(
+        ROOT,
+        path.resolve('C:/elsewhere/out.json'),
+      ),
     ).toThrow(/outside the workspace root/i);
   });
 
   it('rejects a sibling directory whose name shares the root prefix', () => {
     expect(() =>
-      toWorkspaceRelativeOutputPath(ROOT, path.resolve('C:/projAgain/out.json')),
+      toWorkspaceRelativeOutputPath(
+        ROOT,
+        path.resolve('C:/projAgain/out.json'),
+      ),
     ).toThrow(/outside the workspace root/i);
   });
 

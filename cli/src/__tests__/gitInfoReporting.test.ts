@@ -27,7 +27,9 @@ function clientAnswering(answer: unknown | Error): UnifiedClient {
 
 /** The shared jest setup replaces console.log/error with jest.fn()s. */
 const stdout = (): string =>
-  (console.log as jest.Mock).mock.calls.map((call) => String(call[0])).join('\n');
+  (console.log as jest.Mock).mock.calls
+    .map((call) => String(call[0]))
+    .join('\n');
 
 const stderr = (): string =>
   (console.error as jest.Mock).mock.calls

@@ -186,7 +186,8 @@ export class UnifiedClient {
         totalSnapshots: stats.snapshotCount,
         // Was hardcoded to null, so `status` reported "Current snapshot: None"
         // immediately after `snapshot navigate` positioned the store.
-        currentSnapshot: this.standaloneHandler.getCurrentSnapshot()?.id ?? null,
+        currentSnapshot:
+          this.standaloneHandler.getCurrentSnapshot()?.id ?? null,
       };
     } else if (this.activeMode === 'ipc') {
       const status = await this.ipcClient.getStatus();
@@ -635,8 +636,8 @@ export class UnifiedClient {
               typeof payload.id === 'string'
                 ? payload.id
                 : typeof payload.snapshotId === 'string'
-                  ? payload.snapshotId
-                  : (payload as unknown as string);
+                ? payload.snapshotId
+                : (payload as unknown as string);
             return await this.standaloneHandler.getSnapshotChanges(changesId);
           }
           throw new Error('Handler not initialized');

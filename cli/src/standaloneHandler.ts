@@ -374,7 +374,9 @@ export class StandaloneHandler {
     const ambiguous = ids.filter((id) => partialId && id.includes(partialId));
     if (ambiguous.length > 1) {
       throw new Error(
-        `Ambiguous snapshot id "${partialId}": matches ${ambiguous.length} snapshots (${ambiguous.join(', ')}). Use a longer prefix.`,
+        `Ambiguous snapshot id "${partialId}": matches ${
+          ambiguous.length
+        } snapshots (${ambiguous.join(', ')}). Use a longer prefix.`,
       );
     }
 

@@ -14,7 +14,10 @@ interface Captured {
   ids: unknown[];
 }
 
-function clientWithFakeHandler(): { client: UnifiedClient; captured: Captured } {
+function clientWithFakeHandler(): {
+  client: UnifiedClient;
+  captured: Captured;
+} {
   const captured: Captured = { ids: [] };
   const client = new UnifiedClient();
 
@@ -35,9 +38,11 @@ describe('callApi getSnapshotChanges id normalization (BUG-3)', () => {
   it('accepts the { snapshotId } shape the snapshot commands send', async () => {
     const { client, captured } = clientWithFakeHandler();
 
-    await (client as unknown as {
-      callApi: (m: string, d: unknown) => Promise<unknown>;
-    }).callApi('getSnapshotChanges', { snapshotId: 'snapshot-x' });
+    await (
+      client as unknown as {
+        callApi: (m: string, d: unknown) => Promise<unknown>;
+      }
+    ).callApi('getSnapshotChanges', { snapshotId: 'snapshot-x' });
 
     expect(captured.ids).toEqual(['snapshot-x']);
   });
@@ -45,9 +50,11 @@ describe('callApi getSnapshotChanges id normalization (BUG-3)', () => {
   it('still accepts the { id } shape used by api callers', async () => {
     const { client, captured } = clientWithFakeHandler();
 
-    await (client as unknown as {
-      callApi: (m: string, d: unknown) => Promise<unknown>;
-    }).callApi('getSnapshotChanges', { id: 'snapshot-y' });
+    await (
+      client as unknown as {
+        callApi: (m: string, d: unknown) => Promise<unknown>;
+      }
+    ).callApi('getSnapshotChanges', { id: 'snapshot-y' });
 
     expect(captured.ids).toEqual(['snapshot-y']);
   });

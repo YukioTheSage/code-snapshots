@@ -133,7 +133,9 @@ export class GitCommands {
             : chalk.gray('(none)');
 
         console.log(chalk.blue('Git Repository Information:'));
-        console.log(`Current branch: ${chalk.green(display(result.currentBranch))}`);
+        console.log(
+          `Current branch: ${chalk.green(display(result.currentBranch))}`,
+        );
         console.log(`Commit hash: ${display(result.commitHash)}`);
         console.log(`Remote URL: ${display(result.remoteUrl)}`);
         console.log(

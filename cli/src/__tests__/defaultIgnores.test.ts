@@ -92,7 +92,9 @@ describe('GitignoreParser default ignores (BUG-10)', () => {
     expect(custom.shouldIgnore('.snapshots/index.json')).toBe(true);
     // Ordinary project files are still kept, at the same depth.
     expect(custom.shouldIgnore('src/main.ts')).toBe(false);
-    expect(custom.shouldIgnore('sub/dir/snapshots-test/index.json')).toBe(false);
+    expect(custom.shouldIgnore('sub/dir/snapshots-test/index.json')).toBe(
+      false,
+    );
   });
 
   it('normalises a hand-written location into the patterns it emits', () => {
@@ -108,9 +110,7 @@ describe('GitignoreParser default ignores (BUG-10)', () => {
 
       expect(parser.shouldIgnore('.snapshots-test/index.json')).toBe(true);
       expect(
-        parser
-          .getPatterns()
-          .filter((p) => p.includes('.snapshots-test')),
+        parser.getPatterns().filter((p) => p.includes('.snapshots-test')),
       ).toEqual([
         '.snapshots-test',
         '**/.snapshots-test',
@@ -123,10 +123,7 @@ describe('GitignoreParser default ignores (BUG-10)', () => {
   it('emits the same patterns for the default location as before', () => {
     // Byte-identical set: `.snapshots` bare, `**/.snapshots`, `**/.snapshots/**`.
     // The custom-location branch must not leak into the default one.
-    const defaults = new GitignoreParser(
-      root,
-      '.snapshots',
-    ).getPatterns();
+    const defaults = new GitignoreParser(root, '.snapshots').getPatterns();
     const storePatterns = defaults.filter((p) => p.includes('snapshots'));
 
     expect(storePatterns).toEqual([
