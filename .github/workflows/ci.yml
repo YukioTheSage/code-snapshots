@@ -95,6 +95,19 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '20'
+      # The Lint and Format check steps below run cli/package.json's scripts,
+      # but cli/ declares neither eslint nor prettier: they live in the root
+      # package. Locally `npm run lint` finds them only because npm puts every
+      # ancestor node_modules/.bin on PATH -- in CI that ancestor has to exist,
+      # so install the root toolchain here as well as cli's dependencies.
+      # Without this, both steps fail with "eslint: not found" / "prettier: not
+      # found" (exit 127) instead of reporting findings, and a `not found` exit
+      # is precisely what the `| tee` in the Lint step used to swallow.
+      - name: Install root toolchain
+        run: npm ci
+        # Overrides this job's `defaults.run.working-directory: cli`, so this
+        # installs the repository root's tools, not cli's.
+        working-directory: .
       - name: Install dependencies
         run: npm ci
       - name: Lint
