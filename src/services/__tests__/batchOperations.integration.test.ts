@@ -377,10 +377,21 @@ describe('Batch Operations Integration Tests', () => {
     });
 
     it('should handle timeout scenarios gracefully', async () => {
-      // Mock slow operations
+      // Mock slow operations. The timers are tracked because the handler's
+      // 500ms timeout wins the race and returns while the mocked operation is
+      // still sleeping: a *referenced* 2s timer is still pending when jest asks
+      // the worker to exit, so the worker misses its 500ms grace period and is
+      // force exited with the "failed to exit gracefully" warning. They are
+      // unreferenced rather than cleared, so the mocked operation still sleeps
+      // and settles exactly as before — it just stops holding the process open.
+      const slowTimers: ReturnType<typeof setTimeout>[] = [];
       mockTerminalApiService.getSnapshotFileContent.mockImplementation(
         () =>
-          new Promise((resolve) => setTimeout(() => resolve('content'), 2000)),
+          new Promise((resolve) => {
+            const timer = setTimeout(() => resolve('content'), 2000);
+            timer.unref();
+            slowTimers.push(timer);
+          }),
       );
 
       const operations = Array.from({ length: 5 }, (_, i) => ({
@@ -401,6 +412,18 @@ describe('Batch Operations Integration Tests', () => {
         expect(r.success).toBe(false);
         expect(r.error.message).toContain('timeout');
       });
+
+      // One slow operation per operation, and not one of them may keep the
+      // worker alive: each deliberately outlives the handler's timeout, so a
+      // referenced timer here becomes a leaked handle at worker shutdown.
+      expect(slowTimers).toHaveLength(5);
+      expect(slowTimers.map((timer) => timer.hasRef())).toEqual([
+        false,
+        false,
+        false,
+        false,
+        false,
+      ]);
     });
 
     it('should handle memory pressure during large batch operations', async () => {
