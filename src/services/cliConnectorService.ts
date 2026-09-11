@@ -343,6 +343,39 @@ export class CliConnectorService implements vscode.Disposable {
         case 'getSnapshots':
           result = await this.terminalApiService.getSnapshots(data);
           break;
+        case 'filterSnapshots':
+          result = await this.terminalApiService.filterSnapshots(data);
+          break;
+        case 'updateSnapshotMetadata':
+          result = await this.terminalApiService.updateSnapshotMetadata(
+            data.id ?? data.snapshotId,
+            data.metadata ?? data.updates ?? {},
+          );
+          break;
+        case 'editSnapshotTags':
+          result = await this.terminalApiService.editSnapshotTags(
+            data.id ?? data.snapshotId,
+            Array.isArray(data.tags) ? data.tags : [],
+          );
+          break;
+        case 'editSnapshotNotes':
+          result = await this.terminalApiService.editSnapshotNotes(
+            data.id ?? data.snapshotId,
+            typeof data.notes === 'string' ? data.notes : '',
+          );
+          break;
+        case 'editTaskReference':
+          result = await this.terminalApiService.editTaskReference(
+            data.id ?? data.snapshotId,
+            typeof data.taskReference === 'string' ? data.taskReference : '',
+          );
+          break;
+        case 'toggleFavoriteStatus':
+          result = await this.terminalApiService.toggleFavoriteStatus(
+            data.id ?? data.snapshotId,
+            typeof data.isFavorite === 'boolean' ? data.isFavorite : undefined,
+          );
+          break;
         case 'getSnapshot':
           result = await this.terminalApiService.getSnapshot(data.id);
           break;

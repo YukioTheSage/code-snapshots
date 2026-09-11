@@ -342,6 +342,157 @@ export class StandaloneHandler {
   }
 
   /**
+   * The `codelapse filter` surface. Served by neither mode before this: the
+   * method is allowlisted and documented, but no switch implemented it.
+   */
+  public async filterSnapshots(filter: {
+    tags?: string[];
+    favorites?: boolean;
+    isFavorite?: boolean;
+    dateRange?: {
+      from?: string | number;
+      to?: string | number;
+      start?: string | number;
+      end?: string | number;
+    };
+    files?: string[];
+    gitBranch?: string;
+    searchText?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    snapshots: Snapshot[];
+    totalCount: number;
+    filteredCount: number;
+  }> {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+
+    const all = await this.snapshotManager.getSnapshots();
+    let filtered = [...all];
+
+    if (filter.favorites === true || filter.isFavorite === true) {
+      filtered = filtered.filter((snapshot) => snapshot.isFavorite === true);
+    }
+
+    if (filter.tags && filter.tags.length > 0) {
+      const required = filter.tags;
+      filtered = filtered.filter((snapshot) =>
+        required.every((tag) => (snapshot.tags ?? []).includes(tag)),
+      );
+    }
+
+    const parseTimestamp = (value: unknown): number | undefined => {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'string' && value.trim().length > 0) {
+        const parsed = Date.parse(value);
+        if (!Number.isNaN(parsed)) {
+          return parsed;
+        }
+      }
+      return undefined;
+    };
+
+    const from = parseTimestamp(
+      filter.dateRange?.from ?? filter.dateRange?.start,
+    );
+    const to = parseTimestamp(filter.dateRange?.to ?? filter.dateRange?.end);
+    if (from !== undefined) {
+      filtered = filtered.filter((snapshot) => snapshot.timestamp >= from);
+    }
+    if (to !== undefined) {
+      filtered = filtered.filter((snapshot) => snapshot.timestamp <= to);
+    }
+
+    if (filter.files && filter.files.length > 0) {
+      filtered = filtered.filter((snapshot) =>
+        filter.files!.some(
+          (filePath) =>
+            snapshot.files[filePath] !== undefined &&
+            snapshot.files[filePath].deleted !== true,
+        ),
+      );
+    }
+
+    if (filter.gitBranch) {
+      filtered = filtered.filter(
+        (snapshot) => snapshot.gitBranch === filter.gitBranch,
+      );
+    }
+
+    if (filter.searchText) {
+      const needle = filter.searchText.toLowerCase();
+      filtered = filtered.filter(
+        (snapshot) =>
+          (snapshot.description ?? '').toLowerCase().includes(needle) ||
+          (snapshot.notes ?? '').toLowerCase().includes(needle) ||
+          (snapshot.tags ?? []).some((tag) =>
+            tag.toLowerCase().includes(needle),
+          ),
+      );
+    }
+
+    const filteredCount = filtered.length;
+    const offset = Math.max(0, filter.offset ?? 0);
+    const limit =
+      filter.limit === undefined ? undefined : Math.max(0, filter.limit);
+    const snapshots =
+      limit === undefined
+        ? filtered.slice(offset)
+        : filtered.slice(offset, offset + limit);
+
+    return { snapshots, totalCount: all.length, filteredCount };
+  }
+
+  public async editSnapshotTags(
+    snapshotId: string,
+    tags: string[],
+  ): Promise<{ snapshotId: string; tags: string[] }> {
+    await this.updateSnapshotMetadata(snapshotId, { tags });
+    return { snapshotId, tags };
+  }
+
+  public async editSnapshotNotes(
+    snapshotId: string,
+    notes: string,
+  ): Promise<{ snapshotId: string; notes: string }> {
+    await this.updateSnapshotMetadata(snapshotId, { notes });
+    return { snapshotId, notes };
+  }
+
+  public async editTaskReference(
+    snapshotId: string,
+    taskReference: string,
+  ): Promise<{ snapshotId: string; taskReference: string }> {
+    await this.updateSnapshotMetadata(snapshotId, { taskReference });
+    return { snapshotId, taskReference };
+  }
+
+  /**
+   * Set or flip the favourite flag. The command sends no value (its job is a
+   * toggle), while API callers can name the target state explicitly.
+   */
+  public async toggleFavoriteStatus(
+    snapshotId: string,
+    isFavorite?: boolean,
+  ): Promise<{ snapshotId: string; isFavorite: boolean }> {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+
+    const current = (await this.snapshotManager.getSnapshots()).find(
+      (snapshot) => snapshot.id === snapshotId,
+    );
+    const nextValue =
+      typeof isFavorite === 'boolean' ? isFavorite : !(current?.isFavorite ?? false);
+    await this.updateSnapshotMetadata(snapshotId, { isFavorite: nextValue });
+    return { snapshotId, isFavorite: nextValue };
+  }
+
+  /**
    * Expand a short snapshot id to the full id, or throw when it is ambiguous.
    *
    * Unknown ids are returned unchanged so the storage layer's own

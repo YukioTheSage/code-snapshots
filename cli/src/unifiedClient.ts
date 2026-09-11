@@ -36,6 +36,11 @@ export const STANDALONE_METHODS: ReadonlySet<string> = new Set([
   'deleteSnapshot',
   'compareSnapshots',
   'updateSnapshotMetadata',
+  'filterSnapshots',
+  'editSnapshotTags',
+  'editSnapshotNotes',
+  'editTaskReference',
+  'toggleFavoriteStatus',
   'getSnapshotFileContent',
   'getConfig',
   'setConfig',
@@ -586,10 +591,65 @@ export class UnifiedClient {
         }
 
         case 'updateSnapshotMetadata':
-          return await this.updateSnapshotMetadata(
+          await this.updateSnapshotMetadata(
             payload.id || payload.snapshotId,
-            payload.updates || payload,
+            payload.updates || payload.metadata || payload,
           );
+          return { success: true };
+
+        case 'filterSnapshots':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.filterSnapshots(payload as any);
+          }
+          throw new Error('Handler not initialized');
+
+        case 'editSnapshotTags': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const id = String(payload.id ?? payload.snapshotId);
+          const tags = Array.isArray(payload.tags) ? payload.tags : [];
+          return await this.standaloneHandler.editSnapshotTags(id, tags);
+        }
+
+        case 'editSnapshotNotes': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const id = String(payload.id ?? payload.snapshotId);
+          return await this.standaloneHandler.editSnapshotNotes(
+            id,
+            typeof payload.notes === 'string' ? payload.notes : '',
+          );
+        }
+
+        case 'editTaskReference': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const id = String(payload.id ?? payload.snapshotId);
+          return await this.standaloneHandler.editTaskReference(
+            id,
+            typeof payload.taskReference === 'string'
+              ? payload.taskReference
+              : '',
+          );
+        }
+
+        case 'toggleFavoriteStatus': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const id = String(payload.id ?? payload.snapshotId);
+          const requested =
+            typeof payload.isFavorite === 'boolean'
+              ? payload.isFavorite
+              : undefined;
+          return await this.standaloneHandler.toggleFavoriteStatus(
+            id,
+            requested,
+          );
+        }
 
         case 'getSnapshotFileContent':
           return await this.getSnapshotFileContent(

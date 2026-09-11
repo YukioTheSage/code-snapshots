@@ -32,17 +32,18 @@ describe('per-method IPC fallback', () => {
   it('declares a standalone method set that excludes the IPC-only methods', () => {
     expect(STANDALONE_METHODS.has('takeSnapshot')).toBe(true);
     expect(STANDALONE_METHODS.has('getConfig')).toBe(true);
-    expect(STANDALONE_METHODS.has('filterSnapshots')).toBe(false);
+    expect(STANDALONE_METHODS.has('filterSnapshots')).toBe(true);
+    expect(STANDALONE_METHODS.has('searchSnapshots')).toBe(false);
     expect(STANDALONE_METHODS.has('runDiagnostics')).toBe(false);
   });
 
   it('routes an unsupported method over IPC instead of failing', async () => {
     jest.spyOn(process, 'cwd').mockReturnValue(root);
 
-    const result = await client.callApi('filterSnapshots', { favorites: true });
+    const result = await client.callApi('searchSnapshots', { query: 'parser' });
 
-    expect(ipcCallApi).toHaveBeenCalledWith('filterSnapshots', {
-      favorites: true,
+    expect(ipcCallApi).toHaveBeenCalledWith('searchSnapshots', {
+      query: 'parser',
     });
     expect(result).toEqual({ snapshots: [], totalCount: 0 });
   });
@@ -50,7 +51,7 @@ describe('per-method IPC fallback', () => {
   it('names the reason when neither mode can serve the method', async () => {
     ipcCallApi.mockRejectedValue(new Error('IPC mode not available'));
 
-    await expect(client.callApi('filterSnapshots', {})).rejects.toThrow(
+    await expect(client.callApi('searchSnapshots', {})).rejects.toThrow(
       /no CodeLapse extension answered over IPC/i,
     );
   });

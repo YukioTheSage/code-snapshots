@@ -161,6 +161,164 @@ export class TerminalApiService implements TerminalApiInterface {
   }
 
   /**
+   * The `codelapse filter` surface over IPC. Kept deliberately parallel to the
+   * standalone handler: the same command must not mean two things depending on
+   * which mode answers it.
+   */
+  async filterSnapshots(filter?: {
+    tags?: string[];
+    favorites?: boolean;
+    isFavorite?: boolean;
+    dateRange?: {
+      from?: string | number;
+      to?: string | number;
+      start?: string | number;
+      end?: string | number;
+    };
+    files?: string[];
+    gitBranch?: string;
+    searchText?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    snapshots: Snapshot[];
+    totalCount: number;
+    filteredCount: number;
+  }> {
+    const all = this.snapshotManager.getSnapshots();
+    let filtered = [...all];
+
+    if (filter?.favorites === true || filter?.isFavorite === true) {
+      filtered = filtered.filter((snapshot) => snapshot.isFavorite === true);
+    }
+
+    if (filter?.tags && filter.tags.length > 0) {
+      const required = filter.tags;
+      filtered = filtered.filter((snapshot) =>
+        required.every((tag) => (snapshot.tags ?? []).includes(tag)),
+      );
+    }
+
+    const parseTimestamp = (value: unknown): number | undefined => {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'string' && value.trim().length > 0) {
+        const parsed = Date.parse(value);
+        if (!Number.isNaN(parsed)) {
+          return parsed;
+        }
+      }
+      return undefined;
+    };
+
+    const from = parseTimestamp(
+      filter?.dateRange?.from ?? filter?.dateRange?.start,
+    );
+    const to = parseTimestamp(filter?.dateRange?.to ?? filter?.dateRange?.end);
+    if (from !== undefined) {
+      filtered = filtered.filter((snapshot) => snapshot.timestamp >= from);
+    }
+    if (to !== undefined) {
+      filtered = filtered.filter((snapshot) => snapshot.timestamp <= to);
+    }
+
+    if (filter?.files && filter.files.length > 0) {
+      filtered = filtered.filter((snapshot) =>
+        filter.files!.some(
+          (filePath) =>
+            snapshot.files[filePath] !== undefined &&
+            snapshot.files[filePath].deleted !== true,
+        ),
+      );
+    }
+
+    if (filter?.gitBranch) {
+      filtered = filtered.filter(
+        (snapshot) => snapshot.gitBranch === filter.gitBranch,
+      );
+    }
+
+    if (filter?.searchText) {
+      const needle = filter.searchText.toLowerCase();
+      filtered = filtered.filter(
+        (snapshot) =>
+          (snapshot.description ?? '').toLowerCase().includes(needle) ||
+          (snapshot.notes ?? '').toLowerCase().includes(needle) ||
+          (snapshot.tags ?? []).some((tag) =>
+            tag.toLowerCase().includes(needle),
+          ),
+      );
+    }
+
+    const filteredCount = filtered.length;
+    const offset = Math.max(0, filter?.offset ?? 0);
+    const limit =
+      filter?.limit === undefined ? undefined : Math.max(0, filter.limit);
+    const snapshots =
+      limit === undefined
+        ? filtered.slice(offset)
+        : filtered.slice(offset, offset + limit);
+
+    return { snapshots, totalCount: all.length, filteredCount };
+  }
+
+  async updateSnapshotMetadata(
+    id: string,
+    updates: {
+      description?: string;
+      tags?: string[];
+      notes?: string;
+      taskReference?: string;
+      isFavorite?: boolean;
+    },
+  ): Promise<{ success: true }> {
+    await this.snapshotManager.updateSnapshotContext(id, updates);
+    return { success: true };
+  }
+
+  async editSnapshotTags(
+    id: string,
+    tags: string[],
+  ): Promise<{ snapshotId: string; tags: string[] }> {
+    await this.snapshotManager.updateSnapshotContext(id, { tags });
+    return { snapshotId: id, tags };
+  }
+
+  async editSnapshotNotes(
+    id: string,
+    notes: string,
+  ): Promise<{ snapshotId: string; notes: string }> {
+    await this.snapshotManager.updateSnapshotContext(id, { notes });
+    return { snapshotId: id, notes };
+  }
+
+  async editTaskReference(
+    id: string,
+    taskReference: string,
+  ): Promise<{ snapshotId: string; taskReference: string }> {
+    await this.snapshotManager.updateSnapshotContext(id, { taskReference });
+    return { snapshotId: id, taskReference };
+  }
+
+  async toggleFavoriteStatus(
+    id: string,
+    isFavorite?: boolean,
+  ): Promise<{ snapshotId: string; isFavorite: boolean }> {
+    const current = this.snapshotManager
+      .getSnapshots()
+      .find((snapshot) => snapshot.id === id);
+    const nextValue =
+      typeof isFavorite === 'boolean'
+        ? isFavorite
+        : !(current?.isFavorite ?? false);
+    await this.snapshotManager.updateSnapshotContext(id, {
+      isFavorite: nextValue,
+    });
+    return { snapshotId: id, isFavorite: nextValue };
+  }
+
+  /**
    * Get a specific snapshot by ID
    */
   async getSnapshot(id: string): Promise<Snapshot | null> {
