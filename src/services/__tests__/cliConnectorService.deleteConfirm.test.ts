@@ -69,7 +69,7 @@ describe('CliConnectorService - deleteSnapshot confirmation flag', () => {
     expect(response.result).toBe(true);
     expect(mockTerminalApiService.deleteSnapshot).toHaveBeenCalledWith(
       'snap-1',
-      { skipConfirm: true },
+      { skipConfirm: true, force: false },
     );
   });
 
@@ -78,7 +78,7 @@ describe('CliConnectorService - deleteSnapshot confirmation flag', () => {
 
     expect(mockTerminalApiService.deleteSnapshot).toHaveBeenCalledWith(
       'snap-1',
-      { skipConfirm: false },
+      { skipConfirm: false, force: false },
     );
   });
 
@@ -87,7 +87,24 @@ describe('CliConnectorService - deleteSnapshot confirmation flag', () => {
 
     expect(mockTerminalApiService.deleteSnapshot).toHaveBeenCalledWith(
       'snap-1',
-      { skipConfirm: false },
+      { skipConfirm: false, force: false },
+    );
+  });
+
+  it('forwards force only when it is a real boolean true', async () => {
+    await dispatchDelete({ id: 'snap-1', force: true });
+
+    expect(mockTerminalApiService.deleteSnapshot).toHaveBeenCalledWith(
+      'snap-1',
+      { skipConfirm: false, force: true },
+    );
+
+    mockTerminalApiService.deleteSnapshot.mockClear();
+    await dispatchDelete({ id: 'snap-1', force: 'true' });
+
+    expect(mockTerminalApiService.deleteSnapshot).toHaveBeenCalledWith(
+      'snap-1',
+      { skipConfirm: false, force: false },
     );
   });
 });

@@ -47,6 +47,7 @@ describe('SnapshotCommands.delete confirmation flag', () => {
     expect(mockClient.callApi).toHaveBeenCalledWith('deleteSnapshot', {
       id: 'snap-1',
       skipConfirm: true,
+      force: false,
     });
   });
 
@@ -58,6 +59,23 @@ describe('SnapshotCommands.delete confirmation flag', () => {
     expect(mockClient.callApi).toHaveBeenCalledWith('deleteSnapshot', {
       id: 'snap-1',
       skipConfirm: false,
+      force: false,
+    });
+  });
+
+  it('forwards explicit --force to the delete payload', async () => {
+    mockClient.callApi = jest.fn().mockResolvedValue({ success: true });
+
+    await snapshotCommands.delete('snap-1', {
+      yes: true,
+      force: true,
+      json: true,
+    });
+
+    expect(mockClient.callApi).toHaveBeenCalledWith('deleteSnapshot', {
+      id: 'snap-1',
+      skipConfirm: true,
+      force: true,
     });
   });
 });

@@ -222,6 +222,7 @@ export class SnapshotCommands {
       const result = await this.client.callApi('deleteSnapshot', {
         id,
         skipConfirm: !!options?.yes,
+        force: options?.force === true,
       });
 
       // `deleteSnapshot` reports a refusal by *returning* `false` rather than

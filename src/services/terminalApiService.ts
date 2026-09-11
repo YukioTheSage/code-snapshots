@@ -277,7 +277,7 @@ export class TerminalApiService implements TerminalApiInterface {
    */
   async deleteSnapshot(
     id: string,
-    options?: { skipConfirm?: boolean },
+    options?: { skipConfirm?: boolean; force?: boolean },
   ): Promise<boolean> {
     try {
       return await this.snapshotManager.deleteSnapshot(id, options);

@@ -285,6 +285,10 @@ export function buildProgram(): Command {
     .alias('rm')
     .description('Delete a snapshot')
     .option('-y, --yes', 'Skip confirmation')
+    .option(
+      '--force',
+      'Delete even when a later snapshot cannot be rebuilt from it',
+    )
     .action(snapshotCommands.delete.bind(snapshotCommands));
 
   snapshotCmd

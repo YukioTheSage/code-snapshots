@@ -19,6 +19,49 @@ import { assertAllowedApiMethod } from './apiAllowlist';
 
 export type ClientMode = 'standalone' | 'ipc' | 'auto';
 
+/**
+ * The methods the standalone switch below can serve.
+ *
+ * Declared rather than inferred from the switch so the dispatcher can decide
+ * *before* dispatching: a method that is absent can still be answered by a
+ * running extension, and that is the only way `filter`, `rules` and
+ * `diagnostics` work at all. The capability guard test fails if this set and
+ * the switch ever disagree.
+ */
+export const STANDALONE_METHODS: ReadonlySet<string> = new Set([
+  'takeSnapshot',
+  'getSnapshots',
+  'getSnapshot',
+  'restoreSnapshot',
+  'deleteSnapshot',
+  'compareSnapshots',
+  'updateSnapshotMetadata',
+  'getSnapshotFileContent',
+  'getConfig',
+  'setConfig',
+  'resetConfig',
+  'getConfigSchema',
+  'validateConfig',
+  'exportConfig',
+  'importConfig',
+  'getWorkspaceInfo',
+  'getStatus',
+  'getSnapshotChanges',
+  'navigateSnapshot',
+  'getFileHistory',
+  'listSnapshotFiles',
+  'getSnapshotFile',
+  'compareSnapshotFile',
+  'restoreSnapshotFile',
+  'exportSnapshotFile',
+  'createGitCommitFromSnapshot',
+  'getGitBranchInfo',
+  'createBranch',
+  'switchBranch',
+  'deleteBranch',
+  'listBranches',
+]);
+
 export class UnifiedClient {
   private mode: ClientMode;
   private standaloneHandler: StandaloneHandler | null = null;
@@ -446,6 +489,33 @@ export class UnifiedClient {
    * Compatibility methods for command handlers that expect CodeLapseClient
    */
 
+  /**
+   * Ask a running extension to serve a method standalone cannot.
+   *
+   * The error is kept rather than discarded: "no extension answered" and "the
+   * extension refused" are different problems with different fixes, and the
+   * caller's message says which one happened.
+   */
+  private async tryIpcCall(
+    method: string,
+    payload: Record<string, any>,
+  ): Promise<{ ok: true; value: any } | { ok: false; error: string }> {
+    try {
+      const value = await this.ipcClient.callApi(method, payload);
+      if (this.verbose) {
+        console.log(
+          chalk.gray(`Standalone cannot serve ${method}; answered over IPC`),
+        );
+      }
+      return { ok: true, value };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   public async callApi(
     method: string,
     data: Record<string, any>,
@@ -466,7 +536,24 @@ export class UnifiedClient {
 
     // Delegate to specific methods if standalone
     if (this.activeMode === 'standalone') {
-      // Try to handle common methods in standalone
+      if (!STANDALONE_METHODS.has(method)) {
+        // Standalone is the default mode in any project directory, so without
+        // this a running extension was never consulted for the methods only it
+        // implements -- the user saw "not supported in standalone mode" with
+        // VS Code open in front of them.
+        const fallback = await this.tryIpcCall(method, payload);
+        if (fallback.ok) {
+          return fallback.value;
+        }
+        throw new Error(
+          `Method ${method} is not available in standalone mode and no CodeLapse extension answered over IPC (${fallback.error}). Start VS Code with the CodeLapse extension enabled, or use one of: ${[
+            ...STANDALONE_METHODS,
+          ]
+            .sort()
+            .join(', ')}`,
+        );
+      }
+
       switch (method) {
         case 'takeSnapshot':
           return await this.takeSnapshot(payload);
@@ -746,8 +833,11 @@ export class UnifiedClient {
           throw new Error('Handler not initialized');
 
         default:
+          // Unreachable: `STANDALONE_METHODS` is checked above and the
+          // capability guard pins the two to each other. Reaching this means
+          // the set and the switch drifted.
           throw new Error(
-            `Method ${method} not supported in standalone mode. Available methods: takeSnapshot, getSnapshots, getSnapshot, restoreSnapshot, deleteSnapshot, compareSnapshots, updateSnapshotMetadata, getSnapshotFileContent, getConfig, setConfig, resetConfig, getConfigSchema, validateConfig, exportConfig, importConfig, getWorkspaceInfo, getStatus, getSnapshotChanges, navigateSnapshot, getFileHistory, listSnapshotFiles, getSnapshotFile, compareSnapshotFile, restoreSnapshotFile, exportSnapshotFile, createGitCommitFromSnapshot, getGitBranchInfo, createBranch, switchBranch, deleteBranch, listBranches`,
+            `Internal error: ${method} is declared standalone-capable but has no handler.`,
           );
       }
     } else if (this.activeMode === 'ipc') {
@@ -769,7 +859,17 @@ export class UnifiedClient {
   ): Promise<void> {
     if (this.activeMode === 'ipc') {
       await this.ipcClient.watchEvents(eventTypes, callback);
+      return;
     }
+    if (this.activeMode === 'standalone') {
+      // Standalone has no event source, and the previous body resolved
+      // silently: the command printed its banner, registered nothing and
+      // exited 0.
+      throw new Error(
+        'Watching events requires the CodeLapse extension over IPC; standalone mode has no event source.',
+      );
+    }
+    throw new Error('Client not initialized');
   }
 
   public disconnect(): void {

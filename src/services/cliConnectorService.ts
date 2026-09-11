@@ -362,6 +362,9 @@ export class CliConnectorService implements vscode.Disposable {
           // keeps the dialog.
           result = await this.terminalApiService.deleteSnapshot(data.id, {
             skipConfirm: data.skipConfirm === true,
+            // Strict boolean, like skipConfirm: this authorises destroying data
+            // a later snapshot inherits, so only a real `true` may do it.
+            force: data.force === true,
           });
           break;
         case 'navigateSnapshot':
