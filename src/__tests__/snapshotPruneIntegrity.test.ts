@@ -202,6 +202,12 @@ describe('enforceSnapshotLimit materialization', () => {
     );
     // ...before the base it referenced was deleted.
     expect(storage.deleteSnapshotData).toHaveBeenCalledWith('a');
+    // The comment above states an ordering, so assert it: a rewrite that reaches
+    // storage after its base is gone is written too late to have preserved
+    // anything, and the survivor would be left pointing at a deleted snapshot.
+    expect(storage.saveSnapshotData.mock.invocationCallOrder[0]).toBeLessThan(
+      storage.deleteSnapshotData.mock.invocationCallOrder[0],
+    );
 
     const survivors = manager.getSnapshots();
     expect(survivors.map((s) => s.id)).toEqual(['b']);
@@ -277,5 +283,81 @@ describe('enforceSnapshotLimit materialization', () => {
       'gone.ts',
       expect.any(Array),
     );
+  });
+
+  /**
+   * The shape the core actually writes.
+   *
+   * `shared/src/storage/snapshotManager.ts` records a deletion as
+   * `{ deleted: true, baseSnapshotId: <the snapshot it was compared against> }`,
+   * so a marker normally CARRIES a base reference into the pruned prefix --
+   * unlike the bare `{ deleted: true }` of the test above, which the
+   * `baseSnapshotId` test already skips. Resolving that base is what used to
+   * abort every materialization for such a store: `getSnapshotFileContent`
+   * answers `null` for a deleted entry, the null was read as "the base is
+   * unreadable", and no survivor was ever rewritten.
+   *
+   * The marker also has to stop counting as a live reference: a tombstone is a
+   * statement about absence, and resolution never consults its base (see
+   * `snapshotVerification`'s `isFileRecoverable`), so counting it kept the
+   * selector refusing the prune for good -- the limit was never enforced, however
+   * healthy the rest of the store was.
+   */
+  it('materializes past a tombstone that names the pruned base', async () => {
+    const { manager, storage } = await managerUnderLimitOfOne([
+      snapshot(
+        'a',
+        {
+          'f.ts': { content: 'content of A' },
+          'gone.ts': { content: 'A gone' },
+        },
+        1,
+      ),
+      snapshot(
+        'b',
+        {
+          'f.ts': { baseSnapshotId: 'a' },
+          'gone.ts': { deleted: true, baseSnapshotId: 'a' },
+        },
+        2,
+      ),
+    ]);
+    // What the storage layer answers for a deleted entry: null, because there is
+    // no content to read -- not because the base is unreadable.
+    storage.getSnapshotFileContent.mockImplementation(
+      async (_id: string, relativePath: string) =>
+        relativePath === 'f.ts' ? 'content of A' : null,
+    );
+
+    // `enforceSnapshotLimit` is private: reached through a cast rather than
+    // `any`, so a rename fails the compile instead of the test going inert.
+    await (
+      manager as unknown as { enforceSnapshotLimit: () => Promise<void> }
+    ).enforceSnapshotLimit();
+
+    // The real delta was still rewritten and persisted, so the materialization
+    // did not abort on the marker.
+    expect(storage.saveSnapshotData).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'b' }),
+    );
+    const survivors = manager.getSnapshots();
+    const survivor = survivors.find((s) => s.id === 'b');
+    expect(survivor?.files['f.ts']).toEqual({ content: 'content of A' });
+    // ...and the marker kept its marker, base reference and all: it records a
+    // deletion, so there is nothing about it to repair.
+    expect(survivor?.files['gone.ts']).toEqual({
+      deleted: true,
+      baseSnapshotId: 'a',
+    });
+    expect(storage.getSnapshotFileContent).not.toHaveBeenCalledWith(
+      'b',
+      'gone.ts',
+      expect.any(Array),
+    );
+    // The point of the repair: with the only remaining reference being a
+    // tombstone, the prune reaches the configured limit instead of being
+    // refused forever.
+    expect(survivors.map((s) => s.id)).toEqual(['b']);
+    expect(storage.deleteSnapshotData).toHaveBeenCalledWith('a');
   });
 });

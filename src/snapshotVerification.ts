@@ -111,6 +111,14 @@ export function scanSnapshotIntegrity(
       unrecoverableFileCount += broken.length;
     }
     for (const fileData of Object.values(snapshot.files)) {
+      // A deletion marker carries the base it was compared against, but nothing
+      // resolves its content through that base: it records that the file was
+      // gone, so the base is not a dependency of it and its absence is not
+      // breakage. Counting it here reported a base as missing that pruning is
+      // allowed to remove (`selectPrunableSnapshots` applies the same rule).
+      if (fileData.deleted) {
+        continue;
+      }
       const base = fileData.baseSnapshotId;
       if (base && !present.has(base)) {
         missing.add(base);

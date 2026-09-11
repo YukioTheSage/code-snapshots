@@ -129,7 +129,14 @@ export function selectPrunableSnapshots(
         !pruned.has(snapshot.id) &&
         Object.values(snapshot.files).some(
           (fileData) =>
-            !!fileData.baseSnapshotId && pruned.has(fileData.baseSnapshotId),
+            // A tombstone is a statement about absence, not a delta on its base:
+            // nothing ever resolves its content through `baseSnapshotId` -- the
+            // verification scan skips deleted markers for the same reason -- so
+            // counting it as a reference refuses the prune forever for any store
+            // that holds one, however healthy the rest of it is.
+            !fileData.deleted &&
+            !!fileData.baseSnapshotId &&
+            pruned.has(fileData.baseSnapshotId),
         ),
     );
     if (!danglingReference) {
@@ -1923,6 +1930,15 @@ export class SnapshotManager {
       }
       let dirty = false;
       for (const [relativePath, fileData] of Object.entries(snapshot.files)) {
+        if (fileData.deleted) {
+          // A tombstone is not a delta: it records that the file was gone at
+          // that point and has nothing to resolve, so it keeps its marker.
+          // Resolving it would either abort the whole materialization --
+          // `getSnapshotFileContent` answers null for a deleted entry -- or
+          // replace the marker with content for a file the snapshot says is
+          // gone.
+          continue;
+        }
         if (!fileData.baseSnapshotId || !pruned.has(fileData.baseSnapshotId)) {
           continue;
         }
@@ -1932,8 +1948,13 @@ export class SnapshotManager {
           this.snapshots,
         );
         if (content === null) {
+          // Only a real delta reaches this now (tombstones are skipped above),
+          // and a delta that does not resolve is either unreadable through its
+          // base or absent from it -- naming the base is what makes the message
+          // usable. "No rewrite is persisted" rather than "the store is
+          // untouched": the caller still prunes whatever nothing references.
           log(
-            `Prune: cannot materialize ${relativePath} of ${snapshot.id} (its base is unreadable); leaving the store untouched.`,
+            `Prune: cannot materialize ${relativePath} of ${snapshot.id}: base ${fileData.baseSnapshotId} is unreadable or does not record it; persisting no rewrite of the survivors.`,
           );
           for (const [id, files] of originals) {
             const target = this.snapshots.find((s) => s.id === id);
