@@ -70,6 +70,11 @@ export function showOutputChannel(): void {
   // leaving the host as it found it. The log lines themselves are still
   // written; only the reveal is skipped.
   if (isInteractiveUiDisabled()) {
+    // Announce the skip like every other headless guard does, so "I asked for
+    // the logs and nothing happened" is attributable from the captured output.
+    log(
+      'Interactive UI disabled (headless run); skipping the output channel reveal.',
+    );
     return;
   }
   if (outputChannel) {

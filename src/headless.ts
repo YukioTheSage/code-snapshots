@@ -17,6 +17,19 @@
  * unguarded picker is enough to wedge a whole suite silently, every prompt
  * site must consult this one predicate rather than testing its own
  * environment variable.
+ *
+ * One-way UI side effects are the third case and follow the same rule for a
+ * different reason. Revealing the CodeLapse output channel is the example: no
+ * human can read it in a headless run, and the editor a reveal opens cannot be
+ * closed again by anything this host offers (`workbench.action.closeAllEditors`,
+ * `workbench.action.closeActiveEditor` and `window.tabGroups.close` all leave it
+ * in place). It therefore outlives the command that opened it and leaves the
+ * host's editor state permanently changed for whatever runs next — which is how
+ * a later suite's "no editor is open" precondition came to depend on focus
+ * bookkeeping. The predicate consequently covers reveals as well as prompts,
+ * which does mean the older credential-only variable suppresses reveals too:
+ * that variable is a headless switch, and a headless host has nobody to reveal
+ * anything to.
  */
 
 /**
