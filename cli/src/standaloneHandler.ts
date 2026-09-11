@@ -61,6 +61,101 @@ export function findWorkspaceRootFrom(startDir: string): string | null {
   return null;
 }
 
+/**
+ * A CLI-shaped snapshot filter translated into what codelapse-core honours,
+ * plus the parts core cannot express and the handler applies locally.
+ */
+export interface NormalizedListFilter {
+  kind: 'core';
+  tag?: string;
+  favorite?: boolean;
+  startDate?: number;
+  endDate?: number;
+  search?: string;
+  filePath?: string;
+  /** More than one tag: core matches a single tag, so these are applied locally. */
+  pendingTags?: string[];
+  limit?: number;
+}
+
+/**
+ * Translate the filter shape the commands build into the shape core reads.
+ *
+ * commands/snapshot.ts sends `{ tags: [...], isFavorite, limit, dateRange }`
+ * while core's `SnapshotFilter` reads `{ tag, favorite, startDate, endDate }`.
+ * Passing one straight to the other silently ignores every option, which is
+ * how `snapshot list --tags/--favorites/--limit/--since` returned unfiltered
+ * results with exit 0.
+ */
+export function normalizeListFilter(
+  raw: Record<string, unknown> | undefined,
+): NormalizedListFilter {
+  const out: NormalizedListFilter = { kind: 'core' };
+  if (!raw) {
+    return out;
+  }
+
+  const tags = Array.isArray(raw.tags) ? raw.tags.map(String) : undefined;
+  const singleTag = typeof raw.tag === 'string' ? raw.tag : undefined;
+
+  if (singleTag) {
+    out.tag = singleTag;
+  } else if (tags && tags.length > 0) {
+    out.tag = tags[0];
+  }
+  if (tags && tags.length > 1) {
+    out.pendingTags = tags;
+  }
+
+  if (raw.favorite === true || raw.isFavorite === true) {
+    out.favorite = true;
+  }
+
+  const dateRange = raw.dateRange as
+    | { start?: unknown; end?: unknown; from?: unknown; to?: unknown }
+    | undefined;
+  if (dateRange) {
+    const start = dateRange.start ?? dateRange.from;
+    const end = dateRange.end ?? dateRange.to;
+    if (typeof start === 'number') {
+      out.startDate = start;
+    }
+    if (typeof end === 'number') {
+      out.endDate = end;
+    }
+  }
+  if (typeof raw.startDate === 'number') {
+    out.startDate = raw.startDate;
+  }
+  if (typeof raw.endDate === 'number') {
+    out.endDate = raw.endDate;
+  }
+
+  if (typeof raw.search === 'string') {
+    out.search = raw.search;
+  }
+  if (typeof raw.filePath === 'string') {
+    out.filePath = raw.filePath;
+  }
+  if (typeof raw.limit === 'number' && raw.limit > 0) {
+    out.limit = raw.limit;
+  }
+
+  return out;
+}
+
+/** Strip the locally-applied fields so only core's own filter shape remains. */
+function toCoreFilter(normalized: NormalizedListFilter): SnapshotFilter {
+  return {
+    tag: normalized.tag,
+    favorite: normalized.favorite,
+    startDate: normalized.startDate,
+    endDate: normalized.endDate,
+    search: normalized.search,
+    filePath: normalized.filePath,
+  };
+}
+
 export class StandaloneHandler {
   private snapshotManager: SnapshotManager | null = null;
   private configManager: ConfigManager | null = null;
@@ -144,7 +239,25 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
-    return await this.snapshotManager.getSnapshots(filter);
+    // Commands send a CLI-shaped filter; translate before core sees it or the
+    // options are silently ignored (BUG-6).
+    const normalized = normalizeListFilter(filter as Record<string, unknown>);
+    let snapshots = await this.snapshotManager.getSnapshots(
+      toCoreFilter(normalized),
+    );
+
+    if (normalized.pendingTags && normalized.pendingTags.length > 0) {
+      const required = normalized.pendingTags;
+      snapshots = snapshots.filter((snapshot) =>
+        required.every((tag) => (snapshot.tags ?? []).includes(tag)),
+      );
+    }
+
+    if (normalized.limit !== undefined) {
+      snapshots = snapshots.slice(0, normalized.limit);
+    }
+
+    return snapshots;
   }
 
   /**
