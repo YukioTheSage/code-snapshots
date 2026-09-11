@@ -5,6 +5,8 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as diff from 'diff';
+import { ConfigManager } from 'codelapse-core';
+import { resolveSetting } from '../configSource';
 import { TerminalApiService } from './terminalApiService';
 import { SemanticSearchService } from './semanticSearchService';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
@@ -337,6 +339,15 @@ export class CliConnectorService implements vscode.Disposable {
         case 'getStatus':
           result = await this.getConnectionStatus();
           break;
+        case 'getConfig':
+        case 'setConfig':
+        case 'resetConfig':
+        case 'getConfigSchema':
+        case 'validateConfig':
+        case 'exportConfig':
+        case 'importConfig':
+          result = await this.handleConfigRequest(method, data);
+          break;
         case 'takeSnapshot':
           result = await this.terminalApiService.takeSnapshot(data);
           break;
@@ -530,6 +541,187 @@ export class CliConnectorService implements vscode.Disposable {
     }
   }
 
+  /**
+   * The workspace root a config request writes to.
+   */
+  private getConfigWorkspaceRoot(): string {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      throw new Error(
+        'No workspace folder is open; configuration commands require a workspace.',
+      );
+    }
+    return workspaceRoot;
+  }
+
+  /**
+   * Resolve a caller-supplied config path while keeping it inside the
+   * workspace, matching the CLI's export/import containment rule.
+   */
+  private resolveConfigFilePath(
+    workspaceRoot: string,
+    input: unknown,
+  ): string {
+    if (typeof input !== 'string' || input.trim().length === 0) {
+      throw new Error('A config file path is required.');
+    }
+
+    const resolved = path.resolve(workspaceRoot, input);
+    const relative = path.relative(workspaceRoot, resolved);
+    if (
+      relative === '..' ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error(
+        `Path traversal blocked: "${input}" is outside the workspace root (${workspaceRoot})`,
+      );
+    }
+    return resolved;
+  }
+
+  private flattenConfigEntries(
+    value: Record<string, unknown>,
+    prefix = '',
+  ): Array<{ keyPath: string; value: unknown }> {
+    const entries: Array<{ keyPath: string; value: unknown }> = [];
+    for (const [key, child] of Object.entries(value)) {
+      const keyPath = prefix ? `${prefix}.${key}` : key;
+      if (typeof child === 'object' && child !== null && !Array.isArray(child)) {
+        entries.push(
+          ...this.flattenConfigEntries(
+            child as Record<string, unknown>,
+            keyPath,
+          ),
+        );
+      } else {
+        entries.push({ keyPath, value: child });
+      }
+    }
+    return entries;
+  }
+
+  /**
+   * Config commands over IPC for the CLI. All seven share one ConfigManager so
+   * `setConfig` cannot write a file the following `getConfig` does not read.
+   */
+  private async handleConfigRequest(method: string, data: any): Promise<any> {
+    const workspaceRoot = this.getConfigWorkspaceRoot();
+    const manager = new ConfigManager(workspaceRoot);
+
+    switch (method) {
+      case 'getConfig': {
+        if (typeof data?.key === 'string' && data.key.length > 0) {
+          const fallback = manager.getNested(data.key);
+          const resolved = resolveSetting(data.key, fallback);
+          return {
+            config: resolved.value,
+            value: resolved.value,
+            source: resolved.source,
+          };
+        }
+        return { config: manager.getConfig() };
+      }
+
+      case 'setConfig': {
+        const key = this.requireNonEmptyString(data?.key, 'key');
+        await manager.setNested(key, data?.value);
+        const persisted = manager.getNested(key);
+        const resolved = resolveSetting(key, persisted);
+        const warning =
+          resolved.source === 'settings'
+            ? `Stored in .vscode/codelapse.json, but the VS Code setting "vscode-snapshots.${key}" is explicitly set to ${JSON.stringify(
+                resolved.value,
+              )} and overrides it.`
+            : undefined;
+        return warning ? { value: persisted, warning } : { value: persisted };
+      }
+
+      case 'resetConfig': {
+        const key =
+          typeof data?.key === 'string' && data.key.length > 0
+            ? data.key
+            : undefined;
+        if (key) {
+          await manager.resetNested(key);
+          return { resetValues: manager.getNested(key) };
+        }
+        await manager.reset();
+        return { resetValues: manager.getConfig() };
+      }
+
+      case 'getConfigSchema':
+        return {
+          schema: manager.getConfigSchema(),
+          availableKeys: manager.getAvailableKeyPaths(),
+        };
+
+      case 'validateConfig': {
+        const validation = manager.validate();
+        return {
+          isValid: validation.valid,
+          errors: validation.errors,
+          warnings: [],
+        };
+      }
+
+      case 'exportConfig': {
+        const filePath = this.resolveConfigFilePath(
+          workspaceRoot,
+          data?.filePath,
+        );
+        await fs.promises.writeFile(filePath, manager.exportConfig(), 'utf8');
+        return { filePath };
+      }
+
+      case 'importConfig': {
+        const filePath = this.resolveConfigFilePath(
+          workspaceRoot,
+          data?.filePath,
+        );
+        const serialized = await fs.promises.readFile(filePath, 'utf8');
+        const parsed = JSON.parse(serialized) as unknown;
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error('Imported configuration must be a JSON object');
+        }
+
+        if (data?.merge === true) {
+          const entries = this.flattenConfigEntries(
+            parsed as Record<string, unknown>,
+          );
+          if (entries.length === 0) {
+            return { importedKeys: [] };
+          }
+
+          const availableKeys = new Set(manager.getAvailableKeyPaths());
+          for (const entry of entries) {
+            if (!availableKeys.has(entry.keyPath)) {
+              throw new Error(
+                `Invalid configuration key path "${entry.keyPath}" in import file`,
+              );
+            }
+          }
+
+          const importedKeys: string[] = [];
+          for (const entry of entries) {
+            await manager.setNested(entry.keyPath, entry.value);
+            importedKeys.push(entry.keyPath);
+          }
+          return { importedKeys };
+        }
+
+        await manager.importConfig(serialized);
+        return { importedKeys: Object.keys(parsed) };
+      }
+
+      default:
+        throw new Error(`Unknown config method: ${method}`);
+    }
+  }
   /**
    * Get connection status for CLI
    */

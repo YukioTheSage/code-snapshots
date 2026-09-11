@@ -49,15 +49,26 @@ function registeredCommandIds(): Set<string> {
   return ids;
 }
 
-/** Keys passed as the first argument of a `.get(...)` call. */
+/**
+ * Keys read directly through `.get(...)` or through the shared-store resolver.
+ *
+ * `resolveSetting('key', fallback)` is the post-D1 read path for settings that
+ * also live in `.vscode/codelapse.json`; it is just as much a read of the
+ * declared setting as a literal `.get('key')`.
+ */
 function keysReadFromConfig(): Set<string> {
   const keys = new Set<string>();
-  const pattern = /\.get(?:<[^>]*>)?\(\s*['"`]([A-Za-z0-9_.]+)['"`]/g;
+  const patterns = [
+    /\.get(?:<[^>]*>)?\(\s*['"`]([A-Za-z0-9_.]+)['"`]/g,
+    /resolveSetting(?:<[^>]*>)?\(\s*['"`]([A-Za-z0-9_.]+)['"`]/g,
+  ];
   for (const file of collectTsFiles(srcRoot)) {
     const source = fs.readFileSync(file, 'utf8');
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(source)) !== null) {
-      keys.add(match[1]);
+    for (const pattern of patterns) {
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(source)) !== null) {
+        keys.add(match[1]);
+      }
     }
   }
   return keys;

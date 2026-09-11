@@ -1,17 +1,14 @@
 import * as vscode from 'vscode';
+import { resolveSetting } from './configSource';
 
 const CONFIG_SECTION = 'vscode-snapshots';
 
 export function getSnapshotLocation(): string {
-  return vscode.workspace
-    .getConfiguration(CONFIG_SECTION)
-    .get<string>('snapshotLocation', '.snapshots');
+  return resolveSetting('snapshotLocation', '.snapshots').value;
 }
 
 export function getMaxSnapshots(): number {
-  return vscode.workspace
-    .getConfiguration(CONFIG_SECTION)
-    .get<number>('maxSnapshots', 50);
+  return resolveSetting('maxSnapshots', 50).value;
 }
 
 // Note: Logging config is handled directly in logger.ts for simplicity
@@ -29,15 +26,11 @@ export interface AutoSnapshotRule {
 }
 
 export function getAutoSnapshotRules(): AutoSnapshotRule[] {
-  return vscode.workspace
-    .getConfiguration(CONFIG_SECTION)
-    .get<AutoSnapshotRule[]>('autoSnapshot.rules', []);
+  return resolveSetting<AutoSnapshotRule[]>('autoSnapshot.rules', []).value;
 }
 
 export function getShowOnlyChangedFiles(): boolean {
-  return vscode.workspace
-    .getConfiguration('vscode-snapshots')
-    .get<boolean>('showOnlyChangedFiles', true); // true as default - show only changed files
+  return resolveSetting('showOnlyChangedFiles', true).value;
 }
 
 export interface UxSettings {

@@ -114,6 +114,7 @@ export class ConfigCommands {
             success: true,
             key,
             value: result.value,
+            warning: result.warning,
             message: 'Configuration updated successfully',
           },
           options,
@@ -123,6 +124,9 @@ export class ConfigCommands {
         console.log(
           `${chalk.cyan(key)}: ${chalk.yellow(JSON.stringify(result.value))}`,
         );
+        if (result.warning) {
+          console.log(chalk.yellow(`⚠ ${result.warning}`));
+        }
       }
     } catch (error) {
       const errorMessage =
