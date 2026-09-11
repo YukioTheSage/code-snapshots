@@ -8,7 +8,7 @@ import * as vscode from "vscode";
  *
  * Contracts verified in source before asserting them:
  *
- *  - `src/snapshotManager.ts:1919-1985` -- `enforceSnapshotLimit()` runs after
+ *  - `src/snapshotManager.ts:1933-1999` -- `enforceSnapshotLimit()` runs after
  *    every `takeSnapshot`, reads the setting live, and removes the snapshots
  *    `selectPrunableSnapshots` selects. Each removal goes through
  *    `purgeSnapshot` -> `storage.deleteSnapshotData`, which deletes the
@@ -22,13 +22,17 @@ import * as vscode from "vscode";
  *    prefix into full content, resolved while the chain is still intact, and
  *    persists them -- and only then deletes, so the limit is reached without
  *    losing the data. When a dependency cannot be resolved it persists nothing
- *    and refuses the prune outright. The tests below cover both outcomes
- *    instead of assuming either one.
+ *    and refuses the prune outright -- that outcome is covered by the unit
+ *    tests in `src/__tests__/snapshotPruneIntegrity.test.ts`. The integration
+ *    tests below assert the reachable outcome end to end: the limit is met
+ *    without losing the content it would have cost.
  *  - `src/snapshotStorage.ts:296-320` -- an unparsable `index.json` is
  *    quarantined into `<store>/quarantine/index.json.quarantine-<iso>` and the
  *    store is rebuilt by `recoverSnapshotsFromFileSystem` (`:480-513`), which
  *    reads every `snapshot-*` payload directory. The rewritten index records
- *    the recovered state as detached (`activeSnapshotId: null`, `:141-149`).
+ *    the recovered state as detached -- the recovery path passes `null` for
+ *    `activeSnapshotId` (`:378-385`), where a legacy index omits the field
+ *    entirely.
  *
  * This suite drains the store first, so "oldest" and "newest" always name
  * snapshots it created itself; the `Tree views` and store-exclusion suites do

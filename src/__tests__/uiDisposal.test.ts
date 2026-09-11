@@ -4,11 +4,27 @@ import { FilterStatusBar } from '../ui/filterStatusBar';
 import { SnapshotManager } from '../snapshotManager';
 
 describe('UI component disposal', () => {
+  // Every StatusBarController owns a 60s clock interval, so an undisposed one
+  // leaves a live timer that keeps the jest worker alive. These are disposed in
+  // afterEach rather than at the end of each test so that a failed assertion
+  // cannot strand the timer either.
+  const controllers: StatusBarController[] = [];
+  function track(controller: StatusBarController): StatusBarController {
+    controllers.push(controller);
+    return controller;
+  }
+  afterEach(() => {
+    for (const controller of controllers) {
+      controller.dispose();
+    }
+    controllers.length = 0;
+  });
+
   it('StatusBarController registers a 60s clock and disposes both timer and item', () => {
     const setIntervalSpy = jest.spyOn(global, 'setInterval');
     const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
     const manager = new SnapshotManager(null);
-    const controller = new StatusBarController(manager);
+    const controller = track(new StatusBarController(manager));
 
     // Task 4 replaced the removed 5s poll with a single coarse clock tick that
     // keeps the "time ago" text fresh without rewriting the item 12x a minute.
@@ -83,7 +99,7 @@ describe('UI component disposal', () => {
 
   it('disposes the controller subscription so it stops updating', () => {
     const manager = new SnapshotManager(null);
-    const controller = new StatusBarController(manager);
+    const controller = track(new StatusBarController(manager));
     const updateSpy = jest.spyOn(controller as any, 'updateStatusBar');
 
     (manager as any)._onDidChangeSnapshots.fire();
@@ -109,7 +125,7 @@ describe('UI component disposal', () => {
   it('is safe to dispose twice', () => {
     const manager = new SnapshotManager(null);
     const provider = new SnapshotTreeDataProvider(manager, SnapshotType.MANUAL);
-    const controller = new StatusBarController(manager);
+    const controller = track(new StatusBarController(manager));
     const filterBar = new FilterStatusBar(provider, 'My Snapshots');
 
     provider.dispose();

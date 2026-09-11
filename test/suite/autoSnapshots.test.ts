@@ -13,7 +13,7 @@ import * as vscode from "vscode";
  *    existing handle and re-registers with `autoSnapshotInterval * 60 * 1000`
  *    whenever `vscode-snapshots.autoSnapshotInterval` changes. The unit is
  *    MINUTES and 0 disables the timer.
- *  - `src/snapshotManager.ts:617-635` -- a snapshot tagged `auto` whose file
+ *  - `src/snapshotManager.ts:631-649` -- a snapshot tagged `auto` whose file
  *    entries show no change returns `{created:false, reason:'no-changes'}`.
  *    Manual snapshots never take that branch.
  *  - `src/services/terminalApiService.ts:65-79` -- the skip surfaces as
@@ -416,16 +416,18 @@ suite("auto snapshots", function () {
       )}`,
     );
 
-    // BUG (observed, not asserted -- see task-8910-report.md): a selective
-    // snapshot also records the base's unselected files. `currentWorkspaceFiles`
-    // is built from the selectively filtered list (src/snapshotManager.ts:496-511)
-    // and the deletion pass then writes `{deleted:true}` for every base file
-    // missing from it (:595-615). The keys observed for this snapshot were
-    // ["auto-rule-signal.ts", ".vscode/settings.json",
-    //  ".vscode/codelapse-connection.json", "src/app.ts"].
-    // Restoring a rule-based snapshot therefore deletes the files the rule did
-    // not capture. Nothing here asserts those entries, because that outcome is
-    // not correct behaviour to lock in; the assertions above stay scoped to the
-    // matched file and to the metadata the rule itself sets.
+    // A rule-based snapshot records only the files the rule selected: the scan
+    // is filtered to `selectedFiles` (src/snapshotManager.ts:430-451) and
+    // `currentWorkspaceFiles` is built from that filtered list (:499-507). What
+    // follows the scan is a deletion pass (:606-629) that used to run
+    // unconditionally and wrote `{deleted:true}` for every base-snapshot file
+    // missing from the filtered list, so this snapshot also recorded
+    // [".vscode/settings.json", ".vscode/codelapse-connection.json",
+    // "src/app.ts"] and restoring it deleted files the rule had never captured
+    // (reported as F1 in task-8910-report.md; the selective-capture guard fixed
+    // it). The marker-free shape is asserted directly in
+    // perFileOperations.test.ts ("selective capture does not mark unselected
+    // files as deleted"); the assertions above stay scoped to the matched file
+    // and to the metadata the rule itself sets.
   });
 });
