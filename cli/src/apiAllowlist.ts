@@ -92,13 +92,19 @@ export function assertAllowedApiMethod(method: string): void {
 export function parseAndValidateBatchCommands(
   payload: unknown,
 ): BatchApiCommand[] {
-  if (!Array.isArray(payload)) {
+  // Both documented shapes are accepted: a bare top-level array, and the
+  // `{ "commands": [...] }` wrapper used in HELP.md/AI_GUIDE.md examples. Only
+  // the array form used to work, so copy-pasting the documented file failed
+  // with "Batch file must contain an array of command objects".
+  const commands = isRecord(payload) ? payload.commands : payload;
+
+  if (!Array.isArray(commands)) {
     throw new Error(
-      'Batch file must contain an array of command objects: [{ "method": "name", "data": { ... } }]',
+      'Batch file must contain an array of command objects, either as a top-level array [{ "method": "name", "data": { ... } }] or wrapped as { "commands": [{ "method": "name", "data": { ... } }] }',
     );
   }
 
-  return payload.map((item, index) => {
+  return commands.map((item, index) => {
     if (!isRecord(item)) {
       throw new Error(`Batch command at index ${index} must be an object`);
     }

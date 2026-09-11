@@ -112,4 +112,40 @@ describe('batchExecute', () => {
     const client = clientDouble(async () => ({ success: true }));
     await expect(batchExecute([], client)).resolves.toEqual([]);
   });
+
+  // BUG-8: the documented `{ "commands": [...] }` file shape was rejected with
+  // "Batch file must contain an array of command objects", so only the bare
+  // array form ever worked.
+  it('accepts the documented { commands: [...] } wrapper', async () => {
+    const calls: string[] = [];
+    const client = clientDouble(async (method) => {
+      calls.push(method);
+      return { success: true };
+    });
+
+    const results = await batchExecute(
+      {
+        commands: [
+          { method: 'takeSnapshot', data: { description: 'a' } },
+          { method: 'getSnapshots' },
+        ],
+      },
+      client,
+    );
+
+    expect(calls).toEqual(['takeSnapshot', 'getSnapshots']);
+    expect(results).toHaveLength(2);
+  });
+
+  it('accepts an empty { commands: [] } wrapper', async () => {
+    const client = clientDouble(async () => ({ success: true }));
+    await expect(batchExecute({ commands: [] }, client)).resolves.toEqual([]);
+  });
+
+  it('still rejects a shape that is neither an array nor a commands wrapper', async () => {
+    const client = clientDouble(async () => ({ success: true }));
+    await expect(batchExecute({ nope: 1 }, client)).rejects.toThrow(
+      /top-level array|commands/i,
+    );
+  });
 });
