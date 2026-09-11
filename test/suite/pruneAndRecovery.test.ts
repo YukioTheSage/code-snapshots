@@ -8,17 +8,22 @@ import * as vscode from "vscode";
  *
  * Contracts verified in source before asserting them:
  *
- *  - `src/snapshotManager.ts:1755-1807` -- `enforceSnapshotLimit()` runs after
+ *  - `src/snapshotManager.ts:1919-1985` -- `enforceSnapshotLimit()` runs after
  *    every `takeSnapshot`, reads the setting live, and removes the snapshots
  *    `selectPrunableSnapshots` selects. Each removal goes through
  *    `purgeSnapshot` -> `storage.deleteSnapshotData`, which deletes the
  *    snapshot's directory (`src/snapshotStorage.ts:608-656`).
  *  - `src/snapshotManager.ts:105-134` -- snapshots are deltas: an entry holding
- *    only a `baseSnapshotId` is readable only while that base exists. Pruning
- *    is therefore refused for any candidate a SURVIVING snapshot references,
- *    and from the oldest end, so a plain chain of snapshots can legitimately
- *    keep more than `maxSnapshots`. The tests below distinguish that guard from
- *    real pruning instead of assuming the limit is always reached.
+ *    only a `baseSnapshotId` is readable only while that base exists.
+ *    `selectPrunableSnapshots` therefore refuses to delete a candidate a
+ *    SURVIVING snapshot references, which on its own left a plain delta chain
+ *    growing past `maxSnapshots` forever. `enforceSnapshotLimit` now repairs
+ *    those survivors first -- it rewrites every entry pointing into the pruned
+ *    prefix into full content, resolved while the chain is still intact, and
+ *    persists them -- and only then deletes, so the limit is reached without
+ *    losing the data. When a dependency cannot be resolved it persists nothing
+ *    and refuses the prune outright. The tests below cover both outcomes
+ *    instead of assuming either one.
  *  - `src/snapshotStorage.ts:296-320` -- an unparsable `index.json` is
  *    quarantined into `<store>/quarantine/index.json.quarantine-<iso>` and the
  *    store is rebuilt by `recoverSnapshotsFromFileSystem` (`:480-513`), which
@@ -37,16 +42,21 @@ const SECTION = "vscode-snapshots";
 const STORE_DIR = path.join(FIXTURE_ROOT ?? "", ".snapshots-test");
 const FIXTURE_MAX_SNAPSHOTS = 20;
 /**
- * The file that makes a snapshot survivable while everything older is pruned.
- *
- * A selective snapshot of a file the base does not contain records full content
- * (and `{deleted:true}` markers for the base's other files), so none of its
- * entries carries a `baseSnapshotId` and no surviving snapshot depends on an
- * older one through it. Without such a snapshot the delta guard correctly
- * refuses to prune at all -- that is the first test below.
+ * A selective snapshot of a file the base does not contain: it records full
+ * content with no `baseSnapshotId`, so it is self-contained by construction
+ * (since the selective-capture fix it records no `{deleted:true}` markers for
+ * files it never selected either). Pruning has nothing to repair in it, which
+ * is what makes it worth mixing into the delta chain under test: a prune that
+ * keeps it proves self-contained captures survive alongside repaired deltas,
+ * rather than only the shape the repair knows how to rewrite.
  */
 const BREAKER_REL = "prune-breaker.txt";
 const BREAKER_FILE = path.join(FIXTURE_ROOT ?? "", BREAKER_REL);
+/** Workspace-relative path of the fixture file every test changes; snapshot
+ *  file keys carry the platform separator on Windows, so it is passed to the
+ *  manager's lookup (which normalizes) rather than joined into a filesystem
+ *  path. */
+const APP_REL = "src/app.ts";
 const APP_FILE = path.join(FIXTURE_ROOT ?? "", "src", "app.ts");
 
 const config = () => vscode.workspace.getConfiguration(SECTION);
@@ -164,45 +174,71 @@ suite("snapshot pruning and recovery", function () {
     );
   }
 
-  test("the limit is not enforced by deleting a snapshot a surviving snapshot references", async () => {
+  test("the tightest limit (1) is reached by repairing the survivor before its bases are pruned", async () => {
     await drainStore();
-    await setMaxSnapshots(1);
+    // Two snapshots may coexist while the delta is set up: at one, enforcement
+    // would repair the reference before this test could observe it, and the
+    // precondition below would be unprovable. The limit is tightened after.
+    await setMaxSnapshots(2);
 
     const first = await takeSnapshot("guard-1");
-    appendFixtureChange(`// prune guard marker ${Date.now()}`);
+    const marker = `// prune guard marker ${Date.now()}`;
+    appendFixtureChange(marker);
     const second = await takeSnapshot("guard-2");
 
-    // Precondition that gives the guard meaning: the second snapshot is a delta
-    // on the first, so pruning the first would make the second unreadable.
+    // Precondition that gives the repair meaning: the second snapshot is a
+    // delta on the first, so a limit of one is reachable only by rewriting that
+    // delta before the first snapshot's payload is deleted.
     const secondSnapshot = (await api.getSnapshots()).find(
       (s: any) => s.id === second.id,
     );
-    assert.ok(
-      secondSnapshot,
-      `snapshot ${second.id} vanished from the store`,
-    );
+    assert.ok(secondSnapshot, `snapshot ${second.id} vanished from the store`);
     assert.ok(
       Object.values(secondSnapshot.files).some(
         (file: any) => file.baseSnapshotId === first.id,
       ),
-      `precondition: ${second.id} does not reference ${first.id}; the guard assertion below would be vacuous`,
+      `precondition: ${second.id} does not reference ${first.id}; the repair assertion below would be vacuous`,
     );
 
+    await setMaxSnapshots(1);
+    appendFixtureChange(`// prune guard marker two ${Date.now()}`);
+    const third = await takeSnapshot("guard-3");
+
+    // The limit is reached: neither older snapshot remains, on the list or on
+    // disk...
     assert.deepStrictEqual(
       (await api.getSnapshots()).map((s: any) => s.id),
-      [first.id, second.id],
-      `the limit (1) was enforced by deleting a snapshot the newest snapshot depends on: ${JSON.stringify(
+      [third.id],
+      `the limit (1) was not enforced: ${JSON.stringify(
         (await api.getSnapshots()).map((s: any) => s.id),
       )}`,
     );
     assert.deepStrictEqual(
       storeSnapshotDirs(),
-      [first.id, second.id].sort(),
-      "both snapshots must still have their payload directory on disk",
+      [third.id],
+      "a pruned snapshot still has its payload directory on disk",
+    );
+
+    // ...without losing what they held: the survivor carries the change that
+    // only the deleted snapshots recorded.
+    const resolved = await manager.getSnapshotFileContentPublic(
+      third.id,
+      APP_REL,
+    );
+    assert.strictEqual(
+      typeof resolved,
+      "string",
+      `the surviving snapshot's copy of ${APP_REL} is no longer readable after its bases were pruned`,
+    );
+    assert.ok(
+      (resolved as string).includes(marker),
+      `the survivor's content lost the change captured before the prune: ${JSON.stringify(
+        resolved,
+      )}`,
     );
   });
 
-  test("maxSnapshots prunes the unreferenced oldest snapshots from the list and from disk", async () => {
+  test("maxSnapshots prunes the oldest snapshots from the list and from disk, repairing the survivors", async () => {
     await drainStore();
     await setMaxSnapshots(3);
 
@@ -229,27 +265,36 @@ suite("snapshot pruning and recovery", function () {
     );
     const breaker = breakerOutcome.snapshot;
 
-    // Precondition: the breaker really is self-contained. If it referenced an
-    // older snapshot, the guard would refuse the pruning below and this test
-    // would prove nothing.
+    // Precondition: the breaker really is self-contained, so the prunes below
+    // exercise both capture shapes -- a repaired delta chain and a snapshot
+    // with nothing to repair. If it referenced an older snapshot the assertion
+    // would be describing a different store than the one it names.
     const referencingEntries = Object.entries(breaker.files).filter(
       ([, file]: [string, any]) => file.baseSnapshotId !== undefined,
     );
     assert.deepStrictEqual(
       referencingEntries.map(([key]) => key),
       [],
-      `the breaker snapshot references a base; pruning cannot pass it: ${JSON.stringify(
+      `the breaker snapshot references a base; it is not the self-contained shape this test needs: ${JSON.stringify(
         breaker.files,
       )}`,
     );
 
     const fourth = await takeSnapshot("prune-4");
-    // With four snapshots and a limit of three, the oldest is still referenced
-    // by the second, so the delta guard keeps everything (src/snapshotManager.ts:105-134).
+    // With four snapshots and a limit of three, the oldest goes: the second
+    // snapshot's delta on it is materialized first, so the survivor keeps its
+    // content while the base's payload is deleted.
     assert.deepStrictEqual(
       (await api.getSnapshots()).map((s: any) => s.id),
-      [first.id, second.id, breaker.id, fourth.id],
-      "nothing may be pruned while a surviving snapshot references the oldest one",
+      [second.id, breaker.id, fourth.id],
+      `the oldest snapshot was not pruned once its only dependants were repaired: ${JSON.stringify(
+        (await api.getSnapshots()).map((s: any) => s.id),
+      )}`,
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(STORE_DIR, first.id)),
+      false,
+      `pruned snapshot ${first.id} still has a directory on disk`,
     );
 
     const fifth = await takeSnapshot("prune-5");
@@ -283,6 +328,109 @@ suite("snapshot pruning and recovery", function () {
         `pruned snapshot ${pruned} still has a directory on disk`,
       );
     }
+  });
+
+  /**
+   * The defect this suite is named for: with `maxSnapshots` set, a plain chain
+   * of snapshots grew without bound, because every survivor of the chain
+   * references the snapshot the limit wanted to delete and the safety selector
+   * then refused every candidate. The limit can only be reached by repairing
+   * the survivors first, and the repair is what has to survive a reload -- an
+   * in-memory rewrite that never reached disk would lose the data on the next
+   * session.
+   */
+  test("maxSnapshots is enforced, and the surviving deltas are materialized on disk", async () => {
+    await drainStore();
+    await setMaxSnapshots(2);
+
+    const first = await takeSnapshot("materialize-1");
+    appendFixtureChange(`// materialize-2 marker ${Date.now()}`);
+    const second = await takeSnapshot("materialize-2");
+    appendFixtureChange(`// materialize-3 marker ${Date.now()}`);
+    const third = await takeSnapshot("materialize-3");
+
+    // Precondition that gives the repair meaning: the third snapshot is a delta
+    // on the second, which the limit now wants to delete. Without a surviving
+    // reference the assertion below would prove nothing.
+    const thirdSnapshot = (await api.getSnapshots()).find(
+      (s: any) => s.id === third.id,
+    );
+    assert.ok(thirdSnapshot, `snapshot ${third.id} vanished from the store`);
+    assert.ok(
+      Object.values(thirdSnapshot.files).some(
+        (file: any) => file.baseSnapshotId === second.id,
+      ),
+      `precondition: ${third.id} does not reference ${second.id}; the repair assertion below would be vacuous`,
+    );
+
+    // What the survivor records now, to be compared after its base is gone.
+    const expectedContent = await manager.getSnapshotFileContentPublic(
+      third.id,
+      APP_REL,
+    );
+    assert.strictEqual(
+      typeof expectedContent,
+      "string",
+      `precondition: ${third.id} cannot read ${APP_REL} while its base still exists`,
+    );
+
+    appendFixtureChange(`// materialize-4 marker ${Date.now()}`);
+    const fourth = await takeSnapshot("materialize-4");
+
+    // Four snapshots, limit two: the two oldest can go only once the second's
+    // dependants have been rewritten, and no survivor may be lost doing it.
+    assert.deepStrictEqual(
+      (await api.getSnapshots()).map((s: any) => s.id),
+      [third.id, fourth.id],
+      `the limit (2) was not enforced: ${JSON.stringify(
+        (await api.getSnapshots()).map((s: any) => s.id),
+      )}`,
+    );
+    assert.deepStrictEqual(
+      storeSnapshotDirs(),
+      [third.id, fourth.id].sort(),
+      "the payload directories on disk disagree with the pruned list",
+    );
+    for (const pruned of [first.id, second.id]) {
+      assert.strictEqual(
+        fs.existsSync(path.join(STORE_DIR, pruned)),
+        false,
+        `pruned snapshot ${pruned} still has a directory on disk`,
+      );
+    }
+
+    // The repair reached disk, not just memory: the survivor's payload must not
+    // still name the deleted snapshot as a base.
+    const persisted = JSON.parse(fs.readFileSync(payloadPath(third.id), "utf8"));
+    const dangling = Object.entries(persisted.files).filter(
+      ([, file]: [string, any]) => file.baseSnapshotId === second.id,
+    );
+    assert.deepStrictEqual(
+      dangling.map(([key]) => key),
+      [],
+      `the surviving snapshot still references the pruned base on disk: ${JSON.stringify(
+        dangling,
+      )}`,
+    );
+
+    // Re-read the store the way the next session does. In-memory objects carry
+    // their own diffs, so only a reload can show whether the base's content was
+    // really materialized into the survivor.
+    await manager.loadSnapshots();
+    assert.deepStrictEqual(
+      (await api.getSnapshots()).map((s: any) => s.id),
+      [third.id, fourth.id],
+      "the repaired snapshots no longer load from the store",
+    );
+    const resolved = await manager.getSnapshotFileContentPublic(
+      third.id,
+      APP_REL,
+    );
+    assert.strictEqual(
+      resolved,
+      expectedContent,
+      `the survivor's ${APP_REL} did not survive pruning its base`,
+    );
   });
 
   test("a corrupt index.json is quarantined and the next load rebuilds the store from disk", async () => {

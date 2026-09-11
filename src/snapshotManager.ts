@@ -1846,6 +1846,74 @@ export class SnapshotManager {
   }
 
   /**
+   * The snapshots pruning would like to delete: the `excess` oldest, oldest
+   * first. This is the intent, before safety: whether they can actually go
+   * depends on what survives referencing them, which is why the pure
+   * `selectPrunableSnapshots` above still has the final say.
+   */
+  private pruneCandidates(maxSnapshots: number): string[] {
+    return [...this.snapshots]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(0, Math.max(0, this.snapshots.length - maxSnapshots))
+      .map((s) => s.id);
+  }
+
+  /**
+   * Rewrites the delta entries of survivors that point into `pruned` into full
+   * content, resolving while the chain is still intact, so deleting those bases
+   * loses nothing. Cancels on the first unresolvable entry: a partially
+   * materialized list must not be persisted, so the caller reverts.
+   *
+   * Only entries carrying a `baseSnapshotId` are deltas. A `{ deleted: true }`
+   * marker records that the file was gone at that point and has no base to
+   * repair, so it keeps its marker.
+   */
+  private async materializeDependents(
+    pruned: Set<string>,
+  ): Promise<{ ok: boolean; touched: Snapshot[] }> {
+    const originals = new Map<string, Snapshot['files']>();
+    const touched: Snapshot[] = [];
+    for (const snapshot of this.snapshots) {
+      if (pruned.has(snapshot.id)) {
+        continue;
+      }
+      let dirty = false;
+      for (const [relativePath, fileData] of Object.entries(snapshot.files)) {
+        if (!fileData.baseSnapshotId || !pruned.has(fileData.baseSnapshotId)) {
+          continue;
+        }
+        const content = await this.storage.getSnapshotFileContent(
+          snapshot.id,
+          relativePath,
+          this.snapshots,
+        );
+        if (content === null) {
+          log(
+            `Prune: cannot materialize ${relativePath} of ${snapshot.id} (its base is unreadable); leaving the store untouched.`,
+          );
+          for (const [id, files] of originals) {
+            const target = this.snapshots.find((s) => s.id === id);
+            if (target) {
+              target.files = files;
+            }
+          }
+          return { ok: false, touched: [] };
+        }
+        if (!originals.has(snapshot.id)) {
+          // Shallow copy is enough: only the rewritten keys are replaced below.
+          originals.set(snapshot.id, { ...snapshot.files });
+        }
+        snapshot.files[relativePath] = { content };
+        dirty = true;
+      }
+      if (dirty) {
+        touched.push(snapshot);
+      }
+    }
+    return { ok: true, touched };
+  }
+
+  /**
    * Enforce maximum snapshot limit using config and storage.
    */
   private async enforceSnapshotLimit() {
@@ -1853,6 +1921,20 @@ export class SnapshotManager {
 
     if (this.snapshots.length <= maxSnapshots) {
       return; // Limit not exceeded
+    }
+
+    // Try to make the excess prunable by materializing the survivors that
+    // depend on it. Success means the pure selector sees no dangling
+    // references; failure means we persist nothing and fall back to
+    // today's refusal behavior.
+    const candidates = this.pruneCandidates(maxSnapshots);
+    const materialization = await this.materializeDependents(
+      new Set(candidates),
+    );
+    if (materialization.ok) {
+      for (const snapshot of materialization.touched) {
+        await this.storage.saveSnapshotData(snapshot);
+      }
     }
 
     const removableIds = selectPrunableSnapshots(this.snapshots, maxSnapshots);
