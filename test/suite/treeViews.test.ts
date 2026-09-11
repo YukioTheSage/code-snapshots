@@ -1,7 +1,11 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 
 const EXPECTED_ID = process.env.CODELAPSE_EXPECTED_ID as string;
+const FIXTURE_ROOT = process.env.CODELAPSE_FIXTURE_ROOT as string;
+const SRC_FILE = path.join(FIXTURE_ROOT ?? "", "src", "app.ts");
 
 /**
  * The tree providers are `SnapshotTreeDataProvider` instances from
@@ -19,6 +23,11 @@ const EXPECTED_ID = process.env.CODELAPSE_EXPECTED_ID as string;
  *
  * These helpers walk that real structure so every assertion can be bound to a
  * specific snapshot id the test itself created or destroyed.
+ *
+ * Every test also establishes its own preconditions: the empty-state tests drain
+ * the store with `emptyStore(api)`, and the auto-snapshot test edits the fixture
+ * source itself, because an auto-tagged snapshot is refused when nothing changed
+ * and must therefore never depend on incidental churn elsewhere in the tree.
  */
 type Provider = {
   getChildren(element?: any): Thenable<any[]>;
@@ -67,6 +76,56 @@ async function emptyStore(api: any): Promise<void> {
     remaining.length,
     0,
     `failed to empty the store; ${remaining.length} snapshot(s) remain`,
+  );
+}
+
+/**
+ * Assert that a provider reaches exactly this set of snapshot ids.
+ *
+ * `ids.includes(x)` / `!ids.includes(x)` accept a provider that additionally
+ * renders a duplicate row, a stale snapshot, or a snapshot of the other type.
+ * Comparing sorted id sets rejects all three while staying insensitive to group
+ * order and to newest/oldest-first order inside a group.
+ */
+function assertSameIds(
+  actual: string[],
+  expected: string[],
+  message: string,
+): void {
+  assert.deepStrictEqual(
+    [...actual].sort(),
+    [...expected].sort(),
+    `${message} — expected exactly ${JSON.stringify(
+      expected,
+    )}, saw ${JSON.stringify(actual)}`,
+  );
+}
+
+/**
+ * Append a line to the fixture's `src/app.ts`, and prove that it changed.
+ *
+ * An auto-tagged snapshot is refused when nothing changed: `takeSnapshot`
+ * returns `{created:false, reason:'no-changes'}` for it. A test that takes one
+ * therefore has to own a real workspace change instead of relying on incidental
+ * churn elsewhere in the scanned tree. The write is asserted, not assumed, so a
+ * silently failing append surfaces here rather than as a confusing
+ * `outcome.success` failure in the caller.
+ */
+function appendFixtureChange(marker: string): void {
+  assert.ok(FIXTURE_ROOT, "CODELAPSE_FIXTURE_ROOT is not set");
+  const before = fs.readFileSync(SRC_FILE, "utf8");
+  fs.appendFileSync(SRC_FILE, `\n${marker}\n`);
+  const after = fs.readFileSync(SRC_FILE, "utf8");
+  assert.notStrictEqual(
+    after,
+    before,
+    `fixture file ${SRC_FILE} did not change after appending ${JSON.stringify(
+      marker,
+    )}`,
+  );
+  assert.ok(
+    after.includes(marker),
+    `marker ${JSON.stringify(marker)} missing from ${SRC_FILE} after append`,
   );
 }
 
@@ -119,6 +178,11 @@ suite("Tree views", function () {
   });
 
   test("empty-state row is inert and carries no snapshot payload", async () => {
+    // Establish the precondition here rather than inheriting it from tests 1-2:
+    // an inert-row assertion against a populated view would pass while testing
+    // the wrong item entirely.
+    await emptyStore(api);
+
     const roots = await manualProvider.getChildren();
     assert.equal(
       roots.length,
@@ -168,11 +232,10 @@ suite("Tree views", function () {
     );
 
     const ids = await reachableSnapshotIds(manualProvider);
-    assert.ok(
-      ids.includes(manualId),
-      `created snapshot ${manualId} not reachable in manual tree; reachable=${JSON.stringify(
-        ids,
-      )}`,
+    assertSameIds(
+      ids,
+      [manualId],
+      "manual view should hold exactly the snapshot this test created",
     );
   });
 
@@ -220,6 +283,11 @@ suite("Tree views", function () {
         autoIds,
       )}`,
     );
+    assertSameIds(
+      autoIds,
+      [],
+      "auto view should hold no snapshots while only a manual one exists",
+    );
     // At this point the manual snapshot is the only thing in the store, so the
     // auto view must genuinely be in its empty state.
     const labels = await rootLabels(autoProvider);
@@ -233,6 +301,14 @@ suite("Tree views", function () {
   });
 
   test("auto provider shows an auto-tagged snapshot and hides it from manual", async () => {
+    // The `auto` tag makes `takeSnapshot` refuse a no-op snapshot, returning
+    // `{created:false, reason:'no-changes'}`. This test must therefore own the
+    // change it depends on. It previously passed only by accident: the
+    // fixture's snapshot store lives inside the scanned tree and is not
+    // excluded, so the store's own index.json changed between snapshots. That
+    // incidental churn disappears the moment the store is ignored properly.
+    appendFixtureChange(`// tree-auto change ${Date.now()}`);
+
     const outcome = await api.takeSnapshot({
       description: "tree-auto",
       tags: ["auto"],
@@ -250,6 +326,11 @@ suite("Tree views", function () {
       `auto snapshot ${autoId} not reachable in auto tree; reachable=${JSON.stringify(
         autoIds,
       )}`,
+    );
+    assertSameIds(
+      autoIds,
+      [autoId],
+      "auto view should hold exactly the auto snapshot",
     );
 
     const autoItem = (await reachableSnapshotItems(autoProvider)).find(
@@ -272,16 +353,53 @@ suite("Tree views", function () {
         manualIds,
       )}`,
     );
+    assertSameIds(
+      manualIds,
+      [manualId],
+      "manual view should hold exactly the manual snapshot",
+    );
   });
 
-  test("getTreeItem is identity: it returns the element unchanged", async () => {
+  test("getTreeItem returns a row for the element's own snapshot", async () => {
     const items = await reachableSnapshotItems(autoProvider);
     assert.ok(items.length > 0, "expected the auto view to be populated here");
     for (const item of items) {
-      assert.strictEqual(
-        autoProvider.getTreeItem(item),
-        item,
-        "getTreeItem should return the same object it was given",
+      const rendered = autoProvider.getTreeItem(item);
+      assert.ok(rendered, "getTreeItem returned nothing");
+      // The observable contract: the row the view renders identifies the same
+      // snapshot as the element and can be displayed. Object identity is
+      // deliberately NOT asserted -- rebuilding an equivalent TreeItem per call
+      // is a legitimate implementation that identity would reject.
+      assert.equal(
+        rendered.id,
+        item.snapshotId,
+        "rendered row should be identified by the element's snapshot id",
+      );
+      assert.equal(
+        rendered.contextValue,
+        "snapshotItem",
+        "rendered row should still be a snapshot item",
+      );
+      assert.equal(
+        rendered.contextValue,
+        item.contextValue,
+        "rendered row should keep the element's contextValue",
+      );
+      assert.equal(
+        typeof rendered.label,
+        "string",
+        `rendered row should carry a plain label, saw ${JSON.stringify(
+          rendered.label,
+        )}`,
+      );
+      assert.ok(
+        String(rendered.label).length > 0,
+        "rendered row should carry a non-empty label",
+      );
+      assert.equal(
+        rendered.label,
+        item.label,
+        "rendered row should show the element's label",
       );
     }
   });
