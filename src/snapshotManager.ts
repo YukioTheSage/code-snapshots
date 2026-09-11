@@ -148,6 +148,29 @@ export function selectPrunableSnapshots(
   return selected.map((s) => s.id);
 }
 
+/**
+ * Coerce a caller-supplied `selectedFiles` into the list a capture reads.
+ *
+ * The value arrives from API payloads, editor commands and the CLI, so its
+ * declared type is a promise rather than a fact: a payload can carry a single
+ * path as a string. The capture filter tested it for truthiness while the
+ * deletion guard tested `Array.isArray`, and those two disagree for exactly that
+ * case: a truthy non-array makes the filter run `new Set('src/app.ts')` -- a set
+ * of characters, matching no path, so the capture holds nothing -- while the
+ * guard reads the empty result as a whole-tree capture and tombstones every file
+ * in the workspace. Normalising once, where the request options are consumed, is
+ * what keeps the filter, the guard and the recorded snapshot from disagreeing.
+ */
+export function normalizeSelectedFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  );
+}
+
 export class SnapshotManager {
   private snapshots: Snapshot[] = [];
 
@@ -323,6 +346,10 @@ export class SnapshotManager {
       throw new Error('No workspace folder open');
     }
 
+    // Resolved once, before anything reads the selection: the capture filter,
+    // the deletion guard and the recorded snapshot must all see the same list.
+    const selectedFiles = normalizeSelectedFiles(contextOptions.selectedFiles);
+
     // Create a new snapshot
     const timestamp = Date.now();
     const id = `snapshot-${timestamp}-${crypto.randomBytes(4).toString('hex')}`;
@@ -385,7 +412,7 @@ export class SnapshotManager {
       isFavorite: contextOptions.isFavorite || false,
       // Add selective snapshot fields
       isSelective: contextOptions.isSelective || false,
-      selectedFiles: contextOptions.selectedFiles || [],
+      selectedFiles,
       files: {},
     };
 
@@ -442,17 +469,11 @@ export class SnapshotManager {
     log(
       `Final file count after combining negated rules and local filtering: ${finalFiles.length}`,
     );
-    if (
-      snapshot.isSelective &&
-      snapshot.selectedFiles &&
-      snapshot.selectedFiles.length > 0
-    ) {
-      log(
-        `Applying selective filter for ${snapshot.selectedFiles.length} files`,
-      );
+    if (snapshot.isSelective && selectedFiles.length > 0) {
+      log(`Applying selective filter for ${selectedFiles.length} files`);
 
       // Create a set of selected file paths for faster lookup
-      const selectedPathsSet = new Set(snapshot.selectedFiles);
+      const selectedPathsSet = new Set(selectedFiles);
 
       // Filter to only include selected files
       finalFiles = finalFiles.filter((fileUri) => {
@@ -620,10 +641,12 @@ export class SnapshotManager {
     // is built from that filtered list, so every unselected file would look
     // "gone" here -- a lie about the workspace that restore then acts on by
     // deleting the user's files. Only a whole-tree capture can report deletions.
+    //
+    // `selectedFiles` is the normalised list resolved at the top of this method,
+    // so "empty" here means the caller supplied no usable selection rather than
+    // "whatever shape the payload happened to have".
     const isSelective =
-      snapshot.isSelective === true &&
-      Array.isArray(snapshot.selectedFiles) &&
-      snapshot.selectedFiles.length > 0;
+      snapshot.isSelective === true && selectedFiles.length > 0;
 
     if (baseSnapshot && !isSelective) {
       let deletedFilesCount = 0;
