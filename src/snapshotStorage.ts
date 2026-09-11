@@ -21,6 +21,28 @@ import {
   validateSnapshotIndex,
 } from './validation/snapshotValidation';
 
+// Map of normalized relative paths -> original keys.
+const normalizedFileKeyCaches = new WeakMap<
+  Record<string, unknown>,
+  Map<string, string>
+>();
+
+function normalizeFileKey(p: string): string {
+  return p.replace(/\\/g, '/').toLowerCase();
+}
+
+function getNormalizedFileKeyMap(files: Record<string, unknown>) {
+  let map = normalizedFileKeyCaches.get(files);
+  if (!map) {
+    map = new Map<string, string>();
+    for (const key of Object.keys(files)) {
+      map.set(normalizeFileKey(key), key);
+    }
+    normalizedFileKeyCaches.set(files, map);
+  }
+  return map;
+}
+
 // Interface for the snapshot index file structure
 interface SnapshotIndex {
   snapshots: Array<{ id: string; timestamp: number; description: string }>;
@@ -1052,7 +1074,18 @@ export class SnapshotStorage {
         return null;
       }
 
-      const fileData = snapshot.files[relativePath];
+      let fileData = snapshot.files[relativePath];
+      if (!fileData) {
+        // Snapshot file keys carry the platform's separator (Windows writes
+        // them with backslashes), while callers normally pass forward-slash
+        // relative paths from vscode.workspace.asRelativePath. Keep
+        // normalization O(1) per key instead of scanning on every lookup.
+        const normalizedLookup = getNormalizedFileKeyMap(snapshot.files);
+        const actualKey = normalizedLookup.get(normalizeFileKey(relativePath));
+        fileData = actualKey
+          ? snapshot.files[actualKey]
+          : (undefined as unknown as typeof fileData);
+      }
       if (!fileData) {
         logVerbose(`File ${relativePath} not found in snapshot ${snapshotId}.`);
         this.updateCache(cacheKey, null);
