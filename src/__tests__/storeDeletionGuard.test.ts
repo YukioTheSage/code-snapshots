@@ -110,14 +110,16 @@ describe('applySnapshotRestore store-deletion guard', () => {
     (manager as any).storage = storage;
     deleteSpy = storage.deleteWorkspaceFile;
 
-    (vscode.workspace as any).findFiles = jest.fn().mockResolvedValue([
-      vscode.Uri.file(path.join(workspaceRoot, 'src', 'app.ts')),
-      vscode.Uri.file(path.join(workspaceRoot, 'extra.ts')),
-      vscode.Uri.file(path.join(storeDirectory, 'index.json')),
-      vscode.Uri.file(
-        path.join(storeDirectory, 'snapshot-a', 'snapshot.json'),
-      ),
-    ]);
+    (vscode.workspace as any).findFiles = jest
+      .fn()
+      .mockResolvedValue([
+        vscode.Uri.file(path.join(workspaceRoot, 'src', 'app.ts')),
+        vscode.Uri.file(path.join(workspaceRoot, 'extra.ts')),
+        vscode.Uri.file(path.join(storeDirectory, 'index.json')),
+        vscode.Uri.file(
+          path.join(storeDirectory, 'snapshot-a', 'snapshot.json'),
+        ),
+      ]);
 
     (manager as any).snapshots = [
       {
@@ -141,7 +143,9 @@ describe('applySnapshotRestore store-deletion guard', () => {
     expect(result.refusedDeletions).toEqual([storeIndexRel, storePayloadRel]);
     expect(result.deleted).toEqual(['extra.ts']);
     expect(deleteSpy).toHaveBeenCalledTimes(1);
-    expect(deleteSpy).toHaveBeenCalledWith(path.join(workspaceRoot, 'extra.ts'));
+    expect(deleteSpy).toHaveBeenCalledWith(
+      path.join(workspaceRoot, 'extra.ts'),
+    );
   });
 
   it('leaves the store files on disk', async () => {
@@ -184,7 +188,11 @@ describe('applySnapshotRestore store-deletion guard', () => {
       // A workspace file that merely resembles a store path is ordinary
       // content: the guard must not turn into a blanket refusal to delete.
       expect(result.refusedDeletions).toEqual([]);
-      expect(result.deleted).toEqual(['extra.ts', storeIndexRel, storePayloadRel]);
+      expect(result.deleted).toEqual([
+        'extra.ts',
+        storeIndexRel,
+        storePayloadRel,
+      ]);
     } finally {
       await fsPromises.rm(outsideStore, { recursive: true, force: true });
     }
@@ -192,10 +200,12 @@ describe('applySnapshotRestore store-deletion guard', () => {
 
   it('treats a differently-cased store path as the store on Windows only', async () => {
     const caseVariantRel = path.join('.Snapshots-Test', 'index.json');
-    (vscode.workspace as any).findFiles = jest.fn().mockResolvedValue([
-      vscode.Uri.file(path.join(workspaceRoot, 'extra.ts')),
-      vscode.Uri.file(path.join(workspaceRoot, caseVariantRel)),
-    ]);
+    (vscode.workspace as any).findFiles = jest
+      .fn()
+      .mockResolvedValue([
+        vscode.Uri.file(path.join(workspaceRoot, 'extra.ts')),
+        vscode.Uri.file(path.join(workspaceRoot, caseVariantRel)),
+      ]);
 
     const result = await manager.applySnapshotRestore('snapshot-a');
 

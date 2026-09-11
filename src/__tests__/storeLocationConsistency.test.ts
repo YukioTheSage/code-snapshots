@@ -21,7 +21,9 @@ jest.mock('../config', () => ({
 describe('scan store location', () => {
   const workspaceRoot = path.join(path.sep, 'ws');
 
-  function managerWithStorage(storage: Record<string, unknown>): SnapshotManager {
+  function managerWithStorage(
+    storage: Record<string, unknown>,
+  ): SnapshotManager {
     const manager = new SnapshotManager(null);
     (manager as any).storage = storage;
     return manager;
@@ -42,7 +44,8 @@ describe('scan store location', () => {
   it('falls back to the configured location when the store is outside the workspace', () => {
     const manager = managerWithStorage({
       getWorkspaceRoot: () => workspaceRoot,
-      getSnapshotDirectory: () => path.join(path.sep, 'elsewhere', '.snapshots'),
+      getSnapshotDirectory: () =>
+        path.join(path.sep, 'elsewhere', '.snapshots'),
     });
 
     // A store outside the workspace is unreachable by a workspace scan, so the

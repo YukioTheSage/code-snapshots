@@ -1060,7 +1060,11 @@ export class SnapshotManager {
     const storeDirectory = this.storage.getSnapshotDirectory();
     if (workspaceRoot && storeDirectory) {
       const relative = path.relative(workspaceRoot, storeDirectory);
-      if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+      if (
+        relative &&
+        !relative.startsWith('..') &&
+        !path.isAbsolute(relative)
+      ) {
         return relative;
       }
     }
