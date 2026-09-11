@@ -223,6 +223,24 @@ export class SnapshotCommands {
         id,
         skipConfirm: !!options?.yes,
       });
+
+      // `deleteSnapshot` reports a refusal by *returning* `false` rather than
+      // throwing: the extension answers `false` for an unknown id and for a
+      // confirmation the user declined. Reporting success unconditionally made
+      // the CLI print "deleted successfully" and exit 0 for a snapshot it
+      // never removed. Standalone mode resolves `undefined` (and the core
+      // throws for an unknown id), so only an explicit `false` is a failure.
+      if (result === false) {
+        printResult(
+          {
+            success: false,
+            error: `Snapshot ${id} was not deleted: it does not exist, or the confirmation was declined. Pass -y/--yes to skip the confirmation.`,
+          },
+          options,
+        );
+        return;
+      }
+
       printResult(
         {
           success: true,
