@@ -51,11 +51,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Lint
-        # The warning count is reported in the job summary rather than gated,
-        # because the 421 remaining warnings are real but pre-existing. Gating
-        # on them would be red on arrival; reporting them means the number
-        # cannot grow unnoticed between runs.
+        # `set -o pipefail` is load-bearing. The default shell for `run:` is
+        # `bash -e {0}`, which has no pipefail, so this pipeline's status was
+        # `tee`'s -- always 0 -- and eslint errors could not fail this job.
+        # With pipefail, errors fail the step. Warnings do not: the remaining
+        # warnings are real but pre-existing, so they are reported rather than
+        # gated. The summary line below prints the count each run, so drift is
+        # visible without a hard-coded number here that goes stale.
         run: |
+          set -o pipefail
           npm run lint 2>&1 | tee /tmp/lint.txt
           echo "### Extension lint warnings: $(grep -c ' warning ' /tmp/lint.txt || true)" >> "$GITHUB_STEP_SUMMARY"
       # Must be `format:check`, not `format -- --check`. The `format` script is
@@ -96,7 +100,12 @@ jobs:
       - name: Lint
         # Added alongside the formatting fix: cli/ had 43 eslint errors that no
         # gate ever caught, because this job only type-checked, tested and built.
+        # `set -o pipefail` is load-bearing here for the same reason as in the
+        # extension job: without it the step's status is `tee`'s, always 0, so
+        # errors could not fail the job. Errors now fail the step; warnings are
+        # only counted, in the summary line below.
         run: |
+          set -o pipefail
           npm run lint 2>&1 | tee /tmp/lint-cli.txt
           echo "### CLI lint warnings: $(grep -c ' warning ' /tmp/lint-cli.txt || true)" >> "$GITHUB_STEP_SUMMARY"
       - name: Format check

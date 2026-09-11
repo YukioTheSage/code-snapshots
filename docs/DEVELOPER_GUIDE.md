@@ -133,7 +133,7 @@ export async function activate(context: vscode.ExtensionContext) {
 **Key Methods**:
 - `takeSnapshot(options?)`: Creates new snapshots with optional context
 - `applySnapshotRestore(snapshotId)`: Restores workspace to snapshot state
-- `calculateRestoreChanges(snapshotId)`: Previews changes before restore
+- `calculateRestoreChanges(snapshot, workspaceRoot)`: Previews changes before restore
 - `deleteSnapshot(snapshotId)`: Removes snapshots and cleanup
 
 **Event System**:
