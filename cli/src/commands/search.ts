@@ -240,6 +240,24 @@ export class SearchCommands {
       };
 
       const results = await this.client.callApi('batchSearch', batchOpts);
+
+      // `handleBatchSearch` rejects an invalid batch by RETURNING a failed
+      // payload rather than throwing: it catches its own validation errors and
+      // answers `{success: false, error: {message, ...}}`, which the client
+      // resolves like any other result. Reporting that as `success: true`
+      // printed a rejected batch as a successful run of zero queries and exited 0.
+      if (results?.success === false) {
+        printResult(
+          {
+            success: false,
+            batchResults: results,
+            error: results?.error?.message ?? 'Batch search failed',
+          },
+          options,
+        );
+        return;
+      }
+
       printResult(
         {
           success: true,

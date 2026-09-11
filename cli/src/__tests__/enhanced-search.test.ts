@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { EnhancedSearchCommands } from '../commands/enhanced-search';
 import { UnifiedClient } from '../unifiedClient';
+import { getFailure, resetFailure } from '../exitState';
 
 // Mock the client
 jest.mock('../unifiedClient');
@@ -14,6 +15,9 @@ describe('EnhancedSearchCommands', () => {
     mockClient = new UnifiedClient() as unknown as jest.Mocked<UnifiedClient>;
     enhancedSearchCommands = new EnhancedSearchCommands(mockClient);
     consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    // The failure flag is process-wide, so a test that reports a failure must
+    // not decide the next test's starting state.
+    resetFailure();
   });
 
   afterEach(() => {
@@ -324,6 +328,44 @@ describe('EnhancedSearchCommands', () => {
         'Verify file path',
         'Validate query objects',
       ]);
+    });
+
+    it('should report a batch the extension rejected as a failure', async () => {
+      // `handleBatchSearch` catches its own validation errors and answers a
+      // failed payload (`{success:false, error:{message, ...}}`) instead of
+      // throwing, so the client resolves it like any other result. Reporting it
+      // as `success: true` printed a rejected batch as a successful run of zero
+      // queries and exited 0.
+      const rejected = {
+        success: false,
+        error: {
+          message: 'Invalid maxConcurrency: 0. Use a positive integer.',
+          code: 'BATCH_SEARCH_ERROR',
+          category: 'batch_search_error',
+          severity: 'high',
+          retryable: false,
+        },
+        totalQueries: 1,
+        successfulQueries: 0,
+        failedQueries: 1,
+        results: [],
+      };
+
+      jest.doMock('fs', () => ({
+        readFileSync: jest
+          .fn()
+          .mockReturnValue(JSON.stringify([{ id: 'q1', query: 'test' }])),
+      }));
+
+      mockClient.callApi.mockResolvedValue(rejected);
+
+      await enhancedSearchCommands.batch('queries.json', {});
+
+      const payload = JSON.parse(String(consoleSpy.mock.calls[0][0]));
+
+      expect(payload.success).toBe(false);
+      expect(payload.error).toBe(rejected.error.message);
+      expect(getFailure()).toBe(true);
     });
   });
 
