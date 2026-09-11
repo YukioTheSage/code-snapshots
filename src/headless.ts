@@ -42,6 +42,10 @@
  * `vectorDatabaseService` / `embeddingService`); it keeps working so existing
  * launchers and documentation stay valid. `CODELAPSE_DISABLE_INTERACTIVE_UI`
  * is the general form covering every prompt, not just credential ones.
+ *
+ * It also covers one-way UI side effects no human can read — revealing an
+ * output channel is the one in use, see the header note on why a reveal is
+ * worse than a prompt in a host that never closes what it opens.
  */
 export function isInteractiveUiDisabled(): boolean {
   return (
