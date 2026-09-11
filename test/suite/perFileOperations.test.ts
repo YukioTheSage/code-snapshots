@@ -34,6 +34,13 @@ const EMPTY_SELECTION_KEPT_FILE = path.join(
   FIXTURE_ROOT ?? "",
   EMPTY_SELECTION_KEPT_REL,
 );
+/**
+ * A file the restore-preview test owns: created after the whole-tree capture it
+ * is absent from, and deleted inside that test, so the fixture is left as it was
+ * found.
+ */
+const PREVIEW_PROBE_REL = "preview-scope-probe.txt";
+const PREVIEW_PROBE_FILE = path.join(FIXTURE_ROOT ?? "", PREVIEW_PROBE_REL);
 
 /**
  * The key a snapshot records `rel` under.
@@ -652,6 +659,213 @@ suite("per-file snapshot operations", function () {
       // Both probes belong to this test: the fixture is left as it was found.
       fs.rmSync(EMPTY_SELECTION_DELETED_FILE, { force: true });
       fs.rmSync(EMPTY_SELECTION_KEPT_FILE, { force: true });
+    }
+  });
+
+  /**
+   * The preview the restore confirmation dialog renders is a promise about what
+   * applying the restore will do, so it must not advertise deletions that apply
+   * will not perform.
+   *
+   * `applySnapshotRestoreInternal` skips its deletion phase for a genuinely
+   * selective snapshot: such a capture holds no entry at all for the files it
+   * never looked at, so their absence is no evidence that they are extraneous.
+   * `calculateRestoreChanges` still read that same absence as a deletion and
+   * listed every uncaptured workspace file as `- file` / "Deleted", so the user
+   * was told N files would go and then none did.
+   */
+  test("the restore preview does not promise deletions a selective restore will not perform", async () => {
+    const appKey = snapshotKey(APP_REL);
+    const otherKey = snapshotKey(OTHER_REL);
+
+    assertAppMatchesSnapshot("precondition");
+    assert.ok(
+      fs.existsSync(OTHER_FILE),
+      `precondition: ${OTHER_REL} is missing, so there is no uncaptured file for the preview to over-report`,
+    );
+    const workspaceRoot = manager.getWorkspaceRoot();
+    assert.ok(
+      workspaceRoot,
+      "precondition: the manager reports no workspace root, so no preview can be calculated",
+    );
+
+    // A full snapshot first: the selective capture below needs a base that
+    // really holds both files, and the preview resolves contents through it.
+    const full = await api.takeSnapshot({
+      description: "preview scope base",
+      silent: true,
+    });
+    assert.strictEqual(
+      full.success,
+      true,
+      `the full snapshot failed: ${JSON.stringify(full)}`,
+    );
+
+    // Capture a selective snapshot of ONE file. `isSelective` is not derived
+    // from `selectedFiles`: the snapshot is built as
+    // `isSelective: contextOptions.isSelective || false`, so both must be given.
+    const scope = await api.takeSnapshot({
+      description: "selective preview scope",
+      isSelective: true,
+      selectedFiles: [appKey],
+      silent: true,
+    });
+    assert.strictEqual(
+      scope.success,
+      true,
+      `the selective snapshot failed: ${JSON.stringify(scope)}`,
+    );
+
+    // Preconditions: this really is the selective capture the preview is about,
+    // it holds the file it selected, and the file it never looked at has no
+    // entry at all in it. That absence is what the preview must stop reading as
+    // a deletion -- with a `{deleted:true}` marker present the preview would
+    // have something real to report and the assertion below would be vacuous.
+    assert.strictEqual(
+      scope.snapshot.isSelective,
+      true,
+      "precondition: the snapshot is not selective, so it was a full capture",
+    );
+    assert.deepStrictEqual(
+      scope.snapshot.selectedFiles,
+      [appKey],
+      "precondition: the snapshot did not record the file this test selected",
+    );
+    assert.ok(
+      scope.snapshot.files[appKey],
+      `precondition: the selected file is missing from the snapshot; recorded keys: ${JSON.stringify(
+        Object.keys(scope.snapshot.files),
+      )}`,
+    );
+    assert.strictEqual(
+      scope.snapshot.files[otherKey],
+      undefined,
+      `precondition: the selective snapshot has an entry for ${OTHER_REL} (${JSON.stringify(
+        scope.snapshot.files[otherKey],
+      )}), so its absence is not what the preview below would be reporting`,
+    );
+
+    try {
+      // Move the captured file away from the snapshot, so the preview has to
+      // report something for it. Without this the preview is legitimately
+      // empty once the deletions are gone, and "no deletions reported" would be
+      // true for a reason that has nothing to do with the fix.
+      fs.appendFileSync(APP_FILE, `\n${NOISE}\n`);
+      assert.ok(
+        fs.readFileSync(APP_FILE, "utf8").includes(NOISE),
+        "precondition: the edit to src/app.ts did not land",
+      );
+
+      const changes = await manager.calculateRestoreChanges(
+        scope.snapshot,
+        workspaceRoot,
+      );
+      const deleted = changes.filter((c: any) => c.status === "D");
+
+      // The bug: the preview listed every workspace file the selective capture
+      // never looked at -- .vscode/settings.json among them -- as "Deleted",
+      // and applying that same restore deletes none of them (Task 2).
+      assert.strictEqual(
+        deleted.length,
+        0,
+        `the preview promised deletions the selective restore will not perform: ${JSON.stringify(
+          deleted,
+        )}`,
+      );
+      // Non-vacuity: the preview did run and did compare the file the snapshot
+      // captured against it (`~`, "Modified"), so the result above is not empty
+      // for the wrong reason -- an implementation that returned no changes at
+      // all would fail here rather than pass the assertion above.
+      assert.ok(
+        changes.some((c: any) => c.relativePath === appKey && c.status === "M"),
+        `the preview did not report the captured file ${APP_REL} as modified, so the assertion above proves nothing: ${JSON.stringify(
+          changes,
+        )}`,
+      );
+    } finally {
+      // The suite's other tests assert src/app.ts matches the snapshot.
+      fs.writeFileSync(APP_FILE, appAtSnapshot, "utf8");
+    }
+  });
+
+  /**
+   * The other half of the preview predicate, and the reason it is not spelled
+   * `isSelective` alone: a rule-based producer emits `isSelective: true` with an
+   * EMPTY `selectedFiles` when a rule matches nothing, and the capture side
+   * treats that as a whole-tree capture -- its restore really does delete files
+   * it does not hold. A preview that skipped those would hide deletions the
+   * restore performs, which is the same lie in the other direction.
+   */
+  test("the preview still reports deletions for a whole-tree capture with an empty selection", async () => {
+    const probeKey = snapshotKey(PREVIEW_PROBE_REL);
+    const probeContent = "// created after the whole-tree capture\n";
+
+    assert.strictEqual(
+      fs.existsSync(PREVIEW_PROBE_FILE),
+      false,
+      `precondition: ${PREVIEW_PROBE_REL} already exists, so this test cannot tell whether it was created after the capture`,
+    );
+    const workspaceRoot = manager.getWorkspaceRoot();
+    assert.ok(
+      workspaceRoot,
+      "precondition: the manager reports no workspace root, so no preview can be calculated",
+    );
+
+    try {
+      const rule = await api.takeSnapshot({
+        description: "whole-tree preview base",
+        isSelective: true,
+        selectedFiles: [],
+        silent: true,
+      });
+      assert.strictEqual(
+        rule.success,
+        true,
+        `the empty-selection snapshot failed: ${JSON.stringify(rule)}`,
+      );
+      assert.strictEqual(
+        rule.snapshot.isSelective,
+        true,
+        "precondition: the snapshot does not carry isSelective: true",
+      );
+      assert.deepStrictEqual(
+        rule.snapshot.selectedFiles,
+        [],
+        "precondition: the selection is not empty, so the capture below is not the whole-tree case this test is about",
+      );
+
+      // Created only now: no capture above can hold it, so "absent from the
+      // snapshot" is a deletion this whole-tree snapshot really performs.
+      fs.writeFileSync(PREVIEW_PROBE_FILE, probeContent, "utf8");
+      await waitFor(
+        `${PREVIEW_PROBE_REL} to become visible to workspace.findFiles`,
+        async () =>
+          (await vscode.workspace.findFiles(`**/${PREVIEW_PROBE_REL}`)).length ===
+          1
+            ? true
+            : undefined,
+      );
+      assert.strictEqual(
+        rule.snapshot.files[probeKey],
+        undefined,
+        `precondition: the snapshot already holds ${PREVIEW_PROBE_REL}, so its absence is not what the preview reports`,
+      );
+
+      const changes = await manager.calculateRestoreChanges(
+        rule.snapshot,
+        workspaceRoot,
+      );
+      const deleted = changes.filter((c: any) => c.status === "D");
+
+      assert.ok(
+        deleted.some((c: any) => c.relativePath === probeKey),
+        `the preview stopped reporting deletions for a whole-tree capture: ${PREVIEW_PROBE_REL} is absent from the snapshot and the restore will delete it, but the preview reported ${JSON.stringify(
+          deleted,
+        )}`,
+      );
+    } finally {
+      // The probe belongs to this test: the fixture is left as it was found.
+      fs.rmSync(PREVIEW_PROBE_FILE, { force: true });
     }
   });
 });

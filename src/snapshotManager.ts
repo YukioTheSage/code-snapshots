@@ -762,6 +762,16 @@ export class SnapshotManager {
   > {
     logVerbose(`Calculating changes for snapshot ${snapshot.id}`);
 
+    // Restoring a selective snapshot touches only the files it captured
+    // (applySnapshotRestoreInternal), so the preview must not advertise
+    // deletions of files the snapshot never looked at. The predicate is the
+    // same one the capture guard uses: a rule-based snapshot with an empty
+    // selection is a whole-tree capture and keeps the old preview behavior.
+    const isSelectiveCapture =
+      snapshot.isSelective === true &&
+      Array.isArray(snapshot.selectedFiles) &&
+      snapshot.selectedFiles.length > 0;
+
     // 1. Get current workspace files (using existing filtering logic)
     // TODO: Consider extracting this file filtering logic into a reusable private method
     // Configured store location, as in takeSnapshotInternal: the store is not
@@ -914,6 +924,13 @@ export class SnapshotManager {
         expectedSnapshotFiles.get(relativePath)?.deleted
       ) {
         // File exists in workspace but not in snapshot (or marked deleted): Deletion
+        if (isSelectiveCapture && !expectedSnapshotFiles.has(relativePath)) {
+          // Not captured, therefore not deleted by apply: omit it from the
+          // preview. A path the snapshot explicitly marks `{deleted: true}` is
+          // present in `expectedSnapshotFiles`, so this guard does not fire for
+          // it and it is still reported.
+          continue;
+        }
         const workspacePath = ensureWithinDirectory(
           workspaceRoot,
           relativePath,
