@@ -67,6 +67,45 @@ describe('SnapshotManager current-snapshot pointer', () => {
     await reloaded.initialize();
     expect(reloaded.getCurrentSnapshot()?.id).toBe(first.id);
   });
+
+  it('keeps pointing at the same snapshot when an earlier one is deleted', async () => {
+    const first = await manager.takeSnapshot({ description: 'first' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'two');
+    await manager.takeSnapshot({ description: 'second' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'three');
+    const third = await manager.takeSnapshot({ description: 'third' });
+
+    await manager.setCurrentSnapshot(third.id);
+    await manager.deleteSnapshot(first.id);
+
+    // `first` moved every later position down by one; the pointer names the
+    // snapshot, so it must follow it rather than keep the old number.
+    const reloaded = new SnapshotManager(root);
+    await reloaded.initialize();
+    expect(reloaded.getCurrentSnapshot()?.id).toBe(third.id);
+  });
+
+  it('detaches instead of promoting a neighbour when the pointed-at snapshot goes', async () => {
+    const first = await manager.takeSnapshot({ description: 'first' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'two');
+    await manager.takeSnapshot({ description: 'second' });
+
+    await manager.setCurrentSnapshot(first.id);
+    await manager.deleteSnapshot(first.id);
+
+    // The next snapshot is a different state, so it is not a substitute for the
+    // one the workspace reflected.
+    expect(manager.getCurrentSnapshot()).toBeNull();
+  });
+
+  it('rejects an unknown id without touching the store', async () => {
+    const created = await manager.takeSnapshot({ description: 'first' });
+
+    await expect(manager.deleteSnapshot('snapshot-missing')).rejects.toThrow(
+      /not found/i,
+    );
+    expect(manager.getCurrentSnapshot()?.id).toBe(created.id);
+  });
 });
 
 describe('standalone navigate records its position', () => {

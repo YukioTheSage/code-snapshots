@@ -506,8 +506,27 @@ export class SnapshotManager {
   public async deleteSnapshot(snapshotId: string): Promise<void> {
     await this.ensureInitialized();
     await this.withWriteLock(async () => {
+      const removedIndex = this.snapshots.findIndex((s) => s.id === snapshotId);
+      if (removedIndex === -1) {
+        // Same message the storage layer raises, so callers that branch on it
+        // keep working; raised here so an unknown id never touches disk.
+        throw new Error(`Snapshot ${snapshotId} not found`);
+      }
+
       await this.storage.deleteSnapshot(snapshotId);
       this.snapshots = this.snapshots.filter((s) => s.id !== snapshotId);
+
+      // The pointer is a POSITION in `this.snapshots`, so removing an entry
+      // shifts every index after it. Deleting the pointed-at snapshot detaches
+      // the store instead of promoting a neighbour: the workspace reflected
+      // that snapshot, and the next one is a different state, not a substitute
+      // for it. Re-pointing is an explicit act -- see `setCurrentSnapshot`.
+      if (removedIndex < this.currentSnapshotIndex) {
+        this.currentSnapshotIndex -= 1;
+      } else if (removedIndex === this.currentSnapshotIndex) {
+        this.currentSnapshotIndex = -1;
+      }
+
       await this.saveSnapshotIndex();
     });
   }
