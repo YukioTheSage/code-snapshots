@@ -145,14 +145,13 @@ describe('ResultManager', () => {
             weight: 0.8,
           },
         ],
-        penaltyFactors: [
-          {
-            condition: 'hasCodeSmells',
-            multiplier: 0.8,
-            description: 'Penalize code with smells',
-            weight: 0.6,
-          },
-        ],
+        // Empty on purpose. This used to register a `hasCodeSmells` penalty
+        // (0.8 / 0.6), which Plan 08 deleted from `evaluateCondition`: an
+        // unknown condition falls through to `default: false`, so the entry
+        // penalized nothing while reading as if it did. The penalty arithmetic
+        // is exercised where it can be observed, in
+        // `src/__tests__/rankingHeuristics.test.ts`.
+        penaltyFactors: [],
       },
       filters: {
         qualityThreshold: 0.6,

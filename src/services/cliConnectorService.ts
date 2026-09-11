@@ -1451,6 +1451,16 @@ export class CliConnectorService implements vscode.Disposable {
 
       // Quality analysis implementation would go here
       // For now, return structured response
+      //
+      // Placeholder data (see docs/KNOWN_ISSUES.md, "Six commands return
+      // placeholder data"), but each field on the unit its name carries:
+      // `readability`, `testCoverage` and `duplication` are the 0-100
+      // score/risk fields their `readabilityScore` / `testCoverage` /
+      // `duplicationRisk` siblings are in `QualityMetrics`; `documentation` is
+      // that interface's one ratio field and `complexity` is a raw count.
+      // These were written 0.82 / 0.65 / 0.12 -- ratios in 0-100 fields -- next
+      // to an in-contract `maintainability: 75`, and `codelapse analyze quality`
+      // prints the payload verbatim, so a client saw two scales in one object.
       return {
         success: true,
         target,
@@ -1458,12 +1468,12 @@ export class CliConnectorService implements vscode.Disposable {
         qualityAnalysis: {
           overallScore: 78,
           metrics: {
-            readability: 0.82,
+            readability: 82,
             maintainability: 75,
-            testCoverage: 0.65,
+            testCoverage: 65,
             documentation: 0.58,
             complexity: 18,
-            duplication: 0.12,
+            duplication: 12,
           },
           trends: {
             improving: ['readability', 'testCoverage'],

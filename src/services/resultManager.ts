@@ -256,9 +256,15 @@ export class ResultManager {
 
     // Sort by composite score (descending). This belongs *after* the factors:
     // a boost or a penalty changes a result's composite, so sorting first
-    // returned results ordered by a composite they no longer had. The diluted
-    // factors made that rare rather than impossible -- `analyze_quality`'s
-    // configured 1.5x came through the old arithmetic unchanged.
+    // returned results ordered by a composite they no longer had. It was
+    // already reachable under the old arithmetic, which multiplied each
+    // multiplier by its own weight: `find_examples`' `hasTests` boost was
+    // 1.3 x 0.8 = 1.04 and `debug_issue`'s `hasErrorHandling` boost
+    // 1.4 x 0.9 = 1.26, and both conditions fire on ordinary source text.
+    // (`analyze_quality`'s 1.5x is *not* further evidence: its
+    // `highQualityScore` condition reads `toRatio(readabilityScore) > 0.8`
+    // against the constant `70` every result carries, so it cannot fire while
+    // the metrics are constant -- and it never has.)
     adjustedResults.sort((a, b) => b.compositeScore - a.compositeScore);
 
     // Filter by the minimum threshold FIRST, on the un-normalized composite.
@@ -866,6 +872,20 @@ export class ResultManager {
 
       return {
         ...item,
+        // The clamp is deliberate, and it has a consequence worth recording: a
+        // factor above 1 saturates here instead of renormalizing, so the top
+        // results of a boosting intent tie at exactly 1 and the sort in
+        // `rankResults` -- stable, and running on equal keys -- leaves them in
+        // input order rather than relevance order. With `DEFAULT_QUALITY_METRICS`
+        // and the 'relevance' weights a result's composite is roughly
+        // `0.6 * similarity + 0.275`, so `find_examples`' `hasTests` factor
+        // (1 + 0.3 * 0.8 = 1.24) saturates anything above `1 / 1.24 = 0.806`
+        // and `debug_issue`'s `hasErrorHandling` factor (1 + 0.4 * 0.9 = 1.36)
+        // anything above `1 / 1.36 = 0.735`. Renormalizing instead would keep a
+        // strict order up there, at the cost of making every score relative to
+        // the best result in the set -- which is what `normalizeScores` already
+        // does, once, after this. Clamp-versus-renormalize is a decision, not an
+        // accident; `rankingHeuristics.test.ts` pins the tie.
         compositeScore: Math.max(0, Math.min(1, adjustedScore)),
       };
     });

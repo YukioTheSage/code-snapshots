@@ -12,6 +12,7 @@ import {
   RankingStrategy,
   ProcessedQuery,
   QueryIntent,
+  PenaltyFactor,
   SearchStrategy,
   SearchResultExplanation,
   ConfidenceFactor,
@@ -1053,21 +1054,24 @@ export class SemanticSearchService implements vscode.Disposable {
   }
 
   /**
-   * Get penalty factors based on query intent
+   * Get penalty factors based on query intent.
+   *
+   * Returns none, deliberately. This method registered `hasCodeSmells` for
+   * `find_examples`, and nothing evaluates that condition: `evaluateCondition`
+   * on `ResultManager` has no case for it, so it fell through to its documented
+   * `default: false`. The registration was deleted from the live strategy
+   * builder (`queryProcessor.ts:getPenaltyFactors`) for the same reason -- a
+   * registration against a condition that cannot fire is configuration reading
+   * as a working safety net -- and this copy is not even reachable: no caller
+   * exists for this method. It can come back when a smell signal does; see
+   * docs/KNOWN_ISSUES.md, "Every penalty condition is unreachable".
    */
-  private getPenaltyFactors(intent: QueryIntent) {
-    const factors = [];
-
-    if (intent.primary === 'find_examples') {
-      factors.push({
-        condition: 'hasCodeSmells',
-        multiplier: 0.7,
-        description: 'Penalize code with smells for examples',
-        weight: 0.6,
-      });
-    }
-
-    return factors;
+  private getPenaltyFactors(intent: QueryIntent): PenaltyFactor[] {
+    // The parameter stays so the call shape is unchanged if a penalty returns;
+    // `void` is what says "nothing is selected on this any more" instead of
+    // leaving an unused argument for the linter to report.
+    void intent;
+    return [];
   }
 
   /**

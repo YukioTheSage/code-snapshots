@@ -1,5 +1,6 @@
 import { ResultManager } from '../services/resultManager';
 import { QueryProcessor } from '../services/queryProcessor';
+import { ProcessedQuery } from '../types/enhancedSearch';
 import {
   makeResult,
   options,
@@ -75,6 +76,78 @@ describe('boost and penalty arithmetic', () => {
 
     expect(zero / plain).toBeCloseTo(1, 5);
     expect(full / plain).toBeCloseTo(2, 5);
+  });
+});
+
+describe('the [0, 1] clamp', () => {
+  /**
+   * The two factors the registered intents actually apply, with the weight each
+   * `QueryProcessor.getBoostFactors` pairs them with. `rankOne` deliberately
+   * ranks a 0.395-composite result so the interpolation stays measurable below
+   * the clamp; these are the values that measure the clamp itself.
+   */
+  const SATURATING_FACTORS = [
+    {
+      // find_examples: 1 + 0.3 * 0.8 = 1.24
+      factor: {
+        condition: 'hasTests',
+        multiplier: 1.3,
+        weight: 0.8,
+        description: '',
+      },
+      multiplier: 1.24,
+    },
+    {
+      // debug_issue: 1 + 0.4 * 0.9 = 1.36
+      factor: {
+        condition: 'hasErrorHandling',
+        multiplier: 1.4,
+        weight: 0.9,
+        description: '',
+      },
+      multiplier: 1.36,
+    },
+  ];
+
+  it('ties two saturated results at 1 and leaves them in input order', async () => {
+    // The composite is 0.6 * similarity + 0.275 with this fixture (relevance
+    // weights, DEFAULT_QUALITY_METRICS, a fresh timestamp, usageFrequency 0.5
+    // and cyclomaticComplexity 5 at the intent's ideal), so both results below
+    // composite above 0.806 -- `find_examples`' saturation threshold -- and
+    // above 0.735, `debug_issue`'s. A lone result skips normalization (the
+    // range is 0), which is what makes its raw composite observable.
+    const manager = new ResultManager();
+    const plain = await manager.rankResults(
+      [makeResult('src/lower.ts', 0.94)],
+      processedQuery,
+      options,
+    );
+    expect(plain[0].rankingScore).toBeCloseTo(0.6 * 0.94 + 0.275, 5);
+
+    for (const { factor, multiplier } of SATURATING_FACTORS) {
+      // Both composites exceed 1 / multiplier, so both are clamped to exactly
+      // 1: the tie is what the clamp produces, and the stable sort keeps the
+      // input order -- lower-scoring result first -- rather than relevance
+      // order. This is asserted rather than left emergent, so a change to the
+      // clamp or to the factor arithmetic has to face it.
+      const query = {
+        ...processedQuery,
+        searchStrategy: { boostFactors: [factor], penaltyFactors: [] },
+      } as unknown as ProcessedQuery;
+
+      const ranked = await manager.rankResults(
+        [makeResult('src/lower.ts', 0.94), makeResult('src/higher.ts', 0.95)],
+        query,
+        options,
+      );
+
+      expect(plain[0].rankingScore).toBeGreaterThanOrEqual(1 / multiplier);
+      expect(ranked.map((r) => r.rankingScore)).toEqual([1, 1]);
+      expect(ranked.map((r) => r.filePath)).toEqual([
+        'src/lower.ts',
+        'src/higher.ts',
+      ]);
+    }
   });
 });
 
