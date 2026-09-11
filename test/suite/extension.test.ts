@@ -157,29 +157,26 @@ suite("CodeLapse Integration", function () {
     );
   });
 
-  test("deleteSnapshot removes it from the list or is confirm-gated", async function () {
+  test("deleteSnapshot removes it from the list", async () => {
     const outcome = await api.takeSnapshot({
       description: "IT-snapshot-3",
       silent: true,
     });
     assert.ok(outcome?.success, "IT-snapshot-3 not created");
     const id = outcome.snapshot.id;
-    try {
-      const ok = await api.deleteSnapshot(id);
-      if (ok === true) {
-        const after = await api.getSnapshots();
-        assert.ok(
-          !after.find((s: any) => s.id === id),
-          "deleted snapshot still listed",
-        );
-      } else {
-        // Expected in the automated host: the delete confirmation dialog
-        // cannot be shown, so the deletion is legitimately refused.)
-        this.skip();
-      }
-    } catch {
-      this.skip();
-    }
+
+    // `skipConfirm` is the production-supported non-interactive path
+    // (`src/snapshotManager.ts` gates the modal on it). The delete must
+    // genuinely report success -- skipping here on a false return, which this
+    // test used to do, made the only coverage of the delete path unfalsifiable.
+    const ok = await api.deleteSnapshot(id, { skipConfirm: true });
+    assert.strictEqual(ok, true, "deleteSnapshot reported failure");
+
+    const after = await api.getSnapshots();
+    assert.ok(
+      !after.find((s: any) => s.id === id),
+      "deleted snapshot still listed",
+    );
   });
 
   test("deleteSnapshot with unknown id reports failure", async () => {
