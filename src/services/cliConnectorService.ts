@@ -72,6 +72,21 @@ interface GitComparisonResult {
 }
 
 /**
+ * A batch stride of 0 or a negative value never advances its loop, so an
+ * unvalidated payload value could wedge the extension host. The value comes
+ * straight from the CLI request, so it is checked before use and the caller
+ * gets an error envelope instead of a hang.
+ */
+function assertValidMaxConcurrency(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+    return `Invalid maxConcurrency: ${String(
+      value,
+    )}. Expected a positive number.`;
+  }
+  return null;
+}
+
+/**
  * Service that enables CLI tools to communicate with the VSCode extension
  */
 export class CliConnectorService implements vscode.Disposable {
@@ -1884,6 +1899,12 @@ export class CliConnectorService implements vscode.Disposable {
         maxRetries = 2,
       } = data;
 
+      // Rejected before chunking: a stride of 0 or less never advances the loop.
+      const maxConcurrencyError = assertValidMaxConcurrency(maxConcurrency);
+      if (maxConcurrencyError) {
+        throw new Error(maxConcurrencyError);
+      }
+
       if (!operations || !Array.isArray(operations)) {
         throw new Error('operations array is required');
       }
@@ -2215,6 +2236,12 @@ export class CliConnectorService implements vscode.Disposable {
         maxRetries = 2,
         deduplicateQueries = true,
       } = data;
+
+      // Rejected before chunking: a stride of 0 or less never advances the loop.
+      const maxConcurrencyError = assertValidMaxConcurrency(maxConcurrency);
+      if (maxConcurrencyError) {
+        throw new Error(maxConcurrencyError);
+      }
 
       if (!queries || !Array.isArray(queries)) {
         throw new Error('queries array is required');

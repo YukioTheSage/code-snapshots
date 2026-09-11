@@ -33,6 +33,65 @@ jest.mock('../resultManager');
 jest.mock('../qualityMetricsCalculator');
 jest.mock('../relationshipAnalyzer');
 
+/**
+ * A stride of 0 or a negative value never advances the batch handlers' chunking
+ * loop (`i += maxConcurrency`), and that loop runs synchronously — so an
+ * unguarded handler spins forever and no assertion ever gets to run. This proxy
+ * caps how many times the loop may slice: an unguarded handler aborts with
+ * "chunking loop did not advance" (a fast, bounded test failure), while a
+ * handler that validates its stride never reaches the loop. `Array.isArray`
+ * still reports true for the proxy, so the handler's own input check is
+ * unaffected.
+ */
+function capChunkingIterations<T>(items: T[], cap: number): T[] {
+  let sliceCalls = 0;
+
+  return new Proxy(items, {
+    get(target, property, receiver) {
+      if (property === 'slice') {
+        return (start?: number, end?: number) => {
+          sliceCalls += 1;
+          if (sliceCalls > cap) {
+            throw new Error(
+              'chunking loop did not advance: aborted to keep the suite bounded',
+            );
+          }
+          return target.slice(start, end);
+        };
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+/**
+ * The defect is a hang, so an assertion alone cannot bound the call: it is
+ * raced against a timeout that fails the test instead of wedging the suite. The
+ * timer is cleared on the way out so a passing test does not linger.
+ */
+async function withHandlerTimeout(
+  invocation: Promise<any>,
+  reason: string,
+): Promise<any> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      invocation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`handler did not return: ${reason}`)),
+          2000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 describe('CliConnectorService - Batch Operations', () => {
   let cliConnectorService: CliConnectorService;
   let mockTerminalApiService: jest.Mocked<TerminalApiService>;
@@ -177,6 +236,154 @@ describe('CliConnectorService - Batch Operations', () => {
       expect(result.results).toHaveLength(10);
       expect(result.metadata.parallel).toBe(true);
       expect(result.metadata.maxConcurrency).toBe(3);
+    });
+
+    it('should reject maxConcurrency 0 instead of looping forever', async () => {
+      // A stride of 0 makes the chunking loop spin, so the operations array is
+      // capped and the call is bounded: without the guard this test fails fast
+      // ("chunking loop did not advance") instead of hanging the worker.
+      const data = {
+        operations: capChunkingIterations(
+          [
+            {
+              id: 'op1',
+              type: 'analyzeChunk',
+              data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+            },
+          ],
+          1,
+        ),
+        parallel: true,
+        maxConcurrency: 0,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze(data),
+        'maxConcurrency 0 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/maxConcurrency/i);
+      expect(result.error.message).toContain('0');
+    });
+
+    it('should reject a negative maxConcurrency', async () => {
+      const data = {
+        operations: capChunkingIterations(
+          [
+            {
+              id: 'op1',
+              type: 'analyzeChunk',
+              data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+            },
+          ],
+          1,
+        ),
+        parallel: true,
+        maxConcurrency: -1,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze(data),
+        'maxConcurrency -1 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/maxConcurrency/i);
+      expect(result.error.message).toContain('-1');
+    });
+
+    it('should reject a non-finite maxConcurrency', async () => {
+      // Neither value can spin the loop (i becomes NaN/Infinity and the loop
+      // stops immediately), but both are invalid strides and reach the chunker.
+      for (const maxConcurrency of [Number.NaN, Number.POSITIVE_INFINITY]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [
+              {
+                id: 'op1',
+                type: 'analyzeChunk',
+                data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+              },
+            ],
+            parallel: true,
+            maxConcurrency,
+          }),
+          `maxConcurrency ${String(maxConcurrency)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/maxConcurrency/i);
+      }
+    });
+
+    it('should reject a non-numeric maxConcurrency', async () => {
+      // A destructuring default only covers `undefined`, so JSON null (and any
+      // other non-number) reaches the stride: `0 + null`, `0 + ''` and
+      // `0 + false` all stay 0, which is the same freeze as an explicit 0 — the
+      // capped array keeps that from wedging the worker here.
+      for (const maxConcurrency of ['3', null, '', false]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: capChunkingIterations(
+              [
+                {
+                  id: 'op1',
+                  type: 'analyzeChunk',
+                  data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+                },
+              ],
+              1,
+            ),
+            parallel: true,
+            maxConcurrency,
+          }),
+          `maxConcurrency ${JSON.stringify(maxConcurrency)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/maxConcurrency/i);
+      }
+    });
+
+    it('should still process a valid maxConcurrency', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      const data = {
+        operations: Array.from({ length: 5 }, (_, i) => ({
+          id: `op${i}`,
+          type: 'analyzeChunk',
+          data: { chunkId: `chunk${i}`, snapshotId: 'snap1' },
+        })),
+        parallel: true,
+        maxConcurrency: 2,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze(data),
+        'valid maxConcurrency 2 never returned',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.totalOperations).toBe(5);
+      expect(result.metadata.maxConcurrency).toBe(2);
+
+      // Every operation is processed exactly once: the chunk stride still
+      // covers the whole array without repeating or dropping an entry.
+      const processedIds = result.results.map(
+        (entry: any) => entry.operationId,
+      );
+      expect(processedIds).toHaveLength(5);
+      expect(new Set(processedIds).size).toBe(5);
+      expect([...processedIds].sort()).toEqual([
+        'op0',
+        'op1',
+        'op2',
+        'op3',
+        'op4',
+      ]);
     });
 
     it('should handle operation failures with continueOnError=true', async () => {
@@ -447,6 +654,29 @@ describe('CliConnectorService - Batch Operations', () => {
       expect(result.results).toHaveLength(8);
       expect(result.metadata.parallel).toBe(true);
       expect(result.metadata.maxConcurrency).toBe(3);
+    });
+
+    it('should reject maxConcurrency 0 instead of looping forever', async () => {
+      // `deduplicateQueries` rebuilds the array before chunking, so the cap has
+      // to be applied to the array the handler actually walks: dedup is off.
+      const data = {
+        queries: capChunkingIterations(
+          [{ id: 'q1', query: 'test query 1' }],
+          1,
+        ),
+        parallel: true,
+        maxConcurrency: 0,
+        deduplicateQueries: false,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchSearch(data),
+        'maxConcurrency 0 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/maxConcurrency/i);
+      expect(result.error.message).toContain('0');
     });
 
     it('should deduplicate queries when enabled', async () => {
