@@ -515,9 +515,85 @@ export class SnapshotManager {
   }
 
   /**
+   * The survivors that stored at least one delta against a removed snapshot.
+   *
+   * A tombstone is not a delta: it records that the file was gone at that point
+   * and has no base to repair, so it is skipped exactly as in
+   * `materializeDependents`.
+   */
+  private findDependents(removedIds: Set<string>): Snapshot[] {
+    return this.snapshots.filter((snapshot) =>
+      Object.values(snapshot.files).some(
+        (fileData) =>
+          !fileData.deleted &&
+          fileData.baseSnapshotId !== undefined &&
+          removedIds.has(fileData.baseSnapshotId),
+      ),
+    );
+  }
+
+  /**
+   * Rewrites the delta entries of survivors that point into `pruned` into full
+   * content, resolving while the chain is still intact, so deleting those bases
+   * loses nothing. Cancels on the first unresolvable entry: a partially
+   * materialized list must not be persisted, so the originals are restored and
+   * the caller persists nothing.
+   */
+  private async materializeDependents(
+    pruned: Set<string>,
+  ): Promise<{ ok: boolean; touched: Snapshot[] }> {
+    const originals = new Map<string, Snapshot['files']>();
+    const touched: Snapshot[] = [];
+
+    for (const snapshot of this.snapshots) {
+      if (pruned.has(snapshot.id)) {
+        continue;
+      }
+      let dirty = false;
+      for (const [relativePath, fileData] of Object.entries(snapshot.files)) {
+        if (fileData.deleted) {
+          continue;
+        }
+        if (!fileData.baseSnapshotId || !pruned.has(fileData.baseSnapshotId)) {
+          continue;
+        }
+        const content = await this.storage.getSnapshotFileContent(
+          snapshot.id,
+          relativePath,
+        );
+        if (content === null) {
+          for (const [id, files] of originals) {
+            const target = this.snapshots.find((s) => s.id === id);
+            if (target) {
+              target.files = files;
+            }
+          }
+          console.error(
+            `Delete: cannot materialize ${relativePath} of ${snapshot.id}: base ${fileData.baseSnapshotId} is unreadable or does not record it.`,
+          );
+          return { ok: false, touched: [] };
+        }
+        if (!originals.has(snapshot.id)) {
+          // Shallow copy is enough: only the rewritten keys are replaced below.
+          originals.set(snapshot.id, { ...snapshot.files });
+        }
+        snapshot.files[relativePath] = { content };
+        dirty = true;
+      }
+      if (dirty) {
+        touched.push(snapshot);
+      }
+    }
+    return { ok: true, touched };
+  }
+
+  /**
    * Delete a snapshot
    */
-  public async deleteSnapshot(snapshotId: string): Promise<void> {
+  public async deleteSnapshot(
+    snapshotId: string,
+    options: { force?: boolean } = {},
+  ): Promise<void> {
     await this.ensureInitialized();
     await this.withWriteLock(async () => {
       const removedIndex = this.snapshots.findIndex((s) => s.id === snapshotId);
@@ -525,6 +601,26 @@ export class SnapshotManager {
         // Same message the storage layer raises, so callers that branch on it
         // keep working; raised here so an unknown id never touches disk.
         throw new Error(`Snapshot ${snapshotId} not found`);
+      }
+
+      const removed = new Set([snapshotId]);
+      const dependents = this.findDependents(removed);
+      if (dependents.length > 0) {
+        const materialization = await this.materializeDependents(removed);
+        if (!materialization.ok) {
+          if (!options.force) {
+            throw new Error(
+              `Snapshot ${snapshotId} cannot be deleted: ${dependents.length} later snapshot(s) store a delta against it and cannot be rebuilt. Nothing was deleted. Re-run with --force to delete it anyway and lose those files.`,
+            );
+          }
+          console.warn(
+            `Delete: forcing removal of ${snapshotId}; ${dependents.length} snapshot(s) keep an unresolvable base.`,
+          );
+        } else {
+          for (const survivor of materialization.touched) {
+            await this.storage.saveSnapshot(survivor);
+          }
+        }
       }
 
       await this.storage.deleteSnapshot(snapshotId);
