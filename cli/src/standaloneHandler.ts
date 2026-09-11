@@ -217,6 +217,26 @@ export function bestSnapshotIdMatch(
   return hits.length === 1 ? hits[0] : null;
 }
 
+/**
+ * Keep only the usable entries of a recorded `selectedFiles` list.
+ *
+ * Same rule as the extension's `normalizeSelectedFiles`
+ * (`src/snapshotManager.ts`), so both surfaces agree about what a selection is:
+ * a non-array is no selection, and an array keeps only its non-empty strings.
+ * The list is read back from persisted JSON, so a store can hold a legacy
+ * all-junk selection -- `codelapse snapshot create --selective --files ""`
+ * writes `['']` -- and `['']` is truthy to anything that only counts entries.
+ */
+export function normalizeSelectedFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  );
+}
+
 export class StandaloneHandler {
   private snapshotManager: SnapshotManager | null = null;
   private configManager: ConfigManager | null = null;
@@ -380,18 +400,21 @@ export class StandaloneHandler {
    * `isSelective` alone is not enough: a rule-based producer emits
    * `isSelective: true` with an EMPTY selection when its rule matched nothing,
    * and that capture ran over the whole tree, so its `{deleted:true}` markers
-   * are real. Same predicate as the extension's restore.
+   * are real. Same predicate as the extension's restore, normalization
+   * included: a legacy record can carry an all-junk selection (`['']`), which
+   * is not a selection either.
    */
   private capturedFileList(snapshot: Snapshot | null): string[] | null {
-    if (
-      snapshot?.isSelective === true &&
-      Array.isArray(snapshot.selectedFiles) &&
-      snapshot.selectedFiles.length > 0
-    ) {
-      return snapshot.selectedFiles;
+    if (snapshot?.isSelective !== true) {
+      return null;
     }
 
-    return null;
+    // Core's restore reads `options.selectedFiles || Object.keys(files)`, so an
+    // all-junk list is truthy, every lookup in it misses, and the restore writes
+    // nothing while reporting success: the restriction must be dropped, not
+    // passed through.
+    const selectedFiles = normalizeSelectedFiles(snapshot.selectedFiles);
+    return selectedFiles.length > 0 ? selectedFiles : null;
   }
 
   /**

@@ -233,6 +233,25 @@ export class AnalysisCommands {
       };
 
       const results = await this.client.callApi('batchAnalyze', batchOpts);
+
+      // The extension rejects an invalid batch by RETURNING a failed payload
+      // rather than throwing: `handleBatchAnalyze` catches its own validation
+      // errors (the maxConcurrency guard and friends) and answers
+      // `{success: false, error: {message, ...}}`, which the client resolves
+      // like any other result. Reporting that as `success: true` printed a
+      // rejected batch as a successful run of zero operations and exited 0.
+      if (results?.success === false) {
+        printResult(
+          {
+            success: false,
+            batchResults: results,
+            error: results.error?.message ?? 'Batch analysis failed',
+          },
+          options,
+        );
+        return;
+      }
+
       printResult(
         {
           success: true,

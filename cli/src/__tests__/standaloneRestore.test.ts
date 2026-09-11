@@ -25,7 +25,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SnapshotManager } from 'codelapse-core';
+import { SnapshotManager, SnapshotStorage } from 'codelapse-core';
 import { StandaloneHandler } from '../standaloneHandler';
 import { useRealFileSystem } from './realFs';
 
@@ -165,6 +165,121 @@ describe('standalone restore scope', () => {
     // ... which is observable: the file the caller did not name was not written.
     expect(fs.readFileSync(filePath(root, CAPTURED_REL), 'utf8')).toBe(
       'drifted v3\n',
+    );
+  });
+
+  /**
+   * Persist a selection claim onto an already-stored snapshot, the way a legacy
+   * record carries one.
+   */
+  async function storeSelection(
+    snapshotId: string,
+    selectedFiles: string[],
+  ): Promise<void> {
+    const storage = new SnapshotStorage(root);
+    const record = await storage.loadSnapshot(snapshotId);
+    if (!record) {
+      throw new Error(`stored snapshot ${snapshotId} could not be re-read`);
+    }
+
+    record.isSelective = true;
+    record.selectedFiles = selectedFiles;
+    await storage.saveSnapshot(record);
+
+    // Precondition: the handler really reads the rewritten record, so a store
+    // location mismatch cannot make the restores below pass vacuously.
+    const stored = await manager.getSnapshot(snapshotId);
+    expect(stored?.isSelective).toBe(true);
+    expect(stored?.selectedFiles).toEqual(selectedFiles);
+  }
+
+  it('restores a whole-tree snapshot whose recorded selection is all junk', async () => {
+    const snapshot = await manager.takeSnapshot({ description: 'whole tree' });
+
+    // `codelapse snapshot create --selective --files ""` persists exactly this:
+    // a selection holding one empty string, which names no file. The published
+    // core still loads it (it only requires an array of strings), so this is a
+    // legacy junk selection a real store can hold.
+    await storeSelection(snapshot.id, ['']);
+
+    fs.writeFileSync(
+      filePath(root, CAPTURED_REL),
+      'drifted after capture\n',
+      'utf8',
+    );
+    const restoreSpy = jest.spyOn(manager, 'restoreSnapshot');
+
+    await handler.restoreSnapshot(snapshot.id, { backup: false });
+
+    // A junk list is not a selection: this snapshot captured the whole tree, so
+    // the core must not be handed a restriction that names nothing. Core reads
+    // `options.selectedFiles || Object.keys(files)`, so a truthy all-junk array
+    // makes it look up a non-existent entry and write nothing -- a silent no-op
+    // that reports success while the workspace stays drifted.
+    expect(fs.readFileSync(filePath(root, CAPTURED_REL), 'utf8')).toBe(
+      'captured v1\n',
+    );
+    // ... which is the restriction being dropped rather than the core being
+    // asked to walk a list of nothing.
+    expect(restoreSpy.mock.calls[0][1]?.selectedFiles).toBeUndefined();
+  });
+
+  it('drops non-string entries from a legacy selection instead of restoring nothing', async () => {
+    const snapshot = await manager.takeSnapshot({ description: 'whole tree' });
+    const stored = await manager.getSnapshot(snapshot.id);
+    if (!stored) {
+      throw new Error('snapshot was not stored');
+    }
+
+    // `[42]` cannot survive the published core's own disk validation
+    // (`assertStringArray` quarantines the record on read), so the junk record
+    // is supplied through the read the handler makes. The restore itself is the
+    // real core against the real store; only the record it inspects is legacy.
+    jest.spyOn(manager, 'getSnapshot').mockResolvedValue({
+      ...stored,
+      isSelective: true,
+      selectedFiles: [42] as unknown as string[],
+    });
+
+    fs.writeFileSync(
+      filePath(root, CAPTURED_REL),
+      'drifted after capture\n',
+      'utf8',
+    );
+    const restoreSpy = jest.spyOn(manager, 'restoreSnapshot');
+
+    await handler.restoreSnapshot(snapshot.id, { backup: false });
+
+    expect(fs.readFileSync(filePath(root, CAPTURED_REL), 'utf8')).toBe(
+      'captured v1\n',
+    );
+    expect(restoreSpy.mock.calls[0][1]?.selectedFiles).toBeUndefined();
+  });
+
+  it('keeps a usable entry in a partly junk selection and restores selectively', async () => {
+    const selectiveId = await takeLegacySelectiveSnapshot();
+    const stored = await manager.getSnapshot(selectiveId);
+    if (!stored) {
+      throw new Error('selective snapshot was not stored');
+    }
+
+    jest.spyOn(manager, 'getSnapshot').mockResolvedValue({
+      ...stored,
+      selectedFiles: [CAPTURED_REL, 42, null, ''] as unknown as string[],
+    });
+
+    fs.writeFileSync(filePath(root, CAPTURED_REL), 'drifted v3\n', 'utf8');
+    const restoreSpy = jest.spyOn(manager, 'restoreSnapshot');
+
+    await handler.restoreSnapshot(selectiveId, { backup: false });
+
+    // Normalizing must not turn a usable selection into a whole-tree restore:
+    // this snapshot is genuinely selective, so the core receives only the
+    // entries that name a file and the tombstoned uncaptured file survives.
+    expect(restoreSpy.mock.calls[0][1]?.selectedFiles).toEqual([CAPTURED_REL]);
+    expect(fs.existsSync(filePath(root, UNCAPTURED_REL))).toBe(true);
+    expect(fs.readFileSync(filePath(root, CAPTURED_REL), 'utf8')).toBe(
+      'captured v2\n',
     );
   });
 });

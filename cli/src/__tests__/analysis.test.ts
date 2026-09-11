@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { AnalysisCommands } from '../commands/analysis';
 import { UnifiedClient } from '../unifiedClient';
+import { getFailure, resetFailure } from '../exitState';
 
 // Mock the client
 jest.mock('../unifiedClient');
@@ -14,6 +15,9 @@ describe('AnalysisCommands', () => {
     mockClient = new UnifiedClient() as unknown as jest.Mocked<UnifiedClient>;
     analysisCommands = new AnalysisCommands(mockClient);
     consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    // The failure flag is process-wide, so a test that reports a failure must
+    // not decide the next test's starting state.
+    resetFailure();
   });
 
   afterEach(() => {
@@ -404,6 +408,55 @@ describe('AnalysisCommands', () => {
           },
         }),
       );
+    });
+
+    it('reports a rejected batch as a failure, not an empty success', async () => {
+      // The extension rejects an invalid batch by RETURNING a failed envelope
+      // rather than throwing: `handleBatchAnalyze` catches its own validation
+      // errors and answers `{success: false, error: {message, ...}}`
+      // (`cliConnectorService.ts`), which the client resolves like any other
+      // result. Hardcoding `success: true` in this command therefore printed a
+      // rejected batch as a successful run of zero operations and exited 0.
+      const rejected = {
+        success: false,
+        error: {
+          message: 'Invalid maxConcurrency: 0. Use a positive integer.',
+          code: 'BATCH_ANALYZE_ERROR',
+          category: 'batch_operation_error',
+          severity: 'high',
+          retryable: false,
+        },
+        totalOperations: 1,
+        successfulOperations: 0,
+        failedOperations: 1,
+        results: [],
+        suggestions: ['Verify operations array format and content'],
+      };
+
+      jest.doMock('fs', () => ({
+        readFileSync: jest.fn().mockReturnValue(
+          JSON.stringify([
+            {
+              id: 'op1',
+              type: 'analyzeChunk',
+              data: { chunkId: 'chunk-1', snapshotId: 'snap-1' },
+            },
+          ]),
+        ),
+      }));
+
+      mockClient.callApi.mockResolvedValue(rejected);
+
+      await analysisCommands.batch('operations.json', {});
+
+      const payload = JSON.parse(String(consoleSpy.mock.calls[0][0]));
+
+      expect(payload.success).toBe(false);
+      // The extension's own message reaches the user rather than being buried
+      // in a payload the envelope claims succeeded.
+      expect(payload.error).toBe(rejected.error.message);
+      // ... and the process reports failure to its caller.
+      expect(getFailure()).toBe(true);
     });
   });
 
