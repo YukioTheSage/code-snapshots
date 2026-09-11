@@ -204,4 +204,36 @@ suite("CodeLapse Integration", function () {
     await vscode.commands.executeCommand("vscode-snapshots.viewSnapshots");
     await vscode.commands.executeCommand("vscode-snapshots.diagnostics");
   });
+
+  /**
+   * Regression guard for a test-host pollution bug.
+   *
+   * `vscode-snapshots.diagnostics` reveals the CodeLapse output channel. In a
+   * headless run there is nobody to read it, and the output editor it opens
+   * cannot be closed again by any API this host offers — verified with probes:
+   * `workbench.action.closeAllEditors`, `workbench.action.closeActiveEditor`
+   * and `vscode.window.tabGroups.close(...)` all leave it visible. It therefore
+   * lingers for the rest of the run, and whether it happens to be the *active*
+   * editor when a later suite asserts "no editor open" is focus bookkeeping —
+   * which is what made `editorWiring`'s no-editor precondition fail
+   * intermittently. Headless runs must not open UI at all.
+   */
+  test("diagnostics does not open an output editor in a headless run", async function () {
+    this.timeout(30000);
+    await vscode.commands.executeCommand("vscode-snapshots.diagnostics");
+    // Give a reveal, if one happened at all, time to land before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const outputEditors = vscode.window.visibleTextEditors
+      .filter((editor) => editor.document.uri.scheme === "output")
+      .map((editor) => editor.document.uri.toString());
+
+    assert.deepStrictEqual(
+      outputEditors,
+      [],
+      `the diagnostics command opened an output editor in a headless run: ${JSON.stringify(
+        outputEditors,
+      )}. It cannot be closed again by any available API, so it pollutes every later suite.`,
+    );
+  });
 });
