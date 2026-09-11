@@ -105,9 +105,11 @@ jobs:
       # is precisely what the `| tee` in the Lint step used to swallow.
       - name: Install root toolchain
         run: npm ci
-        # Overrides this job's `defaults.run.working-directory: cli`, so this
-        # installs the repository root's tools, not cli's.
-        working-directory: .
+        # A step-level `working-directory` replaces this job's
+        # `defaults.run.working-directory: cli`, but an absolute path says so
+        # unambiguously: `${{ github.workspace }}` resolves against the
+        # checkout, so this installs the repository root's tools, not cli's.
+        working-directory: ${{ github.workspace }}
       - name: Install dependencies
         run: npm ci
       - name: Lint
