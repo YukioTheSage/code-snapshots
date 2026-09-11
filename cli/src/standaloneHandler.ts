@@ -402,9 +402,12 @@ export class StandaloneHandler {
    * `isSelective` alone is not enough: a rule-based producer emits
    * `isSelective: true` with an EMPTY selection when its rule matched nothing,
    * and that capture ran over the whole tree, so its `{deleted:true}` markers
-   * are real. Same predicate as the extension's restore, normalization
-   * included: a legacy record can carry an all-junk selection (`['']`), which
-   * is not a selection either.
+   * are real. The citation is the extension's capture side, not its restore:
+   * `takeSnapshotInternal` normalises the selection and then asks for a
+   * non-empty one, which is this predicate plus `normalizeSelectedFiles`. The
+   * restore/apply predicates test the RAW stored array's length instead, so an
+   * all-junk legacy record (`['']`) would pass there -- and it is not a
+   * selection either.
    */
   private capturedFileList(snapshot: Snapshot | null): string[] | null {
     if (snapshot?.isSelective !== true) {

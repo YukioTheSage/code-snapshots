@@ -196,10 +196,13 @@ describe('standalone restore scope', () => {
   it('restores a whole-tree snapshot whose recorded selection is all junk', async () => {
     const snapshot = await manager.takeSnapshot({ description: 'whole tree' });
 
-    // `codelapse snapshot create --selective --files ""` persists exactly this:
-    // a selection holding one empty string, which names no file. The published
-    // core still loads it (it only requires an array of strings), so this is a
-    // legacy junk selection a real store can hold.
+    // `codelapse snapshot create --selective --files " "` persists exactly this:
+    // a single space is truthy, so the command splits it and trims the one part
+    // down to an empty string, which names no file. (`--files ""` would not: the
+    // empty string is falsy at `cli/src/commands/snapshot.ts:35-37`, so that
+    // input persists `[]`.) The published core still loads this list -- it only
+    // requires an array of strings -- so it is a legacy junk selection a real
+    // store can hold.
     await storeSelection(snapshot.id, ['']);
 
     fs.writeFileSync(
