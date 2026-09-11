@@ -9,21 +9,24 @@ import * as vscode from "vscode";
  *
  * Contracts verified in source before asserting them:
  *
- *  - `src/extension.ts:272-349` -- `setupAutoSnapshotTimer()` clears the
- *    existing handle and re-registers with `autoSnapshotInterval * 60 * 1000`
- *    whenever `vscode-snapshots.autoSnapshotInterval` changes. The unit is
- *    MINUTES and 0 disables the timer.
- *  - `src/snapshotManager.ts:631-649` -- a snapshot tagged `auto` whose file
- *    entries show no change returns `{created:false, reason:'no-changes'}`.
- *    Manual snapshots (no `auto` tag) never take that branch, but the
- *    pre-restore backup does: `src/services/terminalApiService.ts:201-210`
- *    tags it `['backup','auto']`, so an unchanged workspace can skip it too.
- *  - `src/services/terminalApiService.ts:65-79` -- the skip surfaces as
+ *  - `setupAutoSnapshotTimer` in `src/extension.ts` -- clears the existing
+ *    handle and re-registers with `autoSnapshotInterval * 60 * 1000` whenever
+ *    `vscode-snapshots.autoSnapshotInterval` changes. The unit is MINUTES and 0
+ *    disables the timer.
+ *  - `src/snapshotManager.ts` -- the `isAutoSnapshot` branch of
+ *    `takeSnapshotInternal`: a snapshot tagged `auto` whose file entries show no
+ *    change returns `{created:false, reason:'no-changes'}`. Manual snapshots (no
+ *    `auto` tag) never take that branch, but the pre-restore backup does:
+ *    `createBackupSnapshot` in `src/services/terminalApiService.ts` tags it
+ *    `['backup','auto']`, so an unchanged workspace can skip it too.
+ *  - the `!outcome.created` branch of `TerminalApiService.takeSnapshot`
+ *    (`src/services/terminalApiService.ts`) -- the skip surfaces as
  *    `{success:false, noChanges:true, error:'Nothing to snapshot: ...'}`.
- *  - `src/changeNotifier.ts:379-440` -- a rule is evaluated when a matching
- *    document is SAVED, fires immediately for a pattern with no recorded fire
- *    time (`RuleScheduleStore.get` -> 0, `shouldFireRule` -> true) and creates
- *    a SELECTIVE auto snapshot tagged `['auto','rule-based','save-triggered']`.
+ *  - `checkRuleBasedAutoSnapshot` in `src/changeNotifier.ts` -- a rule is
+ *    evaluated when a matching document is SAVED, fires immediately for a
+ *    pattern with no recorded fire time (`RuleScheduleStore.get` -> 0,
+ *    `shouldFireRule` -> true) and creates a SELECTIVE auto snapshot tagged
+ *    `['auto','rule-based','save-triggered']`.
  *
  * What is deliberately NOT automated: the timer FIRING. The minimum legal
  * interval is one minute and this suite may not wait 60 s, so the clear +
@@ -419,20 +422,20 @@ suite("auto snapshots", function () {
     );
 
     // A rule-based snapshot with a NON-EMPTY selection records only the files
-    // the rule selected: the scan is filtered to `selectedFiles`
-    // (src/snapshotManager.ts:430-451) and `currentWorkspaceFiles` is built from
-    // that filtered list (:499-507). The deletion pass is gated on the same
-    // predicate that filter carries (`isSelective` with a non-empty
-    // `selectedFiles`, guard at :606-609), so a rule that matched nothing --
-    // `findFilesMatchingRule` returns `[]` on error
-    // (src/changeNotifier.ts:261-263) or when the pattern matches no file --
-    // falls back to a whole-tree capture, whose deletion markers are real
-    // (perFileOperations.test.ts, "an empty-selection rule snapshot behaves as
-    // a whole-tree capture on restore"). This test's rule matches one file and
-    // the assertions above pin that (`selectedFiles` deep-equals
-    // `[RULE_SIGNAL_REL]`), so the guarded selective path is what it exercises.
+    // the rule selected: the scan is filtered to `selectedFiles` (the selective
+    // filter in `takeSnapshotInternal`) and `currentWorkspaceFiles` is built
+    // from that filtered list. The deletion pass is gated on the same predicate
+    // the filter carries -- `isSelective`, which is true only with a non-empty
+    // `selectedFiles` -- so a rule that matched nothing (`findFilesMatchingRule`
+    // in `src/changeNotifier.ts` returns `[]` on error or when the pattern
+    // matches no file) falls back to a whole-tree capture, whose deletion
+    // markers are real (perFileOperations.test.ts, "an empty-selection rule
+    // snapshot behaves as a whole-tree capture on restore"). This test's rule
+    // matches one file and the assertions above pin that (`selectedFiles`
+    // deep-equals `[RULE_SIGNAL_REL]`), so the guarded selective path is what it
+    // exercises.
     //
-    // The pass that follows the scan (:606-629) used to run unconditionally and
+    // The deletion pass that follows the scan used to run unconditionally and
     // wrote `{deleted:true}` for every base-snapshot file missing from the
     // filtered list, so this snapshot also recorded [".vscode/settings.json",
     // ".vscode/codelapse-connection.json", "src/app.ts"] and restoring it
