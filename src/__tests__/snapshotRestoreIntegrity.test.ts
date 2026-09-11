@@ -1,4 +1,5 @@
 import { SnapshotManager } from '../snapshotManager';
+import type { Snapshot } from '../snapshotManager';
 import * as vscode from 'vscode';
 import { promises as fsPromises } from 'fs';
 import * as os from 'os';
@@ -233,5 +234,121 @@ describe('applySnapshotRestoreInternal on a complete snapshot', () => {
     };
     const result = await manager.applySnapshotRestore('snap-good');
     expect(result.skipped).toContain('odd.ts');
+  });
+});
+
+/**
+ * Whether the workspace still "corresponds to" the snapshot afterwards.
+ *
+ * A selective snapshot photographs only the files it was given: restoring it
+ * writes those back and leaves everything else in the workspace alone, so the
+ * workspace does not become the snapshot's state. Reporting it as the active
+ * snapshot is what makes the status bar render "workspace is at snapshot N of M"
+ * for a workspace that was mostly untouched -- and it is not hypothetical: a
+ * selective capture is the newest snapshot, so it IS the active one when the
+ * restore starts.
+ *
+ * A whole-tree restore really does make the workspace match the snapshot, so it
+ * must keep claiming correspondence.
+ */
+describe('applySnapshotRestore correspondence claim', () => {
+  let workspaceRoot: string;
+  let manager: SnapshotManager;
+  let writeSpy: jest.SpyInstance;
+
+  /**
+   * The manager's private collaborators this suite drives.
+   *
+   * Typed rather than `any`, so a rename in the class fails the compile here
+   * instead of leaving the fixtures inert and the assertions vacuous.
+   */
+  interface ManagerInternals {
+    storage: unknown;
+    snapshots: Snapshot[];
+    activeSnapshotId: string | null;
+  }
+
+  function internals(): ManagerInternals {
+    return manager as unknown as ManagerInternals;
+  }
+
+  beforeEach(async () => {
+    workspaceRoot = await fsPromises.mkdtemp(
+      path.join(os.tmpdir(), 'codelapse-'),
+    );
+
+    manager = new SnapshotManager(null);
+    // See the note in the first beforeEach of this file: settle the
+    // constructor's un-awaited loadSnapshots() before replacing storage.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const storage = {
+      getWorkspaceRoot: () => workspaceRoot,
+      getSnapshotDirectory: () => path.join(workspaceRoot, '.snapshots'),
+      getSnapshotFileContent: jest.fn(async (_id: string, rel: string) =>
+        rel === 'captured.ts' ? 'captured content' : null,
+      ),
+      isBinaryFile: () => false,
+      writeFileContent: jest.fn().mockResolvedValue(undefined),
+      deleteWorkspaceFile: jest.fn().mockResolvedValue(undefined),
+      saveSnapshotIndex: jest.fn().mockResolvedValue(undefined),
+    };
+    internals().storage = storage;
+    writeSpy = storage.writeFileContent;
+
+    (vscode.workspace as unknown as { findFiles: jest.Mock }).findFiles = jest
+      .fn()
+      .mockResolvedValue([
+        vscode.Uri.file(path.join(workspaceRoot, 'captured.ts')),
+        vscode.Uri.file(path.join(workspaceRoot, 'untouched.ts')),
+      ]);
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it('does not claim a selective restore leaves the workspace at the snapshot', async () => {
+    internals().snapshots = [
+      {
+        id: 'snap-selective',
+        timestamp: 1,
+        description: 'selective',
+        isSelective: true,
+        selectedFiles: ['captured.ts'],
+        files: { 'captured.ts': { content: 'captured content' } },
+      },
+    ];
+    // The state a selective restore starts from: taking the snapshot made it the
+    // active one, so leaving `activeSnapshotId` untouched would still claim it.
+    internals().activeSnapshotId = 'snap-selective';
+
+    const result = await manager.applySnapshotRestore('snap-selective');
+
+    expect(writeSpy).toHaveBeenCalledWith(
+      path.join(workspaceRoot, 'captured.ts'),
+      'captured content',
+    );
+    expect(result.restored).toContain('captured.ts');
+    // Fails with the claimed snapshot in the message: it renders "workspace is
+    // at snapshot N of M" for a capture that covered only part of the tree.
+    expect(manager.getActiveSnapshot()).toBeUndefined();
+  });
+
+  it('still claims correspondence for a whole-tree restore', async () => {
+    internals().snapshots = [
+      {
+        id: 'snap-whole-tree',
+        timestamp: 1,
+        description: 'whole tree',
+        files: { 'captured.ts': { content: 'captured content' } },
+      },
+    ];
+    internals().activeSnapshotId = null;
+
+    const result = await manager.applySnapshotRestore('snap-whole-tree');
+
+    expect(result.restored).toContain('captured.ts');
+    expect(manager.getActiveSnapshot()?.id).toBe('snap-whole-tree');
   });
 });

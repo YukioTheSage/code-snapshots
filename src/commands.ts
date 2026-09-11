@@ -626,13 +626,23 @@ function registerJumpToSnapshotCommand({
               actions.push('Filter by Tags');
             }
 
-            vscode.window
-              .showInformationMessage(
-                `Restored snapshot '${
+            // A selective restore writes only the files its snapshot captured, so
+            // the workspace is not now that snapshot's state. Reporting an
+            // unqualified success is the same over-claim the preview was fixed
+            // for: the user would read "Restored snapshot ..." as "the workspace
+            // matches it".
+            const restoredSummary = result.selective
+              ? `Restored ${
+                  result.restored.length
+                } captured file(s) from snapshot '${
                   snapshot.description || snapshot.id
-                }' from ${snapshotDate}.`,
-                ...actions,
-              )
+                }'; the rest of the workspace was left untouched.`
+              : `Restored snapshot '${
+                  snapshot.description || snapshot.id
+                }' from ${snapshotDate}.`;
+
+            vscode.window
+              .showInformationMessage(restoredSummary, ...actions)
               .then((selection) => {
                 if (selection === 'View Changes') {
                   vscode.commands.executeCommand(

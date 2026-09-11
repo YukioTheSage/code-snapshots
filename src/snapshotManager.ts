@@ -68,6 +68,14 @@ export interface RestoreResult {
   refusedDeletions: string[];
   /** Relative paths deleted from the workspace. */
   deleted: string[];
+  /**
+   * Whether only the files this snapshot captured were written, leaving the rest
+   * of the workspace alone.
+   *
+   * Callers must not report the workspace as matching the snapshot when this is
+   * true: the workspace is only partly the snapshot's state.
+   */
+  selective: boolean;
 }
 
 /**
@@ -1384,8 +1392,21 @@ export class SnapshotManager {
     // --- UI Summary Message REMOVED ---
     // This will be handled by the command handler
 
-    // Update which snapshot the workspace now reflects
-    this.activeSnapshotId = snapshot.id;
+    // Update which snapshot the workspace now reflects -- except after a
+    // selective restore, which wrote only the files the snapshot captured and
+    // left the rest of the workspace as it was. That workspace matches no
+    // snapshot, so it is left detached: claiming this one is what renders
+    // "workspace is at snapshot N of M" in the status bar (and an unqualified
+    // "Restored snapshot ..." in the command) for a workspace that was mostly
+    // untouched.
+    if (isSelectiveCapture) {
+      this.activeSnapshotId = null;
+      log(
+        `Restore Apply: ${snapshot.id} is selective, so the workspace does not correspond to it; leaving the workspace detached.`,
+      );
+    } else {
+      this.activeSnapshotId = snapshot.id;
+    }
     await this.saveSnapshotIndex();
 
     // Refresh open editors to reflect changes
@@ -1395,7 +1416,14 @@ export class SnapshotManager {
     this._onDidChangeSnapshots.fire();
     log(`Successfully applied restore for snapshot ${snapshotId}`);
 
-    return { success: true, restored, skipped, refusedDeletions, deleted };
+    return {
+      success: true,
+      restored,
+      skipped,
+      refusedDeletions,
+      deleted,
+      selective: isSelectiveCapture,
+    };
   }
 
   /**

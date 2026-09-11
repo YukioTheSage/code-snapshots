@@ -482,50 +482,77 @@ suite("per-file snapshot operations", function () {
     );
 
     // Change both files after the capture: the captured one has to come back,
-    // the uncaptured one has to stay as it is.
-    fs.appendFileSync(APP_FILE, `\n${NOISE}\n`);
-    fs.writeFileSync(OTHER_FILE, drift, "utf8");
-    assert.ok(
-      fs.readFileSync(APP_FILE, "utf8").includes(NOISE),
-      "precondition: the edit to src/app.ts did not land",
-    );
-    assert.strictEqual(
-      fs.readFileSync(OTHER_FILE, "utf8"),
-      drift,
-      `precondition: the edit to ${OTHER_REL} did not land`,
-    );
+    // the uncaptured one has to stay as it is. From here the fixture is drifted,
+    // so this test puts it back in the `finally` below: every later suite in this
+    // host shares the fixture.
+    try {
+      fs.appendFileSync(APP_FILE, `\n${NOISE}\n`);
+      fs.writeFileSync(OTHER_FILE, drift, "utf8");
+      assert.ok(
+        fs.readFileSync(APP_FILE, "utf8").includes(NOISE),
+        "precondition: the edit to src/app.ts did not land",
+      );
+      assert.strictEqual(
+        fs.readFileSync(OTHER_FILE, "utf8"),
+        drift,
+        `precondition: the edit to ${OTHER_REL} did not land`,
+      );
 
-    const result = await manager.applySnapshotRestore(selectiveId);
+      const result = await manager.applySnapshotRestore(selectiveId);
 
-    assert.strictEqual(
-      result.success,
-      true,
-      `the restore reported failure: ${JSON.stringify(result)}`,
-    );
-    // The bug: "absent from the snapshot" was read as "extraneous", so this
-    // restore deleted every workspace file the selective capture never looked
-    // at -- the whole workspace minus the one file it captured.
-    assert.deepStrictEqual(
-      result.deleted,
-      [],
-      `restoring a snapshot whose entire scope was ${JSON.stringify(
-        scope.snapshot.selectedFiles,
-      )} deleted ${JSON.stringify(result.deleted)}`,
-    );
-    assert.equal(
-      fs.readFileSync(APP_FILE, "utf8"),
-      appAtSnapshot,
-      "the captured file was not restored to the snapshot's content",
-    );
-    assert.ok(
-      fs.existsSync(OTHER_FILE),
-      `restoring the selective snapshot deleted ${OTHER_REL}, which it never captured`,
-    );
-    assert.equal(
-      fs.readFileSync(OTHER_FILE, "utf8"),
-      drift,
-      `${OTHER_REL} was modified by a restore of a snapshot that never captured it`,
-    );
+      assert.strictEqual(
+        result.success,
+        true,
+        `the restore reported failure: ${JSON.stringify(result)}`,
+      );
+      // The bug: "absent from the snapshot" was read as "extraneous", so this
+      // restore deleted every workspace file the selective capture never looked
+      // at -- the whole workspace minus the one file it captured.
+      assert.deepStrictEqual(
+        result.deleted,
+        [],
+        `restoring a snapshot whose entire scope was ${JSON.stringify(
+          scope.snapshot.selectedFiles,
+        )} deleted ${JSON.stringify(result.deleted)}`,
+      );
+      assert.equal(
+        fs.readFileSync(APP_FILE, "utf8"),
+        appAtSnapshot,
+        "the captured file was not restored to the snapshot's content",
+      );
+      assert.ok(
+        fs.existsSync(OTHER_FILE),
+        `restoring the selective snapshot deleted ${OTHER_REL}, which it never captured`,
+      );
+      assert.equal(
+        fs.readFileSync(OTHER_FILE, "utf8"),
+        drift,
+        `${OTHER_REL} was modified by a restore of a snapshot that never captured it`,
+      );
+
+      // Only the captured file was written, so the workspace is NOT the
+      // snapshot's state. Reporting it as the active snapshot is what renders
+      // "workspace is at snapshot N of M" in the status bar -- and the capture
+      // above made it active, so a restore that simply leaves the pointer alone
+      // still claims it.
+      assert.strictEqual(
+        manager.getActiveSnapshot(),
+        undefined,
+        `the workspace still reports ${JSON.stringify(
+          manager.getActiveSnapshot()?.id,
+        )} as the snapshot it corresponds to after a restore that wrote only ${JSON.stringify(
+          scope.snapshot.selectedFiles,
+        )}`,
+      );
+      assert.strictEqual(
+        result.selective,
+        true,
+        `the restore did not report its scope: ${JSON.stringify(result)}`,
+      );
+    } finally {
+      // The drift belongs to this test: put the fixture back as it was found.
+      fs.writeFileSync(OTHER_FILE, otherAtSnapshot, "utf8");
+    }
   });
 
   /**
