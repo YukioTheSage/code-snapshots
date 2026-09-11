@@ -193,6 +193,30 @@ export function toWorkspaceRelativeOutputPath(
   return relative;
 }
 
+/**
+ * Resolve a possibly-abbreviated snapshot id against the known ids.
+ *
+ * Snapshot ids are long (`snapshot-1789120661991-fe3a3996`) and the docs
+ * everywhere use short forms like `snapshot-123`, but nothing resolved a
+ * prefix: the storage layer looked for a directory literally named after the
+ * input. Returns the exact id, the single matching id, or `null` when the
+ * input matches nothing or more than one snapshot.
+ */
+export function bestSnapshotIdMatch(
+  partialId: string,
+  candidates: string[],
+): string | null {
+  if (candidates.includes(partialId)) {
+    return partialId;
+  }
+  if (!partialId) {
+    return null;
+  }
+
+  const hits = candidates.filter((candidate) => candidate.includes(partialId));
+  return hits.length === 1 ? hits[0] : null;
+}
+
 export class StandaloneHandler {
   private snapshotManager: SnapshotManager | null = null;
   private configManager: ConfigManager | null = null;
@@ -298,6 +322,46 @@ export class StandaloneHandler {
   }
 
   /**
+   * Expand a short snapshot id to the full id, or throw when it is ambiguous.
+   *
+   * Unknown ids are returned unchanged so the storage layer's own
+   * "<id> not found" error keeps naming what the caller actually typed.
+   */
+  private async resolveSnapshotId(partialId: string): Promise<string> {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+
+    let ids: string[];
+    try {
+      const snapshots = await this.snapshotManager.getSnapshots();
+      ids = snapshots.map((snapshot) => snapshot.id);
+    } catch {
+      // Resolution is a convenience; if the index cannot be read, let the
+      // caller's own lookup produce the authoritative error.
+      return partialId;
+    }
+
+    if (ids.includes(partialId)) {
+      return partialId;
+    }
+
+    const match = bestSnapshotIdMatch(partialId, ids);
+    if (match) {
+      return match;
+    }
+
+    const ambiguous = ids.filter((id) => partialId && id.includes(partialId));
+    if (ambiguous.length > 1) {
+      throw new Error(
+        `Ambiguous snapshot id "${partialId}": matches ${ambiguous.length} snapshots (${ambiguous.join(', ')}). Use a longer prefix.`,
+      );
+    }
+
+    return partialId;
+  }
+
+  /**
    * Get a single snapshot
    */
   public async getSnapshot(snapshotId: string): Promise<Snapshot | null> {
@@ -305,7 +369,9 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
-    return await this.snapshotManager.getSnapshot(snapshotId);
+    return await this.snapshotManager.getSnapshot(
+      await this.resolveSnapshotId(snapshotId),
+    );
   }
 
   /**
@@ -322,7 +388,10 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
-    await this.snapshotManager.restoreSnapshot(snapshotId, options);
+    await this.snapshotManager.restoreSnapshot(
+      await this.resolveSnapshotId(snapshotId),
+      options,
+    );
   }
 
   /**
@@ -333,7 +402,9 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
-    await this.snapshotManager.deleteSnapshot(snapshotId);
+    await this.snapshotManager.deleteSnapshot(
+      await this.resolveSnapshotId(snapshotId),
+    );
   }
 
   /**
@@ -345,8 +416,8 @@ export class StandaloneHandler {
     }
 
     return await this.snapshotManager.compareSnapshots(
-      snapshotId1,
-      snapshotId2,
+      await this.resolveSnapshotId(snapshotId1),
+      await this.resolveSnapshotId(snapshotId2),
     );
   }
 
@@ -382,7 +453,7 @@ export class StandaloneHandler {
     }
 
     return await this.snapshotManager.getSnapshotFileContent(
-      snapshotId,
+      await this.resolveSnapshotId(snapshotId),
       filePath,
     );
   }
@@ -528,7 +599,8 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
-    const snapshot = await this.snapshotManager.getSnapshot(snapshotId);
+    const resolvedId = await this.resolveSnapshotId(snapshotId);
+    const snapshot = await this.snapshotManager.getSnapshot(resolvedId);
     if (!snapshot) {
       throw new Error(`Snapshot ${snapshotId} not found`);
     }
@@ -818,6 +890,10 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
+    // Short ids (`snapshot-1789120661991` instead of the full id) resolve here
+    // too, so every entry point accepts them consistently.
+    options.snapshotId = await this.resolveSnapshotId(options.snapshotId);
+
     const snapshot = await this.snapshotManager.getSnapshot(options.snapshotId);
     if (!snapshot) {
       throw new Error(`Snapshot ${options.snapshotId} not found`);
@@ -917,6 +993,8 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
+    options.snapshotId = await this.resolveSnapshotId(options.snapshotId);
+
     const snapshot = await this.snapshotManager.getSnapshot(options.snapshotId);
     if (!snapshot) {
       throw new Error(`Snapshot ${options.snapshotId} not found`);
@@ -985,6 +1063,9 @@ export class StandaloneHandler {
     if (!this.snapshotManager) {
       throw new Error('Handler not initialized');
     }
+
+    options.snapshotId1 = await this.resolveSnapshotId(options.snapshotId1);
+    options.snapshotId2 = await this.resolveSnapshotId(options.snapshotId2);
 
     const content1 = await this.snapshotManager.getSnapshotFileContent(
       options.snapshotId1,
@@ -1071,6 +1152,8 @@ export class StandaloneHandler {
     const fs = await import('fs');
     const path = await import('path');
 
+    options.snapshotId = await this.resolveSnapshotId(options.snapshotId);
+
     const content = await this.snapshotManager.getSnapshotFileContent(
       options.snapshotId,
       options.filePath,
@@ -1137,6 +1220,8 @@ export class StandaloneHandler {
 
     const fs = await import('fs');
     const path = await import('path');
+
+    options.snapshotId = await this.resolveSnapshotId(options.snapshotId);
 
     const content = await this.snapshotManager.getSnapshotFileContent(
       options.snapshotId,
