@@ -624,13 +624,21 @@ export class UnifiedClient {
         case 'getStatus':
           return await this.getStatus();
 
-        case 'getSnapshotChanges':
+        case 'getSnapshotChanges': {
           if (this.standaloneHandler) {
-            return await this.standaloneHandler.getSnapshotChanges(
-              payload.id || payload,
-            );
+            // `snapshot show --files` sends { snapshotId }, api callers send
+            // { id }. Reading only `payload.id` passed the whole payload object
+            // down as the id whenever the command layer called it.
+            const changesId: string =
+              typeof payload.id === 'string'
+                ? payload.id
+                : typeof payload.snapshotId === 'string'
+                  ? payload.snapshotId
+                  : (payload as unknown as string);
+            return await this.standaloneHandler.getSnapshotChanges(changesId);
           }
           throw new Error('Handler not initialized');
+        }
 
         case 'navigateSnapshot':
           if (this.standaloneHandler) {
