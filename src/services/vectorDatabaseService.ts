@@ -71,6 +71,12 @@ export class VectorDatabaseService {
         let apiKey = await this.credentialsManager.getPineconeApiKey();
 
         if (!apiKey) {
+          // Headless contexts (integration tests, CI) cannot answer an input
+          // box, and `showInputBox` there never settles -- a delete whose
+          // purge awaited init would hang forever. Fail fast instead.
+          if (process.env.CODELAPSE_DISABLE_CREDENTIAL_PROMPTS === '1') {
+            throw new Error('Pinecone API key required');
+          }
           log('Pinecone API key not found. Prompting for credentials.');
           const got = await this.credentialsManager.promptForCredentials();
           if (!got) {

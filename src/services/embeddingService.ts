@@ -42,6 +42,11 @@ export class EmbeddingService {
         let apiKey = await this.credentialsManager.getGeminiApiKey();
 
         if (!apiKey) {
+          // Headless contexts (integration tests, CI) cannot answer an input
+          // box; fail fast instead of hanging on `showInputBox`.
+          if (process.env.CODELAPSE_DISABLE_CREDENTIAL_PROMPTS === '1') {
+            throw new Error('Gemini API key required');
+          }
           log('Gemini API key not found. Prompting for credentials.');
           const got = await this.credentialsManager.promptForCredentials();
           if (!got) {
