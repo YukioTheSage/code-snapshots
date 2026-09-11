@@ -218,9 +218,20 @@ export async function activate(context: vscode.ExtensionContext) {
       takeSnapshot: (options: any) => terminalApiService.takeSnapshot(options),
       restoreSnapshot: (id: string, options?: any) =>
         terminalApiService.restoreSnapshot(id, options),
-      deleteSnapshot: (id: string) => terminalApiService.deleteSnapshot(id),
+      deleteSnapshot: (id: string, options?: { skipConfirm?: boolean }) =>
+        terminalApiService.deleteSnapshot(id, options),
       searchSnapshots: (query: string, options?: any) =>
         terminalApiService.searchSnapshots(query, options),
+      // Internals surfaced for the integration test suite only; the tree
+      // providers, decorator and status bar controller have no other way to be
+      // reached from a test host.
+      testHooks: {
+        manualTreeProvider: manualSnapshotTreeDataProvider,
+        autoTreeProvider: autoSnapshotTreeDataProvider,
+        snapshotManager,
+        editorDecorator,
+        statusBarController,
+      },
     };
 
     // Register the API command

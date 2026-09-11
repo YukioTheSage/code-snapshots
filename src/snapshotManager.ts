@@ -1371,7 +1371,10 @@ export class SnapshotManager {
   /**
    * Delete a specific snapshot
    */
-  public async deleteSnapshot(snapshotId: string): Promise<boolean> {
+  public async deleteSnapshot(
+    snapshotId: string,
+    options?: { skipConfirm?: boolean },
+  ): Promise<boolean> {
     log(`Attempting to delete snapshot: ${snapshotId}`);
     const index = this.snapshots.findIndex((s) => s.id === snapshotId);
 
@@ -1381,18 +1384,21 @@ export class SnapshotManager {
       return false;
     }
 
-    // Confirmation dialog
-    const confirmation = await vscode.window.showWarningMessage(
-      `Are you sure you want to delete snapshot "${
-        this.snapshots[index].description || snapshotId
-      }"? This cannot be undone.`,
-      { modal: true }, // Make it modal to force a choice
-      'Delete',
-    );
+    // Confirmation dialog. `skipConfirm` exists for non-interactive callers
+    // (the integration suite), which cannot answer a modal dialog.
+    if (!options?.skipConfirm) {
+      const confirmation = await vscode.window.showWarningMessage(
+        `Are you sure you want to delete snapshot "${
+          this.snapshots[index].description || snapshotId
+        }"? This cannot be undone.`,
+        { modal: true }, // Make it modal to force a choice
+        'Delete',
+      );
 
-    if (confirmation !== 'Delete') {
-      log(`Deletion cancelled for snapshot ${snapshotId}.`);
-      return false;
+      if (confirmation !== 'Delete') {
+        log(`Deletion cancelled for snapshot ${snapshotId}.`);
+        return false;
+      }
     }
 
     return await this.withWriteLock(async () => {
