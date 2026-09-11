@@ -50,12 +50,20 @@ export class FilterCommands {
   constructor(private client: UnifiedClient) {}
 
   private parseDate(dateString: string): string {
-    // Handle relative dates like "1h", "2d", "1w", "3m"
     const now = new Date();
-    const match = dateString.match(/^(\d+)([hdwmy])$/);
+    const input = dateString.trim().toLowerCase();
+
+    // Keywords first: "today" is what a person types, and it used to reach
+    // `new Date('today').toISOString()` and throw RangeError.
+    if (input === 'today' || input === 'now') {
+      return now.toISOString();
+    }
+
+    // Handle relative dates like "1h", "2d", "1w", "3m", "1y"
+    const match = input.match(/^(\d+)([hdwmy])$/);
 
     if (match) {
-      const amount = parseInt(match[1]);
+      const amount = parseInt(match[1], 10);
       const unit = match[2];
 
       switch (unit) {
@@ -79,8 +87,15 @@ export class FilterCommands {
       return now.toISOString();
     }
 
-    // Try to parse as ISO date
-    return new Date(dateString).toISOString();
+    // Try to parse as ISO date. An unparseable input is a user error with a
+    // usable message, not a RangeError from toISOString().
+    const parsed = new Date(dateString);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(
+        `Invalid date "${dateString}": use a relative range like "2d", "1h", "1w", "3m", "1y", the keyword "today", or an ISO date such as 2024-01-31.`,
+      );
+    }
+    return parsed.toISOString();
   }
 
   private formatSnapshot(snapshot: SnapshotRecord): FormattedSnapshot {
@@ -246,13 +261,32 @@ export class FilterCommands {
     let fromDate: string | undefined;
     let toDate: string | undefined;
 
-    if (dateRange.includes('..')) {
-      const [from, to] = dateRange.split('..');
-      fromDate = from ? this.parseDate(from) : undefined;
-      toDate = to ? this.parseDate(to) : undefined;
-    } else {
-      // Single date means "since this date"
-      fromDate = this.parseDate(dateRange);
+    // Parsing happens before the API try/catch below, so it needs its own:
+    // an unrecognized range must produce a normal failure payload and exit 1,
+    // not escape to the CLI's fatal-error handler.
+    try {
+      if (dateRange.includes('..')) {
+        const [from, to] = dateRange.split('..');
+        fromDate = from ? this.parseDate(from) : undefined;
+        toDate = to ? this.parseDate(to) : undefined;
+      } else {
+        // Single date means "since this date"
+        fromDate = this.parseDate(dateRange);
+      }
+    } catch (error) {
+      printResult(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          suggestions: [
+            'Use a relative range like "2d", "1h", "1w", "3m", "1y"',
+            'Use the keyword "today"',
+            'Use ISO dates, optionally as a range: 2024-01-01..2024-02-01',
+          ],
+        },
+        options,
+      );
+      return;
     }
 
     const filterOpts: FilterOptions = {
