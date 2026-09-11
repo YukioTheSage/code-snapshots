@@ -2,6 +2,27 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { minimatch } from 'minimatch';
 
+/** The store location used when the caller does not configure one. */
+const DEFAULT_SNAPSHOT_LOCATION = '.snapshots';
+
+/**
+ * Normalises a configured snapshot location into the form the ignore patterns
+ * are written in: forward slashes, no leading `./` and no trailing `/`.
+ *
+ * `snapshotLocation` is a user setting, so `.snapshots`, `.snapshots/` and
+ * `.\.snapshots\` all name the same directory and must all be excluded.
+ */
+function normalizeSnapshotLocation(snapshotLocation: string): string {
+  const normalized = (snapshotLocation ?? '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^(?:\.\/)+/, '')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '');
+
+  return normalized || DEFAULT_SNAPSHOT_LOCATION;
+}
+
 /**
  * Simple .gitignore parser to determine if a file should be ignored
  * Standalone version without VS Code dependencies
@@ -12,9 +33,12 @@ export class GitignoreParser {
   private workspaceRoot: string;
   private snapshotLocation: string;
 
-  constructor(workspaceRoot: string, snapshotLocation: string = '.snapshots') {
+  constructor(
+    workspaceRoot: string,
+    snapshotLocation: string = DEFAULT_SNAPSHOT_LOCATION,
+  ) {
     this.workspaceRoot = workspaceRoot;
-    this.snapshotLocation = snapshotLocation;
+    this.snapshotLocation = normalizeSnapshotLocation(snapshotLocation);
     this.loadGitignore();
   }
 
@@ -47,6 +71,9 @@ export class GitignoreParser {
     }
 
     // Add default patterns (always ignore these directories)
+    // The store location is pushed bare here and with `/**` suffixes further
+    // down: the bare form covers the directory itself, the suffixed forms cover
+    // its contents, which is what callers matching file paths need.
     this.patterns.push(this.snapshotLocation);
     this.patterns.push('node_modules');
     this.patterns.push('.git');
@@ -65,8 +92,28 @@ export class GitignoreParser {
 
     // Contents of the snapshot directory, for callers that check file paths
     // rather than pruning the directory during a walk.
-    this.patterns.push('**/.snapshots');
-    this.patterns.push('**/.snapshots/**');
+    //
+    // Derived from the CONFIGURED location rather than hardcoded: `shouldIgnore`
+    // matches file paths through `matchPattern`, so the bare name above only
+    // matches the directory itself, and a hardcoded `.snapshots` excluded
+    // nothing for a caller whose store lives elsewhere. The store's own
+    // `index.json` and payload files were therefore captured into every
+    // snapshot of that workspace.
+    this.patterns.push(`**/${this.snapshotLocation}`);
+    this.patterns.push(`**/${this.snapshotLocation}/**`);
+    if (this.snapshotLocation !== DEFAULT_SNAPSHOT_LOCATION) {
+      // Root-anchored contents form, plus the default location itself.
+      //
+      // The default location keeps its exclusions: every caller has them today,
+      // and dropping them would let a store left behind at `.snapshots` start
+      // being captured -- and then deleted by a restore, which is the failure
+      // this change is fixing. When the location IS the default this branch does
+      // not run at all, so every existing caller sees the pattern set it already
+      // sees.
+      this.patterns.push(`${this.snapshotLocation}/**`);
+      this.patterns.push(`**/${DEFAULT_SNAPSHOT_LOCATION}`);
+      this.patterns.push(`**/${DEFAULT_SNAPSHOT_LOCATION}/**`);
+    }
 
     // Explicitly handle virtual environments
     this.patterns.push('venv');

@@ -65,4 +65,74 @@ describe('GitignoreParser default ignores (BUG-10)', () => {
     expect(withGitignore.shouldIgnore('build/out.js')).toBe(true);
     expect(withGitignore.shouldIgnore('.vscode/codelapse.json')).toBe(true);
   });
+
+  /**
+   * The store is excluded through patterns derived from the location it is
+   * configured with. Hardcoding `.snapshots` left a custom store inside the
+   * scanned tree, so every snapshot captured the store's own index and payload
+   * files -- and a restore, which deletes workspace files the snapshot does not
+   * contain, deleted those payloads.
+   */
+  it('ignores the configured snapshot location, not the default one', () => {
+    const custom = new GitignoreParser(root, '.snapshots-test');
+
+    // `shouldIgnore` matches file paths, so the bare directory name is not
+    // enough: the contents are what a snapshot scan sees.
+    expect(custom.shouldIgnore('.snapshots-test')).toBe(true);
+    expect(custom.shouldIgnore('.snapshots-test/index.json')).toBe(true);
+    expect(
+      custom.shouldIgnore('.snapshots-test/snapshot-1/snapshot.json'),
+    ).toBe(true);
+    // Not only at the workspace root: the store can sit in a subdirectory.
+    expect(custom.shouldIgnore('sub/dir/.snapshots-test/index.json')).toBe(
+      true,
+    );
+    // A store left behind at the default location keeps its exclusion; no file
+    // that was ignored before this change becomes capturable.
+    expect(custom.shouldIgnore('.snapshots/index.json')).toBe(true);
+    // Ordinary project files are still kept, at the same depth.
+    expect(custom.shouldIgnore('src/main.ts')).toBe(false);
+    expect(custom.shouldIgnore('sub/dir/snapshots-test/index.json')).toBe(false);
+  });
+
+  it('normalises a hand-written location into the patterns it emits', () => {
+    // `snapshotLocation` is a user setting: trailing slashes, a leading `./`
+    // and Windows separators all name the same directory.
+    for (const configured of [
+      '.snapshots-test',
+      '.snapshots-test/',
+      './.snapshots-test',
+      '.snapshots-test\\',
+    ]) {
+      const parser = new GitignoreParser(root, configured);
+
+      expect(parser.shouldIgnore('.snapshots-test/index.json')).toBe(true);
+      expect(
+        parser
+          .getPatterns()
+          .filter((p) => p.includes('.snapshots-test')),
+      ).toEqual([
+        '.snapshots-test',
+        '**/.snapshots-test',
+        '**/.snapshots-test/**',
+        '.snapshots-test/**',
+      ]);
+    }
+  });
+
+  it('emits the same patterns for the default location as before', () => {
+    // Byte-identical set: `.snapshots` bare, `**/.snapshots`, `**/.snapshots/**`.
+    // The custom-location branch must not leak into the default one.
+    const defaults = new GitignoreParser(
+      root,
+      '.snapshots',
+    ).getPatterns();
+    const storePatterns = defaults.filter((p) => p.includes('snapshots'));
+
+    expect(storePatterns).toEqual([
+      '.snapshots',
+      '**/.snapshots',
+      '**/.snapshots/**',
+    ]);
+  });
 });

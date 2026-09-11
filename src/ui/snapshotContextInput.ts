@@ -2,6 +2,7 @@
 import path = require('path');
 import * as vscode from 'vscode';
 import { GitignoreParser } from 'codelapse-core';
+import { getSnapshotLocation } from '../config';
 
 export interface SnapshotContextOptions {
   description: string;
@@ -31,7 +32,9 @@ export interface SnapshotContextOptions {
 export async function listSelectableFiles(
   workspaceRoot: string,
 ): Promise<string[]> {
-  const parser = new GitignoreParser(workspaceRoot);
+  // The configured store location: the picker must not offer the store's own
+  // files, which the engine (using the same configured location) will refuse.
+  const parser = new GitignoreParser(workspaceRoot, getSnapshotLocation());
   const initial = await vscode.workspace.findFiles(
     '**/*',
     parser.getExcludeGlobPattern(),

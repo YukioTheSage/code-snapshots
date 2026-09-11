@@ -31,17 +31,18 @@ const ACTIVE_NONE = -1;
  * disk at teardown, so an inherited snapshot can be a metadata-only entry whose
  * content no longer resolves.
  *
- * BUG (reported, deliberately not asserted here): the store lives inside the
- * scanned workspace, so a snapshot captures the store's own `snapshot.json`
- * payloads, and a restore deletes every workspace file the snapshot does not
- * contain. Navigating therefore deletes the payload file of the snapshot it
- * moved to -- written after that snapshot's own file scan, so it counts as
- * "extraneous" to itself -- and the payloads of every snapshot newer than it,
- * while still reporting success. Observed directly in this fixture: `Restore
- * Apply summary: 5 restored, 2 deleted`, after which the two newer snapshots'
+ * HISTORICAL BUG (fixed; regression-tested in `storeExclusion.test.ts`): the
+ * store lived inside the scanned workspace and was not excluded from it, so a
+ * snapshot captured the store's own `snapshot.json` payloads, and a restore
+ * deleted every workspace file the snapshot does not contain. Navigating
+ * therefore deleted the payload file of the snapshot it moved to -- written
+ * after that snapshot's own file scan, so it counted as "extraneous" to itself
+ * -- and the payloads of every snapshot newer than it, while still reporting
+ * success. Observed directly in this fixture: `Restore Apply summary: 5
+ * restored, 2 deleted`, after which the two newer snapshots'
  * `.snapshots-test/<id>/snapshot.json` files were gone while the index still
- * listed them. Asserting that would lock the data loss in as expected
- * behaviour, so it is documented and reported instead. See task-345-report.md.
+ * listed them. See task-345-report.md (finding F1) for the reproduction and
+ * task-15-report.md for the fix.
  */
 suite("snapshot navigation", function () {
   this.timeout(60000);

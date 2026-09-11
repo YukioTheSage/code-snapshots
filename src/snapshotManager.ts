@@ -5,7 +5,7 @@ import * as crypto from 'crypto';
 import { promises as fsPromises } from 'fs'; // Import promises API
 import { GitignoreParser, runWithConcurrencyLimit } from 'codelapse-core';
 import { log, logVerbose } from './logger';
-import { getMaxSnapshots } from './config';
+import { getMaxSnapshots, getSnapshotLocation } from './config';
 import { createDiff } from './snapshotDiff'; // Removed unused applyDiff import
 import { SnapshotStorage } from './snapshotStorage';
 import { API as GitAPI } from './types/git'; // Import Git API type
@@ -313,7 +313,10 @@ export class SnapshotManager {
     const id = `snapshot-${timestamp}-${crypto.randomBytes(4).toString('hex')}`;
 
     // Instantiate the gitignore parser
-    const parser = new GitignoreParser(workspaceRoot);
+    // The configured location, not the parser's default: the store lives inside
+    // the scanned workspace, so a parser that assumes `.snapshots` captures the
+    // store's own index and payload files into every snapshot.
+    const parser = new GitignoreParser(workspaceRoot, getSnapshotLocation());
     log(`Initialized GitignoreParser for workspace: ${workspaceRoot}`);
 
     // --- Get Git Info ---
@@ -747,7 +750,9 @@ export class SnapshotManager {
 
     // 1. Get current workspace files (using existing filtering logic)
     // TODO: Consider extracting this file filtering logic into a reusable private method
-    const parser = new GitignoreParser(workspaceRoot);
+    // Configured store location, as in takeSnapshotInternal: the store is not
+    // workspace content and must not appear in a change calculation either.
+    const parser = new GitignoreParser(workspaceRoot, getSnapshotLocation());
     const excludePattern = parser.getExcludeGlobPattern();
     const negatedGlobs = parser.getNegatedGlobs();
     const initialCurrentFiles = await vscode.workspace.findFiles(
@@ -989,6 +994,53 @@ export class SnapshotManager {
   // --- End: Preview Helper Method (REMOVED) ---
 
   /**
+   * Whether a workspace-relative path names something inside the snapshot
+   * store.
+   *
+   * The store is application data the extension writes while it works, so it is
+   * never workspace content and never extraneous: a restore that deletes it is
+   * destroying the snapshots themselves.
+   *
+   * Resolved through `path.relative` rather than by string prefix, so a store
+   * reached through a different spelling (`./.snapshots-test`, `.snapshots/`)
+   * is still recognised. The comparison ignores case on Windows only, where the
+   * filesystem does: elsewhere `.Snapshots` and `.snapshots` are two different
+   * directories and refusing to delete the wrong one would be a real change in
+   * behaviour.
+   */
+  private isInsideSnapshotStore(
+    relativePath: string,
+    workspaceRoot: string,
+  ): boolean {
+    const storeDirectory = this.storage.getSnapshotDirectory();
+    if (!workspaceRoot || !storeDirectory) {
+      return false;
+    }
+
+    const storeRelative = path.relative(workspaceRoot, storeDirectory);
+    // A store outside the workspace cannot be reached by a workspace scan; the
+    // guard would otherwise refuse deletions it has no business judging.
+    if (
+      !storeRelative ||
+      storeRelative.startsWith('..') ||
+      path.isAbsolute(storeRelative)
+    ) {
+      return false;
+    }
+
+    const normalize = (value: string): string => {
+      const withSlashes = value.replace(/\\/g, '/').replace(/\/+$/, '');
+      return process.platform === 'win32'
+        ? withSlashes.toLowerCase()
+        : withSlashes;
+    };
+
+    const store = normalize(storeRelative);
+    const target = normalize(relativePath);
+    return target === store || target.startsWith(`${store}/`);
+  }
+
+  /**
    * Applies the file changes necessary to restore a specific snapshot.
    * This method performs the core file operations (add, modify, delete)
    * but does NOT handle UI interactions like previews, confirmations, or conflict checks.
@@ -1028,7 +1080,11 @@ export class SnapshotManager {
     log(`Applying snapshot restore operations for ${snapshotId}...`);
     // Re-fetch current workspace files and expected snapshot files
     // TODO: Consider extracting file filtering logic to a reusable private method
-    const parser = new GitignoreParser(workspaceRoot);
+    // Configured store location, as in takeSnapshotInternal: enumerating the
+    // store here is what made a restore delete the snapshot payloads it was
+    // restoring around (they are written after their own snapshot's scan, so
+    // the snapshot never lists them).
+    const parser = new GitignoreParser(workspaceRoot, getSnapshotLocation());
     const excludePattern = parser.getExcludeGlobPattern();
     const negatedGlobs = parser.getNegatedGlobs();
     const initialCurrentFiles = await vscode.workspace.findFiles(
@@ -1101,6 +1157,22 @@ export class SnapshotManager {
       // original `!inSnapshot || markedDeleted`, kept as an early-continue so
       // the rest of the loop body has no nesting.
       if (inSnapshot && !markedDeleted) {
+        continue;
+      }
+
+      // The store is application data that happens to live inside the
+      // workspace, not workspace content: it is written by this extension while
+      // the snapshot is being taken, so no snapshot's own scan can describe it,
+      // and "absent from the snapshot" is never evidence that it is extraneous.
+      // Enumerating it is what deleted the payloads of the snapshot being
+      // restored to and of every newer snapshot; the parser now excludes it, and
+      // this guard is what keeps a future filtering regression from deleting it
+      // again.
+      if (this.isInsideSnapshotStore(relativePath, workspaceRoot)) {
+        refusedDeletions.push(relativePath);
+        log(
+          `Restore Apply: Refusing to delete ${relativePath}: it is inside the snapshot store.`,
+        );
         continue;
       }
 

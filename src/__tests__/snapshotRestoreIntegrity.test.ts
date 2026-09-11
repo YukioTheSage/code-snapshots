@@ -48,6 +48,10 @@ describe('applySnapshotRestoreInternal integrity guard', () => {
     // Inject a storage double with a resolvable workspace root.
     const storage: any = {
       getWorkspaceRoot: () => workspaceRoot,
+      // The deletion loop asks where the store is before deleting anything, so
+      // that it can refuse to delete the extension's own data. None of the
+      // fixtures below live inside it.
+      getSnapshotDirectory: () => path.join(workspaceRoot, '.snapshots'),
       getSnapshotFileContent: jest.fn(),
       isBinaryFile: () => false,
       writeFileContent: jest.fn().mockResolvedValue(undefined),
@@ -158,6 +162,9 @@ describe('applySnapshotRestoreInternal on a complete snapshot', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const storage: any = {
       getWorkspaceRoot: () => workspaceRoot,
+      // See the note in the first beforeEach: the deletion loop resolves the
+      // store directory before it deletes anything.
+      getSnapshotDirectory: () => path.join(workspaceRoot, '.snapshots'),
       getSnapshotFileContent: jest.fn(async (_id: string, rel: string) =>
         rel === 'keep.ts' ? 'from snapshot' : null,
       ),
