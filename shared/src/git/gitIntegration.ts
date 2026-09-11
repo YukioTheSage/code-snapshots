@@ -313,6 +313,15 @@ export class GitIntegration {
   }
 
   /**
+   * How many paths go into one `git add --` invocation.
+   *
+   * Windows caps a command line near 32 KB, so spreading every path of a large
+   * snapshot into a single argv fails with E2BIG/ENOBUFS. 100 long paths stay
+   * well inside the limit on every platform.
+   */
+  private static readonly STAGE_BATCH_SIZE = 100;
+
+  /**
    * Stage specific files
    */
   public stageFiles(files: string[]): void {
@@ -320,11 +329,36 @@ export class GitIntegration {
       throw new Error('No files specified for staging');
     }
 
-    execFileSync('git', ['add', '--', ...files], {
-      cwd: this.workspaceRoot,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    for (let i = 0; i < files.length; i += GitIntegration.STAGE_BATCH_SIZE) {
+      const batch = files.slice(i, i + GitIntegration.STAGE_BATCH_SIZE);
+      execFileSync('git', ['add', '--', ...batch], {
+        cwd: this.workspaceRoot,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    }
+  }
+
+  /**
+   * The paths git reports as untracked, repository-relative.
+   */
+  public getUntrackedFiles(): string[] {
+    try {
+      return execFileSync(
+        'git',
+        ['ls-files', '--others', '--exclude-standard'],
+        {
+          cwd: this.workspaceRoot,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      )
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
   }
 
   /**

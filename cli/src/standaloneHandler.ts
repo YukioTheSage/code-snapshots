@@ -769,6 +769,10 @@ export class StandaloneHandler {
     snapshotId: string;
     commitMessage?: string;
     createBranch?: string;
+    /**
+     * Stage files git currently reports as untracked as well. Defaults to
+     * false, matching the extension.
+     */
     includeUntracked?: boolean;
   }): Promise<GitCommitResult> {
     if (!this.snapshotManager || !this.workspaceRoot) {
@@ -781,14 +785,35 @@ export class StandaloneHandler {
       throw new Error(`Snapshot ${options.snapshotId} not found`);
     }
 
+    // Refuse to write over uncommitted work. The write below is unconditional,
+    // so a dirty tree means the user's own edits are the thing being destroyed.
+    if (git.hasUncommittedChanges()) {
+      throw new Error(
+        'Refusing to write the snapshot over a dirty working tree: commit or stash your changes first (`git status` lists them).',
+      );
+    }
+
     // Optionally create and switch to a new branch first
     if (options.createBranch) {
       git.createBranch(options.createBranch, true);
     }
 
+    const written: string[] = [];
+    const removed: string[] = [];
+
     // Write snapshot files to the working directory
     for (const [relativePath, fileData] of Object.entries(snapshot.files)) {
+      const fullPath = ensureWithinDirectory(this.workspaceRoot, relativePath);
+      assertNoSymlinkPath(this.workspaceRoot, fullPath);
+
       if (fileData.deleted) {
+        // The snapshot records the file as gone at that point, so the commit
+        // must record the removal too. Leaving it on disk is what made "commit
+        // this snapshot" disagree with the snapshot it names.
+        if (fs.existsSync(fullPath)) {
+          fs.rmSync(fullPath, { force: true });
+          removed.push(relativePath);
+        }
         continue;
       }
 
@@ -803,19 +828,28 @@ export class StandaloneHandler {
         continue;
       }
 
-      const fullPath = ensureWithinDirectory(this.workspaceRoot, relativePath);
-      assertNoSymlinkPath(this.workspaceRoot, fullPath);
-
       const dir = path.dirname(fullPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
 
       fs.writeFileSync(fullPath, content, 'utf8');
+      written.push(relativePath);
     }
 
-    // Stage all changes
-    git.stageAll();
+    // Stage exactly what the snapshot contains. `git add -A` also staged the
+    // untracked clutter the working tree happened to carry, so the commit was
+    // never a representation of the snapshot. Untracked paths are excluded
+    // unless the caller asked for them, matching the extension's
+    // `resolveSnapshotPaths`.
+    const untracked =
+      options.includeUntracked === true ? null : new Set(git.getUntrackedFiles());
+    const pathsToStage = [...written, ...removed].filter(
+      (relativePath) => untracked === null || !untracked.has(relativePath),
+    );
+    if (pathsToStage.length > 0) {
+      git.stageFiles(pathsToStage);
+    }
 
     // Create commit
     const message =
