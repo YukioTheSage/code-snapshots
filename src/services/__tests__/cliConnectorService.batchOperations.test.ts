@@ -92,6 +92,69 @@ async function withHandlerTimeout(
   }
 }
 
+/** The `{success, error}` envelope both batch handlers answer with. */
+interface BatchEnvelope {
+  success: boolean;
+  error?: { message?: string };
+}
+
+/**
+ * Bounds a hang-shaped call on the fake clock. `withHandlerTimeout` bounds the
+ * *test*, but not the defect: a retry loop parked on a real backoff timer would
+ * keep running after the race gave up and outlive the jest worker. With fake
+ * timers nothing can leak, so each round fires whatever retry timer is pending
+ * at that moment (and awaits the async work behind it): a value that reaches the
+ * loop is observed still retrying after `rounds` attempts, while a value the
+ * handler rejects is seen settling straight away. The caller installs the fake
+ * timers, so the abandoned loop is discarded with the fake clock.
+ */
+async function settleAfterRetryRounds(
+  invocation: Promise<BatchEnvelope>,
+  rounds: number,
+): Promise<{ settled: boolean; result: BatchEnvelope | undefined }> {
+  let settled = false;
+  let result: BatchEnvelope | undefined;
+
+  // The handlers report failure as an envelope rather than by rejecting, so an
+  // unexpected rejection is normalised the same way and reported by the
+  // assertion instead of becoming an unhandled rejection.
+  void invocation.then(
+    (value) => {
+      settled = true;
+      result = value;
+    },
+    (error) => {
+      settled = true;
+      result = {
+        success: false,
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    },
+  );
+
+  for (let round = 0; round < rounds && !settled; round += 1) {
+    await jest.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+  }
+
+  return { settled, result };
+}
+
+/** An `analyzeFile` operation whose data resolves against the mocked snapshot. */
+function analyzeFileOperation(id = 'op1'): {
+  id: string;
+  type: string;
+  data: { filePath: string; snapshotId: string };
+} {
+  return {
+    id,
+    type: 'analyzeFile',
+    data: { filePath: 'test.ts', snapshotId: 'snap1' },
+  };
+}
+
 describe('CliConnectorService - Batch Operations', () => {
   let cliConnectorService: CliConnectorService;
   let mockTerminalApiService: jest.Mocked<TerminalApiService>;
@@ -384,6 +447,137 @@ describe('CliConnectorService - Batch Operations', () => {
         'op3',
         'op4',
       ]);
+    });
+
+    it('should reject a non-finite maxRetries instead of retrying forever', async () => {
+      // JSON `1e999` parses to Infinity, and `retryFailedOperations`'s
+      // `while (retryCount < maxRetries && !success)` never terminates for it:
+      // the loop only leaves an attempt behind by succeeding, so an attempt that
+      // throws is retried forever — a socket client could wedge the host. The
+      // loop cannot be bounded from outside (it parks on a backoff timer between
+      // attempts), so it runs on the fake clock: the invalid value has to be
+      // rejected before the loop is reached, while a value that does reach it is
+      // still retrying after eight rounds and fails the assertion below instead
+      // of hanging the run.
+      const executeAnalysisOperation = jest
+        .spyOn(cliConnectorService as any, 'executeAnalysisOperation')
+        .mockRejectedValue(new Error('Temporary failure'));
+
+      jest.useFakeTimers();
+      try {
+        const outcome = await settleAfterRetryRounds(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [analyzeFileOperation()],
+            parallel: false,
+            retryFailedOperations: true,
+            maxRetries: Number.POSITIVE_INFINITY,
+          }),
+          8,
+        );
+
+        expect(outcome.settled).toBe(true);
+        expect(outcome.result?.success).toBe(false);
+        expect(String(outcome.result?.error?.message)).toMatch(/maxRetries/i);
+        // Rejected up front: before the guard this seam was hit once per
+        // attempt, forever.
+        expect(executeAnalysisOperation).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should reject a maxRetries that is not a non-negative integer', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      for (const maxRetries of [-1, 1.5, '2', Number.NaN]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [analyzeFileOperation()],
+            parallel: false,
+            maxRetries,
+          }),
+          `maxRetries ${String(maxRetries)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/maxRetries/i);
+      }
+    });
+
+    it('should accept maxRetries 0 as "do not retry"', async () => {
+      // 0 is a legitimate value — "do not retry" — so the guard must not reject
+      // it, and it must still reach the retry helper, which then does nothing.
+      mockTerminalApiService.getSnapshotFileContent.mockRejectedValue(
+        new Error('Temporary failure'),
+      );
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+          retryFailedOperations: true,
+          maxRetries: 0,
+        }),
+        'maxRetries 0 was rejected',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.failedOperations).toBe(1);
+      // The operation ran once and was never re-executed.
+      expect(
+        mockTerminalApiService.getSnapshotFileContent,
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('should reject an invalid timeout instead of faking a timeout failure', async () => {
+      // `setTimeout` coerces a null, NaN, zero or negative delay to 0 and
+      // overflows Infinity to 1ms, so the race reported a timeout on operations
+      // that had not timed out at all.
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      for (const timeout of [
+        null,
+        Number.NaN,
+        0,
+        -1,
+        Number.POSITIVE_INFINITY,
+        '300000',
+      ]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [analyzeFileOperation()],
+            parallel: false,
+            timeout,
+          }),
+          `timeout ${String(timeout)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/timeout/i);
+      }
+    });
+
+    it('should still process a positive finite timeout', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+          timeout: 50,
+        }),
+        'valid timeout 50 never returned',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.metadata.timeout).toBe(50);
+      expect(result.results[0].success).toBe(true);
     });
 
     it('should handle operation failures with continueOnError=true', async () => {
@@ -679,6 +873,59 @@ describe('CliConnectorService - Batch Operations', () => {
       expect(result.error.message).toContain('0');
     });
 
+    it('should reject a non-finite maxRetries instead of retrying forever', async () => {
+      // Same wedge as the analyze handler: `retryFailedQueries`'s
+      // `while (retryCount < maxRetries && !success)` cannot terminate for
+      // Infinity while the query keeps throwing, so the guard has to reject the
+      // value before that loop is reached.
+      const handleEnhancedSearch = jest
+        .spyOn(cliConnectorService as any, 'handleEnhancedSearch')
+        .mockRejectedValue(new Error('Temporary search failure'));
+
+      jest.useFakeTimers();
+      try {
+        const outcome = await settleAfterRetryRounds(
+          (cliConnectorService as any).handleBatchSearch({
+            queries: [{ id: 'q1', query: 'test query' }],
+            parallel: false,
+            retryFailedQueries: true,
+            maxRetries: Number.POSITIVE_INFINITY,
+          }),
+          8,
+        );
+
+        expect(outcome.settled).toBe(true);
+        expect(outcome.result?.success).toBe(false);
+        expect(String(outcome.result?.error?.message)).toMatch(/maxRetries/i);
+        expect(handleEnhancedSearch).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should reject an invalid timeout instead of faking a timeout failure', async () => {
+      for (const timeout of [
+        null,
+        Number.NaN,
+        0,
+        -1,
+        Number.POSITIVE_INFINITY,
+        '300000',
+      ]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchSearch({
+            queries: [{ id: 'q1', query: 'test query' }],
+            parallel: false,
+            timeout,
+          }),
+          `timeout ${String(timeout)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/timeout/i);
+      }
+    });
+
     it('should deduplicate queries when enabled', async () => {
       const data = {
         queries: [
@@ -751,6 +998,55 @@ describe('CliConnectorService - Batch Operations', () => {
       expect(result.success).toBe(true);
       expect(result.results[0].success).toBe(false);
       expect(result.results[0].error.message).toContain('timeout');
+    });
+  });
+
+  describe('timeout timer cleanup', () => {
+    beforeEach(() => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+      mockSemanticSearchService.searchCodeEnhanced.mockResolvedValue([]);
+    });
+
+    /**
+     * Each of the four timeout races armed a timer and dropped the handle as
+     * soon as the raced work won, so a batch of N operations left N timers
+     * pending — the leak that kept the jest worker alive until it was force
+     * exited. The fake clock makes the count observable: it has to be back to
+     * zero after every call, in the parallel and the sequential path of both
+     * handlers, with the operation resolving immediately (so the timeout never
+     * fires and only the cleanup can retire the timer).
+     */
+    it('should clear the timeout timer once the raced operation settles', async () => {
+      jest.useFakeTimers();
+      try {
+        await (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: true,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+
+        await (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+
+        await (cliConnectorService as any).handleBatchSearch({
+          queries: [{ id: 'q1', query: 'test query' }],
+          parallel: true,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+
+        await (cliConnectorService as any).handleBatchSearch({
+          queries: [{ id: 'q1', query: 'test query' }],
+          parallel: false,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

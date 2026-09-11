@@ -87,6 +87,65 @@ function assertValidMaxConcurrency(value: unknown): string | null {
 }
 
 /**
+ * `maxRetries` bounds `retryFailedOperations` / `retryFailedQueries`
+ * (`while (retryCount < maxRetries && !success)`), a loop that only leaves an
+ * attempt behind by succeeding. JSON `1e999` parses to `Infinity`, which that
+ * loop can never reach, so the value comes straight from the CLI request and is
+ * checked before the retry helper can be entered. 0 is legitimate: it means
+ * "do not retry".
+ */
+function assertValidMaxRetries(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return `Invalid maxRetries: ${String(
+      value,
+    )}. Expected a non-negative integer.`;
+  }
+  return null;
+}
+
+/**
+ * `timeout` is handed to `withTimeout`. `setTimeout` coerces a null, NaN, zero
+ * or negative delay to 0 — and overflows `Infinity` to 1ms — so an unvalidated
+ * value makes the race report a timeout on operations that never timed out.
+ * The value comes straight from the CLI request, so it is checked here and the
+ * caller gets an error envelope instead of a fabricated failure.
+ */
+function assertValidTimeout(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return `Invalid timeout: ${String(
+      value,
+    )}. Expected a positive number of milliseconds.`;
+  }
+  return null;
+}
+
+/**
+ * Races `work` against a timeout that is always cleared, win or lose. The
+ * previous inline form armed a timer per operation and dropped the handle, so
+ * every batch left up to `maxConcurrency` timers pending and the unit suite's
+ * worker never exited cleanly.
+ */
+async function withTimeout<T>(
+  work: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
  * Service that enables CLI tools to communicate with the VSCode extension
  */
 export class CliConnectorService implements vscode.Disposable {
@@ -1905,6 +1964,19 @@ export class CliConnectorService implements vscode.Disposable {
         throw new Error(maxConcurrencyError);
       }
 
+      // Rejected before the retry helper: `Infinity` runs its loop forever.
+      const maxRetriesError = assertValidMaxRetries(maxRetries);
+      if (maxRetriesError) {
+        throw new Error(maxRetriesError);
+      }
+
+      // Rejected before any timer is armed: `setTimeout` turns the invalid
+      // delays into an immediate, fabricated timeout.
+      const timeoutError = assertValidTimeout(timeout);
+      if (timeoutError) {
+        throw new Error(timeoutError);
+      }
+
       if (!operations || !Array.isArray(operations)) {
         throw new Error('operations array is required');
       }
@@ -1962,19 +2034,11 @@ export class CliConnectorService implements vscode.Disposable {
 
             try {
               // Add timeout wrapper
-              const operationPromise = this.executeAnalysisOperation(op);
-              const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                  () =>
-                    reject(new Error(`Operation timeout after ${timeout}ms`)),
-                  timeout,
-                );
-              });
-
-              const result = await Promise.race([
-                operationPromise,
-                timeoutPromise,
-              ]);
+              const result = await withTimeout(
+                this.executeAnalysisOperation(op),
+                timeout,
+                `Operation timeout after ${timeout}ms`,
+              );
 
               // Check if the operation result indicates failure
               if (
@@ -2069,18 +2133,11 @@ export class CliConnectorService implements vscode.Disposable {
           const operationId = operation.id || `op-${results.length}`;
 
           try {
-            const operationPromise = this.executeAnalysisOperation(operation);
-            const timeoutPromise = new Promise((_, reject) => {
-              setTimeout(
-                () => reject(new Error(`Operation timeout after ${timeout}ms`)),
-                timeout,
-              );
-            });
-
-            const result = await Promise.race([
-              operationPromise,
-              timeoutPromise,
-            ]);
+            const result = await withTimeout(
+              this.executeAnalysisOperation(operation),
+              timeout,
+              `Operation timeout after ${timeout}ms`,
+            );
 
             // Check if the operation result indicates failure
             if (
@@ -2243,6 +2300,19 @@ export class CliConnectorService implements vscode.Disposable {
         throw new Error(maxConcurrencyError);
       }
 
+      // Rejected before the retry helper: `Infinity` runs its loop forever.
+      const maxRetriesError = assertValidMaxRetries(maxRetries);
+      if (maxRetriesError) {
+        throw new Error(maxRetriesError);
+      }
+
+      // Rejected before any timer is armed: `setTimeout` turns the invalid
+      // delays into an immediate, fabricated timeout.
+      const timeoutError = assertValidTimeout(timeout);
+      if (timeoutError) {
+        throw new Error(timeoutError);
+      }
+
       if (!queries || !Array.isArray(queries)) {
         throw new Error('queries array is required');
       }
@@ -2306,18 +2376,11 @@ export class CliConnectorService implements vscode.Disposable {
 
             try {
               // Add timeout wrapper
-              const searchPromise = this.handleEnhancedSearch(query);
-              const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                  () => reject(new Error(`Query timeout after ${timeout}ms`)),
-                  timeout,
-                );
-              });
-
-              const result = await Promise.race([
-                searchPromise,
-                timeoutPromise,
-              ]);
+              const result = await withTimeout(
+                this.handleEnhancedSearch(query),
+                timeout,
+                `Query timeout after ${timeout}ms`,
+              );
 
               // Check if the search result indicates failure
               if (
@@ -2410,15 +2473,11 @@ export class CliConnectorService implements vscode.Disposable {
           const queryId = query.id || `query-${results.length}`;
 
           try {
-            const searchPromise = this.handleEnhancedSearch(query);
-            const timeoutPromise = new Promise((_, reject) => {
-              setTimeout(
-                () => reject(new Error(`Query timeout after ${timeout}ms`)),
-                timeout,
-              );
-            });
-
-            const result = await Promise.race([searchPromise, timeoutPromise]);
+            const result = await withTimeout(
+              this.handleEnhancedSearch(query),
+              timeout,
+              `Query timeout after ${timeout}ms`,
+            );
 
             // Check if the search result indicates failure
             if (
