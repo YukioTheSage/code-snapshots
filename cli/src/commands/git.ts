@@ -125,10 +125,17 @@ export class GitCommands {
           options,
         );
       } else {
+        // A repository with no commits yet legitimately has no branch, commit
+        // or remote; printing `undefined` for those read as a broken command.
+        const display = (value: unknown): string =>
+          typeof value === 'string' && value.length > 0
+            ? value
+            : chalk.gray('(none)');
+
         console.log(chalk.blue('Git Repository Information:'));
-        console.log(`Current branch: ${chalk.green(result.currentBranch)}`);
-        console.log(`Commit hash: ${result.commitHash}`);
-        console.log(`Remote URL: ${result.remoteUrl}`);
+        console.log(`Current branch: ${chalk.green(display(result.currentBranch))}`);
+        console.log(`Commit hash: ${display(result.commitHash)}`);
+        console.log(`Remote URL: ${display(result.remoteUrl)}`);
         console.log(
           `Has changes: ${
             result.hasChanges ? chalk.yellow('Yes') : chalk.green('No')
@@ -146,6 +153,8 @@ export class GitCommands {
               }`,
             );
           });
+        } else {
+          console.log('\nAvailable branches: (none)');
         }
       }
     } catch (error) {
@@ -179,6 +188,17 @@ export class GitCommands {
         );
       } else {
         console.log(chalk.blue('Branches:'));
+        if (!result.branches || result.branches.length === 0) {
+          // An empty list is either a repository with no commits or an
+          // unreadable repository; say which situation the user is in rather
+          // than printing a bare header.
+          console.log(
+            chalk.gray(
+              '  No branches found (a repository with no commits has none yet)',
+            ),
+          );
+          return;
+        }
         for (const branch of result.branches) {
           if (branch === branchInfo.currentBranch) {
             console.log(chalk.green(`  * ${branch}`));

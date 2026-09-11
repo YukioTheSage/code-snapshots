@@ -550,6 +550,14 @@ export class StandaloneHandler {
     if (!this.gitIntegration.isGitRepository()) {
       throw new Error('Not a Git repository');
     }
+    // Every GitIntegration getter returns undefined on a failed invocation, so
+    // without this check the CLI printed `Commit hash: undefined` and exited 0
+    // when git could not be run at all (BUG-9).
+    if (!this.gitIntegration.isGitAvailable()) {
+      throw new Error(
+        'git is not available: the git executable could not be run. Is Git installed and on PATH?',
+      );
+    }
     return this.gitIntegration;
   }
 

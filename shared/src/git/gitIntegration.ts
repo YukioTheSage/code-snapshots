@@ -30,6 +30,27 @@ export class GitIntegration {
   }
 
   /**
+   * Whether the `git` executable can actually be run here.
+   *
+   * Every getter below swallows a failed invocation and returns `undefined`,
+   * which made "git is not installed / not runnable" indistinguishable from
+   * "this repository has no commits yet": `codelapse git info` printed
+   * `Commit hash: undefined` for both and exited 0. Callers that present
+   * results to a user can check this first and report the real problem.
+   */
+  public isGitAvailable(): boolean {
+    try {
+      execFileSync('git', ['--version'], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        encoding: 'utf8',
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Get current Git information
    */
   public getGitInfo(): GitInfo | null {
