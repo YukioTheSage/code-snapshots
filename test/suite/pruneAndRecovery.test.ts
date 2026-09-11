@@ -21,11 +21,13 @@ import * as vscode from "vscode";
  *    those survivors first -- it rewrites every entry pointing into the pruned
  *    prefix into full content, resolved while the chain is still intact, and
  *    persists them -- and only then deletes, so the limit is reached without
- *    losing the data. When a dependency cannot be resolved it persists nothing
- *    and refuses the prune outright -- that outcome is covered by the unit
- *    tests in `src/__tests__/snapshotPruneIntegrity.test.ts`. The integration
- *    tests below assert the reachable outcome end to end: the limit is met
- *    without losing the content it would have cost.
+ *    losing the data. When a dependency cannot be resolved nothing is
+ *    persisted, and the safety selector refuses the candidate a surviving
+ *    snapshot still references, so the limit may then be reached only in part
+ *    (`:1963-1967`). That path is covered by the unit tests in
+ *    `src/__tests__/snapshotPruneIntegrity.test.ts`; the pruning tests below
+ *    assert the reachable outcome end to end: the limit is met without losing
+ *    the content it would have cost.
  *  - `src/snapshotStorage.ts:296-320` -- an unparsable `index.json` is
  *    quarantined into `<store>/quarantine/index.json.quarantine-<iso>` and the
  *    store is rebuilt by `recoverSnapshotsFromFileSystem` (`:480-513`), which

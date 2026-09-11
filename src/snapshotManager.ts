@@ -598,8 +598,10 @@ export class SnapshotManager {
     // Check for files that existed in the previous snapshot but don't exist anymore
     // These represent deleted files that need to be tracked
     //
-    // Selective snapshots intentionally photograph only their selected files
-    // (the filter above, whose condition this mirrors). `currentWorkspaceFiles`
+    // A selective capture with a NON-EMPTY selection photographs only its
+    // selected files (the filter above, whose condition this mirrors); with an
+    // empty selection the filter does not apply either, so the capture is
+    // whole-tree and its deletion markers are real. `currentWorkspaceFiles`
     // is built from that filtered list, so every unselected file would look
     // "gone" here -- a lie about the workspace that restore then acts on by
     // deleting the user's files. Only a whole-tree capture can report deletions.

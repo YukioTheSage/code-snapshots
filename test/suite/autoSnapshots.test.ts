@@ -15,7 +15,9 @@ import * as vscode from "vscode";
  *    MINUTES and 0 disables the timer.
  *  - `src/snapshotManager.ts:631-649` -- a snapshot tagged `auto` whose file
  *    entries show no change returns `{created:false, reason:'no-changes'}`.
- *    Manual snapshots never take that branch.
+ *    Manual snapshots (no `auto` tag) never take that branch, but the
+ *    pre-restore backup does: `src/services/terminalApiService.ts:201-210`
+ *    tags it `['backup','auto']`, so an unchanged workspace can skip it too.
  *  - `src/services/terminalApiService.ts:65-79` -- the skip surfaces as
  *    `{success:false, noChanges:true, error:'Nothing to snapshot: ...'}`.
  *  - `src/changeNotifier.ts:379-440` -- a rule is evaluated when a matching
@@ -416,18 +418,28 @@ suite("auto snapshots", function () {
       )}`,
     );
 
-    // A rule-based snapshot records only the files the rule selected: the scan
-    // is filtered to `selectedFiles` (src/snapshotManager.ts:430-451) and
-    // `currentWorkspaceFiles` is built from that filtered list (:499-507). What
-    // follows the scan is a deletion pass (:606-629) that used to run
-    // unconditionally and wrote `{deleted:true}` for every base-snapshot file
-    // missing from the filtered list, so this snapshot also recorded
-    // [".vscode/settings.json", ".vscode/codelapse-connection.json",
-    // "src/app.ts"] and restoring it deleted files the rule had never captured
-    // (reported as F1 in task-8910-report.md; the selective-capture guard fixed
-    // it). The marker-free shape is asserted directly in
-    // perFileOperations.test.ts ("selective capture does not mark unselected
-    // files as deleted"); the assertions above stay scoped to the matched file
-    // and to the metadata the rule itself sets.
+    // A rule-based snapshot with a NON-EMPTY selection records only the files
+    // the rule selected: the scan is filtered to `selectedFiles`
+    // (src/snapshotManager.ts:430-451) and `currentWorkspaceFiles` is built from
+    // that filtered list (:499-507). The deletion pass is gated on the same
+    // predicate that filter carries (`isSelective` with a non-empty
+    // `selectedFiles`, guard at :606-609), so a rule that matched nothing --
+    // `findFilesMatchingRule` returns `[]` on error
+    // (src/changeNotifier.ts:261-263) or when the pattern matches no file --
+    // falls back to a whole-tree capture, whose deletion markers are real
+    // (perFileOperations.test.ts, "an empty-selection rule snapshot behaves as
+    // a whole-tree capture on restore"). This test's rule matches one file and
+    // the assertions above pin that (`selectedFiles` deep-equals
+    // `[RULE_SIGNAL_REL]`), so the guarded selective path is what it exercises.
+    //
+    // The pass that follows the scan (:606-629) used to run unconditionally and
+    // wrote `{deleted:true}` for every base-snapshot file missing from the
+    // filtered list, so this snapshot also recorded [".vscode/settings.json",
+    // ".vscode/codelapse-connection.json", "src/app.ts"] and restoring it
+    // deleted files the rule had never captured (reported as F1 in
+    // task-8910-report.md; the selective-capture guard fixed it). The marker-free
+    // shape is asserted directly in perFileOperations.test.ts ("selective capture
+    // does not mark unselected files as deleted"); the assertions above stay
+    // scoped to the matched file and to the metadata the rule itself sets.
   });
 });
