@@ -92,7 +92,9 @@ function assertValidMaxConcurrency(value: unknown): string | null {
  * attempt behind by succeeding. JSON `1e999` parses to `Infinity`, which that
  * loop can never reach, so the value comes straight from the CLI request and is
  * checked before the retry helper can be entered. 0 is legitimate: it means
- * "do not retry".
+ * "do not retry". A large finite value is deliberately left uncapped: how many
+ * attempts a caller is willing to pay for is its own choice, and the loop still
+ * leaves on the first success.
  */
 function assertValidMaxRetries(value: unknown): string | null {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
@@ -104,17 +106,31 @@ function assertValidMaxRetries(value: unknown): string | null {
 }
 
 /**
+ * The largest delay `setTimeout` honours: Node clamps a delay above it — or
+ * below 1 — to 1ms, so a longer `timeout` is not a long wait but an immediate
+ * one.
+ */
+const MAX_TIMER_DELAY_MS = 2147483647;
+
+/**
  * `timeout` is handed to `withTimeout`. `setTimeout` coerces a null, NaN, zero
  * or negative delay to 0 — and overflows `Infinity` to 1ms — so an unvalidated
- * value makes the race report a timeout on operations that never timed out.
- * The value comes straight from the CLI request, so it is checked here and the
- * caller gets an error envelope instead of a fabricated failure.
+ * value makes the race report a timeout on operations that never timed out. The
+ * same clamp catches a finite value above the timer ceiling, which is why the
+ * ceiling is part of the check rather than a formality. The value comes straight
+ * from the CLI request, so it is checked here and the caller gets an error
+ * envelope instead of a fabricated failure.
  */
 function assertValidTimeout(value: unknown): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return `Invalid timeout: ${String(
       value,
     )}. Expected a positive number of milliseconds.`;
+  }
+  if (value > MAX_TIMER_DELAY_MS) {
+    return `Invalid timeout: ${String(
+      value,
+    )}. Expected at most ${MAX_TIMER_DELAY_MS} milliseconds: setTimeout clamps a longer delay to 1ms.`;
   }
   return null;
 }

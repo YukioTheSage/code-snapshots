@@ -561,6 +561,34 @@ describe('CliConnectorService - Batch Operations', () => {
       }
     });
 
+    it('should reject a timeout above the setTimeout ceiling instead of faking a timeout failure', async () => {
+      // A finite value is not enough: Node clamps a delay above 2147483647ms to
+      // 1ms, so `3e9` passes an "is it a positive finite number" check and still
+      // arms an immediate timer — the same fabricated timeout failure the
+      // validator exists to prevent.
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+          timeout: 3e9,
+        }),
+        'timeout 3e9 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/timeout/i);
+      // The message names the ceiling, so the caller learns what the limit is.
+      expect(result.error.message).toContain('2147483647');
+      // Rejected before any work: an accepted value reaches the operation.
+      expect(
+        mockTerminalApiService.getSnapshotFileContent,
+      ).not.toHaveBeenCalled();
+    });
+
     it('should still process a positive finite timeout', async () => {
       mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
         'test content',
@@ -924,6 +952,28 @@ describe('CliConnectorService - Batch Operations', () => {
         expect(result.success).toBe(false);
         expect(result.error.message).toMatch(/timeout/i);
       }
+    });
+
+    it('should reject a timeout above the setTimeout ceiling instead of faking a timeout failure', async () => {
+      // Same ceiling as the analyze handler: the value is finite and positive,
+      // but Node clamps a delay above 2147483647ms to 1ms, so accepting it arms
+      // an immediate timer and fabricates the timeout failure.
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchSearch({
+          queries: [{ id: 'q1', query: 'test query' }],
+          parallel: false,
+          timeout: 3e9,
+        }),
+        'timeout 3e9 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/timeout/i);
+      expect(result.error.message).toContain('2147483647');
+      // Rejected before any search: an accepted value reaches the service.
+      expect(
+        mockSemanticSearchService.searchCodeEnhanced,
+      ).not.toHaveBeenCalled();
     });
 
     it('should deduplicate queries when enabled', async () => {
