@@ -114,6 +114,46 @@ export function validatePartialCodelapseConfig(
     }
   }
 
+  if ('autoSnapshot' in value && value.autoSnapshot !== undefined) {
+    if (!isObjectRecord(value.autoSnapshot)) {
+      throw new Error(`${context}.autoSnapshot must be an object`);
+    }
+    if (
+      'rules' in value.autoSnapshot &&
+      value.autoSnapshot.rules !== undefined
+    ) {
+      if (!Array.isArray(value.autoSnapshot.rules)) {
+        throw new Error(`${context}.autoSnapshot.rules must be an array`);
+      }
+      for (const [index, rule] of value.autoSnapshot.rules.entries()) {
+        if (!isObjectRecord(rule)) {
+          throw new Error(
+            `${context}.autoSnapshot.rules[${index}] must be an object`,
+          );
+        }
+        assertString(
+          rule.pattern,
+          `${context}.autoSnapshot.rules[${index}].pattern`,
+        );
+        assertNumber(
+          rule.intervalMinutes,
+          `${context}.autoSnapshot.rules[${index}].intervalMinutes`,
+        );
+        if (rule.intervalMinutes < 1) {
+          throw new Error(
+            `${context}.autoSnapshot.rules[${index}].intervalMinutes must be at least 1`,
+          );
+        }
+        if (rule.enabled !== undefined) {
+          assertBoolean(
+            rule.enabled,
+            `${context}.autoSnapshot.rules[${index}].enabled`,
+          );
+        }
+      }
+    }
+  }
+
   if ('semanticSearch' in value && value.semanticSearch !== undefined) {
     if (!isObjectRecord(value.semanticSearch)) {
       throw new Error(`${context}.semanticSearch must be an object`);

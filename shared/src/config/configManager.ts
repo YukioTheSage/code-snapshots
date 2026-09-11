@@ -262,6 +262,12 @@ export class ConfigManager {
     const result: CodelapseConfig = {
       ...base,
       ...override,
+      autoSnapshot: {
+        ...base.autoSnapshot,
+        ...(override.autoSnapshot || {}),
+        rules:
+          override.autoSnapshot?.rules ?? base.autoSnapshot?.rules ?? [],
+      },
       git: {
         ...base.git,
         ...(override.git || {}),
@@ -394,6 +400,16 @@ export class ConfigManager {
   private assertValueMatchesSchema(keyPath: string, value: unknown): void {
     const schemaEntry = this.configSchema[keyPath];
     if (!schemaEntry) {
+      return;
+    }
+
+    // The schema knows this path is an array; the sharing surfaces also require
+    // each entry to be a usable rule, not any arbitrary array.
+    if (keyPath === 'autoSnapshot.rules') {
+      validatePartialCodelapseConfig(
+        { autoSnapshot: { rules: value } },
+        'setNested',
+      );
       return;
     }
 

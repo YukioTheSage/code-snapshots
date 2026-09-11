@@ -9,6 +9,7 @@ import {
   Snapshot,
   SnapshotFilter,
   GitIntegration,
+  AutoSnapshotRule,
   GitCommitResult,
   GitBranchInfo,
   assertBufferSizeWithinLimit,
@@ -19,6 +20,7 @@ import {
 } from 'codelapse-core';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as minimatchImport from 'minimatch';
 
 /** Directory names that mark the root of a project the CLI can snapshot. */
 const WORKSPACE_INDICATORS = [
@@ -746,6 +748,120 @@ export class StandaloneHandler {
     return this.configManager.isValidKeyPath(keyPath);
   }
 
+  /**
+   * Read the rules from the shared workspace file. The resolver in the
+   * extension layers a VS Code setting over this; the standalone CLI has no VS
+   * Code API, so the shared file is its whole world.
+   */
+  private readSharedAutoSnapshotRules(): AutoSnapshotRule[] {
+    if (!this.configManager) {
+      throw new Error('Handler not initialized');
+    }
+    const rules = this.configManager.getNested('autoSnapshot.rules');
+    return Array.isArray(rules) ? rules : [];
+  }
+
+  public async getAutoSnapshotRules(): Promise<AutoSnapshotRule[]> {
+    return [...this.readSharedAutoSnapshotRules()];
+  }
+
+  public async addAutoSnapshotRule(
+    rule: AutoSnapshotRule,
+  ): Promise<AutoSnapshotRule> {
+    const rules = this.readSharedAutoSnapshotRules();
+    if (rules.some((existing) => existing.pattern === rule.pattern)) {
+      throw new Error(`A rule for "${rule.pattern}" already exists.`);
+    }
+
+    const added: AutoSnapshotRule = {
+      pattern: rule.pattern,
+      intervalMinutes: rule.intervalMinutes,
+      ...(rule.enabled === undefined ? {} : { enabled: rule.enabled }),
+    };
+    await this.configManager!.setNested('autoSnapshot.rules', [
+      ...rules,
+      added,
+    ]);
+    return added;
+  }
+
+  public async updateAutoSnapshotRule(
+    pattern: string,
+    updates: Partial<AutoSnapshotRule>,
+  ): Promise<AutoSnapshotRule> {
+    const rules = this.readSharedAutoSnapshotRules();
+    const index = rules.findIndex((existing) => existing.pattern === pattern);
+    if (index === -1) {
+      throw new Error(`No rule matches "${pattern}".`);
+    }
+
+    const updated = { ...rules[index], ...updates };
+    rules[index] = updated;
+    await this.configManager!.setNested('autoSnapshot.rules', rules);
+    return updated;
+  }
+
+  public async removeAutoSnapshotRule(pattern: string): Promise<void> {
+    const remaining = this.readSharedAutoSnapshotRules().filter(
+      (rule) => rule.pattern !== pattern,
+    );
+    await this.configManager!.setNested('autoSnapshot.rules', remaining);
+  }
+
+  public async toggleAutoSnapshotRule(
+    pattern: string,
+    enabled?: boolean,
+  ): Promise<AutoSnapshotRule> {
+    const rules = this.readSharedAutoSnapshotRules();
+    const existing = rules.find((rule) => rule.pattern === pattern);
+    if (!existing) {
+      throw new Error(`No rule matches "${pattern}".`);
+    }
+    const nextEnabled =
+      typeof enabled === 'boolean' ? enabled : existing.enabled === false;
+    return await this.updateAutoSnapshotRule(pattern, {
+      enabled: nextEnabled,
+    });
+  }
+
+  public async testAutoSnapshotRule(options: {
+    pattern: string;
+    samplePaths?: string[];
+    testPath?: string;
+  }): Promise<{ matched: string[]; matches: string[] }> {
+    const candidates =
+      options.samplePaths ??
+      (options.testPath === undefined ? [] : [options.testPath]);
+    // The CLI's own minimatch is CommonJS v3 while the extension's is v10:
+    // depending on the transform, the matcher arrives as the module value, a
+    // named `minimatch` export, or an interop `default`.
+    const minimatchModule = minimatchImport as unknown as {
+      minimatch?: unknown;
+      default?: unknown;
+    };
+    const matchesPattern = (
+      typeof minimatchImport === 'function'
+        ? minimatchImport
+        : typeof minimatchModule.minimatch === 'function'
+          ? minimatchModule.minimatch
+          : typeof minimatchModule.default === 'function'
+            ? minimatchModule.default
+            : null
+    ) as
+      | ((
+          candidate: string,
+          pattern: string,
+          options?: { dot: boolean },
+        ) => boolean)
+      | null;
+    if (!matchesPattern) {
+      throw new Error('minimatch is unavailable; cannot test the rule pattern.');
+    }
+    const matched = candidates.filter((candidate) =>
+      matchesPattern(candidate, options.pattern, { dot: true }),
+    );
+    return { matched, matches: matched };
+  }
   /**
    * Export configuration
    */

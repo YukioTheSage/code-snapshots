@@ -348,6 +348,43 @@ export class CliConnectorService implements vscode.Disposable {
         case 'importConfig':
           result = await this.handleConfigRequest(method, data);
           break;
+        case 'getAutoSnapshotRules':
+          result = {
+            rules: await this.terminalApiService.getAutoSnapshotRules(),
+          };
+          break;
+        case 'addAutoSnapshotRule':
+          result = {
+            rule: await this.terminalApiService.addAutoSnapshotRule(
+              data?.rule ?? data,
+            ),
+          };
+          break;
+        case 'updateAutoSnapshotRule':
+          result = {
+            rule: await this.terminalApiService.updateAutoSnapshotRule(
+              data?.ruleId ?? data?.id,
+              data?.updates ?? data,
+            ),
+          };
+          break;
+        case 'removeAutoSnapshotRule':
+          await this.terminalApiService.removeAutoSnapshotRule(
+            data?.ruleId ?? data?.id,
+          );
+          result = { success: true };
+          break;
+        case 'toggleAutoSnapshotRule':
+          result = {
+            rule: await this.terminalApiService.toggleAutoSnapshotRule(
+              data?.ruleId ?? data?.id,
+              typeof data?.enabled === 'boolean' ? data.enabled : undefined,
+            ),
+          };
+          break;
+        case 'testAutoSnapshotRule':
+          result = await this.terminalApiService.testAutoSnapshotRule(data);
+          break;
         case 'takeSnapshot':
           result = await this.terminalApiService.takeSnapshot(data);
           break;

@@ -41,6 +41,12 @@ export const STANDALONE_METHODS: ReadonlySet<string> = new Set([
   'editSnapshotNotes',
   'editTaskReference',
   'toggleFavoriteStatus',
+  'getAutoSnapshotRules',
+  'addAutoSnapshotRule',
+  'updateAutoSnapshotRule',
+  'removeAutoSnapshotRule',
+  'toggleAutoSnapshotRule',
+  'testAutoSnapshotRule',
   'getSnapshotFileContent',
   'getConfig',
   'setConfig',
@@ -636,20 +642,69 @@ export class UnifiedClient {
           );
         }
 
-        case 'toggleFavoriteStatus': {
+        case 'getAutoSnapshotRules': {
           if (!this.standaloneHandler) {
             throw new Error('Handler not initialized');
           }
-          const id = String(payload.id ?? payload.snapshotId);
-          const requested =
-            typeof payload.isFavorite === 'boolean'
-              ? payload.isFavorite
-              : undefined;
-          return await this.standaloneHandler.toggleFavoriteStatus(
-            id,
-            requested,
-          );
+          return { rules: await this.standaloneHandler.getAutoSnapshotRules() };
         }
+
+        case 'addAutoSnapshotRule': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const rule = (payload.rule ?? payload) as any;
+          return {
+            rule: await this.standaloneHandler.addAutoSnapshotRule(rule),
+          };
+        }
+
+        case 'updateAutoSnapshotRule': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const rulePattern = String(
+            payload.ruleId ?? payload.id ?? payload.pattern,
+          );
+          return {
+            rule: await this.standaloneHandler.updateAutoSnapshotRule(
+              rulePattern,
+              (payload.updates ?? payload) as any,
+            ),
+          };
+        }
+
+        case 'removeAutoSnapshotRule': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          await this.standaloneHandler.removeAutoSnapshotRule(
+            String(payload.ruleId ?? payload.id ?? payload.pattern),
+          );
+          return { success: true };
+        }
+
+        case 'toggleAutoSnapshotRule': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const requestedEnabled =
+            typeof payload.enabled === 'boolean' ? payload.enabled : undefined;
+          return {
+            rule: await this.standaloneHandler.toggleAutoSnapshotRule(
+              String(payload.ruleId ?? payload.id ?? payload.pattern),
+              requestedEnabled,
+            ),
+          };
+        }
+
+        case 'testAutoSnapshotRule':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.testAutoSnapshotRule(
+              payload as any,
+            );
+          }
+          throw new Error('Handler not initialized');
 
         case 'getSnapshotFileContent':
           return await this.getSnapshotFileContent(

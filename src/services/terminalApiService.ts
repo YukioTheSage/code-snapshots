@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
+import { AutoSnapshotRule, ConfigManager } from 'codelapse-core';
+import { minimatch } from 'minimatch';
 import { SnapshotManager, Snapshot } from '../snapshotManager';
+import { resolveSetting } from '../configSource';
 import { SemanticSearchService } from './semanticSearchService';
 import { log } from '../logger';
 import {
@@ -318,6 +321,110 @@ export class TerminalApiService implements TerminalApiInterface {
     return { snapshotId: id, isFavorite: nextValue };
   }
 
+  /**
+   * Read the shared file rules. `getAutoSnapshotRules` layers an explicitly-set
+   * VS Code value over this; mutations write the file both surfaces can read.
+   */
+  private readSharedAutoSnapshotRules(): AutoSnapshotRule[] {
+    const workspaceRoot = this.snapshotManager.getWorkspaceRoot();
+    if (!workspaceRoot) {
+      throw new Error('No workspace folder open; auto-snapshot rules require a workspace.');
+    }
+    const rules = new ConfigManager(workspaceRoot).getNested(
+      'autoSnapshot.rules',
+    );
+    return Array.isArray(rules) ? rules : [];
+  }
+
+  private async writeSharedAutoSnapshotRules(
+    rules: AutoSnapshotRule[],
+  ): Promise<void> {
+    const workspaceRoot = this.snapshotManager.getWorkspaceRoot();
+    if (!workspaceRoot) {
+      throw new Error('No workspace folder open; auto-snapshot rules require a workspace.');
+    }
+    await new ConfigManager(workspaceRoot).setNested(
+      'autoSnapshot.rules',
+      rules,
+    );
+  }
+
+  async getAutoSnapshotRules(): Promise<AutoSnapshotRule[]> {
+    return resolveSetting<AutoSnapshotRule[]>(
+      'autoSnapshot.rules',
+      this.readSharedAutoSnapshotRules(),
+    ).value;
+  }
+
+  async addAutoSnapshotRule(
+    rule: AutoSnapshotRule,
+  ): Promise<AutoSnapshotRule> {
+    const rules = this.readSharedAutoSnapshotRules();
+    if (rules.some((existing) => existing.pattern === rule.pattern)) {
+      throw new Error(`A rule for "${rule.pattern}" already exists.`);
+    }
+
+    const added: AutoSnapshotRule = {
+      pattern: rule.pattern,
+      intervalMinutes: rule.intervalMinutes,
+      ...(rule.enabled === undefined ? {} : { enabled: rule.enabled }),
+    };
+    await this.writeSharedAutoSnapshotRules([...rules, added]);
+    return added;
+  }
+
+  async updateAutoSnapshotRule(
+    pattern: string,
+    updates: Partial<AutoSnapshotRule>,
+  ): Promise<AutoSnapshotRule> {
+    const rules = this.readSharedAutoSnapshotRules();
+    const index = rules.findIndex((existing) => existing.pattern === pattern);
+    if (index === -1) {
+      throw new Error(`No rule matches "${pattern}".`);
+    }
+
+    const updated = { ...rules[index], ...updates };
+    rules[index] = updated;
+    await this.writeSharedAutoSnapshotRules(rules);
+    return updated;
+  }
+
+  async removeAutoSnapshotRule(pattern: string): Promise<void> {
+    const remaining = this.readSharedAutoSnapshotRules().filter(
+      (rule) => rule.pattern !== pattern,
+    );
+    await this.writeSharedAutoSnapshotRules(remaining);
+  }
+
+  async toggleAutoSnapshotRule(
+    pattern: string,
+    enabled?: boolean,
+  ): Promise<AutoSnapshotRule> {
+    const rules = this.readSharedAutoSnapshotRules();
+    const existing = rules.find((rule) => rule.pattern === pattern);
+    if (!existing) {
+      throw new Error(`No rule matches "${pattern}".`);
+    }
+    const nextEnabled =
+      typeof enabled === 'boolean' ? enabled : existing.enabled === false;
+    return await this.updateAutoSnapshotRule(pattern, {
+      enabled: nextEnabled,
+    });
+  }
+
+  async testAutoSnapshotRule(options: {
+    pattern: string;
+    samplePaths?: string[];
+    testPath?: string;
+  }): Promise<{ matched: string[]; matches: string[] }> {
+    const candidates =
+      options.samplePaths ??
+      (options.testPath === undefined ? [] : [options.testPath]);
+    const matched = candidates.filter((candidate) =>
+      minimatch(candidate, options.pattern, { dot: true }),
+    );
+    return { matched, matches: matched };
+  }
   /**
    * Get a specific snapshot by ID
    */

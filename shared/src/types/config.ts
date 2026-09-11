@@ -1,9 +1,20 @@
 /**
  * Core configuration structure
  */
+export interface AutoSnapshotRule {
+  pattern: string;
+  intervalMinutes: number;
+  enabled?: boolean;
+}
+
+export interface AutoSnapshotConfig {
+  rules: AutoSnapshotRule[];
+}
+
 export interface CodelapseConfig {
   snapshotLocation: string;
   maxSnapshots: number;
+  autoSnapshot: AutoSnapshotConfig;
   git: {
     addCommitInfo: boolean;
     autoSnapshotBeforeOperation: boolean;
@@ -23,6 +34,9 @@ export interface CodelapseConfig {
 export const DEFAULT_CONFIG: CodelapseConfig = {
   snapshotLocation: '.snapshots',
   maxSnapshots: 50,
+  autoSnapshot: {
+    rules: [],
+  },
   git: {
     addCommitInfo: true,
     autoSnapshotBeforeOperation: false,
