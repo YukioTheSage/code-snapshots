@@ -19,6 +19,10 @@ const ACTIVE_NONE = -1;
  *     newest snapshot. "Previous" is not "index - 1" there: with no active
  *     index there is no index to subtract from, and the nearest snapshot to move
  *     to is the most recent one.
+ *   - The two COMMANDS that expose this to the user, `previousSnapshot` and
+ *     `nextSnapshot`, are non-interactive wrappers over those same manager
+ *     calls; the tests at the end of this suite execute them for real and assert
+ *     the effect they have on the manager.
  *
  * Navigation restores files as a side effect (`applySnapshotRestore`), which is
  * what makes the workspace reflect the snapshot it landed on. These tests
@@ -375,6 +379,196 @@ suite("snapshot navigation", function () {
       manager.getActiveSnapshot()?.id,
       oldestId,
       "detached, next must not resolve to the oldest snapshot",
+    );
+  });
+
+  /**
+   * The two navigation COMMANDS, executed as the keybindings do.
+   *
+   * `src/commands.ts:1364-1497` (`previousSnapshot`) and `:1499-1624`
+   * (`nextSnapshot`) are not interactive: each resolves its target with
+   * `snapshotManager.getNavigationTargetIndex(direction)` -- no quick pick, no
+   * modal -- returns early when that is `ACTIVE_NONE`, and otherwise runs the
+   * very same `navigateTo*Snapshot()` call the tests above drive directly,
+   * wrapped in a `withProgress` notification. They therefore run in this
+   * headless host, and `CODELAPSE_DISABLE_INTERACTIVE_UI` cannot turn them into
+   * silent no-ops: neither handler reaches the guarded picker in
+   * `src/ui/quickPick.ts`.
+   *
+   * Both handlers return `undefined` (they report through notifications), so
+   * these tests assert the EFFECT on the manager -- index, active id and active
+   * flags -- and never the command's return value.
+   */
+  test("previousSnapshot command moves the active snapshot back exactly one", async () => {
+    const created = await api.takeSnapshot({
+      description: "nav-cmd-previous",
+      silent: true,
+    });
+    assert.ok(
+      created.success,
+      `takeSnapshot(nav-cmd-previous) failed: ${JSON.stringify(created)}`,
+    );
+
+    const list = snapshotIds();
+    const newest = list.length - 1;
+    const newestId = list[newest];
+    const previousId = list[newest - 1];
+    assert.ok(
+      newest > 0,
+      "precondition: command navigation needs at least two snapshots",
+    );
+    assert.equal(
+      newestId,
+      created.snapshot.id,
+      "precondition: the snapshot just created should be the newest",
+    );
+    assert.equal(
+      manager.getActiveSnapshot()?.id,
+      newestId,
+      "precondition: takeSnapshot should have made the new snapshot active",
+    );
+    assert.notEqual(
+      previousId,
+      newestId,
+      "precondition: the newest and the one before it must differ",
+    );
+
+    // No return value is asserted: the handler reports through notifications and
+    // resolves to `undefined`, so the only thing that proves it navigated is the
+    // manager state below.
+    await vscode.commands.executeCommand("vscode-snapshots.previousSnapshot");
+
+    assert.equal(
+      manager.getCurrentSnapshotIndex(),
+      newest - 1,
+      "the command should move the active index back exactly one",
+    );
+    assert.equal(
+      manager.getActiveSnapshot()?.id,
+      previousId,
+      "the command should make the snapshot before the newest the active one",
+    );
+    assert.equal(
+      manager.isSnapshotActive(previousId),
+      true,
+      "the snapshot the command navigated to should be active",
+    );
+    assert.equal(
+      manager.isSnapshotActive(newestId),
+      false,
+      "the snapshot the command navigated away from should no longer be active",
+    );
+  });
+
+  test("nextSnapshot command moves the active snapshot forward exactly one", async () => {
+    // The snapshot this test moves ONTO is one it creates, so a stale index
+    // inherited from another suite cannot satisfy the assertion below.
+    const created = await api.takeSnapshot({
+      description: "nav-cmd-next",
+      silent: true,
+    });
+    assert.ok(
+      created.success,
+      `takeSnapshot(nav-cmd-next) failed: ${JSON.stringify(created)}`,
+    );
+
+    const list = snapshotIds();
+    const newest = list.length - 1;
+    const targetId = list[newest];
+    const fromId = list[newest - 1];
+    assert.equal(
+      targetId,
+      created.snapshot.id,
+      "precondition: the snapshot just created should be the newest",
+    );
+    assert.notEqual(
+      fromId,
+      targetId,
+      "precondition: the newest and the one before it must differ",
+    );
+
+    // Start from a named position instead of whatever the test above left.
+    await activateSnapshot(fromId);
+    assert.equal(
+      manager.getCurrentSnapshotIndex(),
+      newest - 1,
+      "precondition: the command should start one before the newest snapshot",
+    );
+
+    await vscode.commands.executeCommand("vscode-snapshots.nextSnapshot");
+
+    assert.equal(
+      manager.getCurrentSnapshotIndex(),
+      newest,
+      "the command should move the active index forward exactly one",
+    );
+    assert.equal(
+      manager.getActiveSnapshot()?.id,
+      targetId,
+      "the command should make the snapshot after the active one the active one",
+    );
+    assert.equal(
+      manager.isSnapshotActive(targetId),
+      true,
+      "the snapshot the command navigated to should be active",
+    );
+    assert.equal(
+      manager.isSnapshotActive(fromId),
+      false,
+      "the snapshot the command navigated away from should no longer be active",
+    );
+  });
+
+  test("previousSnapshot command refuses at the oldest snapshot without moving", async () => {
+    const oldestId = snapshotIds()[0];
+    await activateSnapshot(oldestId);
+    assert.equal(
+      manager.getCurrentSnapshotIndex(),
+      0,
+      "precondition: the oldest snapshot should be active here",
+    );
+
+    await vscode.commands.executeCommand("vscode-snapshots.previousSnapshot");
+
+    assert.equal(
+      manager.getCurrentSnapshotIndex(),
+      0,
+      "the command must not move (or wrap) past the oldest snapshot",
+    );
+    assert.equal(
+      manager.getActiveSnapshot()?.id,
+      oldestId,
+      "the command must not change the active snapshot at the oldest position",
+    );
+  });
+
+  test("previousSnapshot command attaches to the newest snapshot when detached", async () => {
+    await detach();
+    const list = snapshotIds();
+    const newest = list.length - 1;
+    const newestId = list[newest];
+    const secondNewestId = list[newest - 1];
+    assert.ok(
+      newest > 0,
+      "precondition: the newest and second-newest snapshots must differ",
+    );
+
+    await vscode.commands.executeCommand("vscode-snapshots.previousSnapshot");
+
+    assert.equal(
+      manager.getCurrentSnapshotIndex(),
+      newest,
+      "detached, the command should attach to the newest snapshot rather than report failure",
+    );
+    assert.equal(
+      manager.getActiveSnapshot()?.id,
+      newestId,
+      "detached, the command should make the newest snapshot active",
+    );
+    assert.notEqual(
+      manager.getActiveSnapshot()?.id,
+      secondNewestId,
+      "detached, the command must not resolve 'previous' as 'index - 1'",
     );
   });
 });
