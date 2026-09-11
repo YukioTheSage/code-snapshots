@@ -597,7 +597,18 @@ export class SnapshotManager {
 
     // Check for files that existed in the previous snapshot but don't exist anymore
     // These represent deleted files that need to be tracked
-    if (baseSnapshot) {
+    //
+    // Selective snapshots intentionally photograph only their selected files
+    // (the filter above, whose condition this mirrors). `currentWorkspaceFiles`
+    // is built from that filtered list, so every unselected file would look
+    // "gone" here -- a lie about the workspace that restore then acts on by
+    // deleting the user's files. Only a whole-tree capture can report deletions.
+    const isSelective =
+      snapshot.isSelective === true &&
+      Array.isArray(snapshot.selectedFiles) &&
+      snapshot.selectedFiles.length > 0;
+
+    if (baseSnapshot && !isSelective) {
       let deletedFilesCount = 0;
       previousSnapshotFiles.forEach((relativePath) => {
         if (!currentWorkspaceFiles.has(relativePath)) {
