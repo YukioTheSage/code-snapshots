@@ -66,13 +66,44 @@ describe('standalone restore scope', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('writes no tombstone for a file the selective capture never looked at', async () => {
+    await manager.takeSnapshot({ description: 'base' });
+
+    const selective = await manager.takeSnapshot({
+      description: 'selective',
+      isSelective: true,
+      selectedFiles: [CAPTURED_REL],
+    });
+
+    const stored = await manager.getSnapshot(selective.id);
+    if (!stored) throw new Error('selective snapshot was not stored');
+
+    // The capture scanned one file. Recording the other as deleted is a claim
+    // about a file this snapshot has no knowledge of.
+    expect(stored.files[CAPTURED_REL]).toBeDefined();
+    expect(stored.files[UNCAPTURED_REL]).toBeUndefined();
+  });
+
+  it('still records a genuine deletion for a whole-tree capture', async () => {
+    await manager.takeSnapshot({ description: 'base' });
+    fs.rmSync(filePath(root, UNCAPTURED_REL));
+
+    const whole = await manager.takeSnapshot({ description: 'whole tree' });
+    const stored = await manager.getSnapshot(whole.id);
+    if (!stored) throw new Error('snapshot was not stored');
+
+    // The guard keys off the capture, not off the option name: an empty
+    // selection is a whole-tree capture and its markers are real.
+    expect(stored.files[UNCAPTURED_REL]?.deleted).toBe(true);
+  });
+
   /**
    * A whole-tree snapshot first, then a selective capture of ONE file: the
    * second snapshot is the legacy shape, because the published core compares the
    * previous snapshot against the narrowed scan.
    */
   async function takeLegacySelectiveSnapshot(): Promise<string> {
-    await manager.takeSnapshot({ description: 'base' });
+    const base = await manager.takeSnapshot({ description: 'base' });
     // Changed after the base, so the captured entry is a real delta: restoring
     // it has to resolve through the base snapshot to be observable at all.
     fs.writeFileSync(filePath(root, CAPTURED_REL), 'captured v2\n', 'utf8');
@@ -81,6 +112,14 @@ describe('standalone restore scope', () => {
       description: 'legacy selective',
       isSelective: true,
       selectedFiles: [CAPTURED_REL],
+    });
+
+    // The capture-side guard now stops a selective capture from writing this
+    // tombstone. A legacy store still holds one, so put the legacy shape into
+    // the record directly and keep the restore mitigation under test.
+    await storeSelection(selective.id, [CAPTURED_REL], {
+      relativePath: UNCAPTURED_REL,
+      baseSnapshotId: base.id,
     });
 
     // Preconditions: this really is the shape the fix exists for. Without the
@@ -175,6 +214,7 @@ describe('standalone restore scope', () => {
   async function storeSelection(
     snapshotId: string,
     selectedFiles: string[],
+    legacyTombstone?: { relativePath: string; baseSnapshotId: string },
   ): Promise<void> {
     const storage = new SnapshotStorage(root);
     const record = await storage.loadSnapshot(snapshotId);
@@ -184,6 +224,12 @@ describe('standalone restore scope', () => {
 
     record.isSelective = true;
     record.selectedFiles = selectedFiles;
+    if (legacyTombstone) {
+      record.files[legacyTombstone.relativePath] = {
+        deleted: true,
+        baseSnapshotId: legacyTombstone.baseSnapshotId,
+      };
+    }
     await storage.saveSnapshot(record);
 
     // Precondition: the handler really reads the rewritten record, so a store

@@ -351,7 +351,21 @@ export class SnapshotManager {
     });
 
     // Track deletions - files that existed in previous snapshot but not in current
-    if (this.snapshots.length > 0) {
+    //
+    // A selective capture with a NON-EMPTY selection photographs only the files
+    // it was given: the scan above is narrowed to that list, so every other file
+    // of the previous snapshot looks "gone" from here. That is a lie about the
+    // workspace, and restore, `compareSnapshots` and `files diff` all act on it.
+    // Only a whole-tree capture can report deletions. An empty selection is not
+    // selective -- the filter does not apply, the scan is whole-tree, and its
+    // markers are real -- which is why the predicate mirrors the one used by the
+    // read-side restoration path instead of testing `options.isSelective` alone.
+    const isSelectiveCapture =
+      snapshot.isSelective === true &&
+      Array.isArray(snapshot.selectedFiles) &&
+      snapshot.selectedFiles.length > 0;
+
+    if (this.snapshots.length > 0 && !isSelectiveCapture) {
       const baseSnapshot = this.snapshots[this.snapshots.length - 1];
       const currentFiles = new Set(files);
 
