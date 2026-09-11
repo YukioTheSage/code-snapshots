@@ -9,6 +9,7 @@ import { UnifiedClient as CodeLapseClient } from './unifiedClient';
 import { inheritGlobalOptions, parseTimeout } from './globalOptions';
 import { getFailure, setFailure } from './exitState';
 import { printResult } from './commands/output';
+import { runApiCall } from './commands/api';
 import { batchExecute } from './commands/batch';
 import { SnapshotCommands } from './commands/snapshot';
 import { SearchCommands } from './commands/search';
@@ -1106,18 +1107,9 @@ export function buildProgram(): Command {
     .description('Direct API call (AI-friendly)')
     .option('-d, --data <json>', 'JSON data to send')
     .action(async (method, options) => {
-      try {
-        const data = options.data ? JSON.parse(options.data) : {};
-        const result = await getClient().callApi(method, data);
-        console.log(JSON.stringify({ success: true, result }));
-      } catch (error) {
-        console.log(
-          JSON.stringify({
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-      }
+      // Behaviour lives in commands/api so it is testable; see the note there
+      // about why the failure flag matters (exit code 1, not 0).
+      await runApiCall(method, options.data, getClient());
     });
 
   // Hook to disconnect client and exit process after command execution
