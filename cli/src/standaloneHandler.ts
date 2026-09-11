@@ -156,6 +156,43 @@ function toCoreFilter(normalized: NormalizedListFilter): SnapshotFilter {
   };
 }
 
+/**
+ * Express an export destination as a workspace-relative path.
+ *
+ * Core's `ensureWithinDirectory` refuses absolute input outright as a
+ * traversal attempt, so an absolute destination *inside* the workspace -- what
+ * a script that knows its own root naturally passes -- failed with
+ * "Path traversal blocked: absolute path not allowed". Absolute paths inside
+ * the root are converted; anything outside is refused here with a message that
+ * names the real problem; relative input is passed through untouched so core
+ * keeps rejecting `../..` sequences.
+ */
+export function toWorkspaceRelativeOutputPath(
+  workspaceRoot: string,
+  outputPath: string,
+): string {
+  if (!path.isAbsolute(outputPath)) {
+    return outputPath;
+  }
+
+  const root = path.resolve(workspaceRoot);
+  const resolved = path.resolve(outputPath);
+  const relative = path.relative(root, resolved);
+
+  const escapes =
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative);
+
+  if (escapes) {
+    throw new Error(
+      `Path traversal blocked: "${outputPath}" is outside the workspace root (${root})`,
+    );
+  }
+
+  return relative;
+}
+
 export class StandaloneHandler {
   private snapshotManager: SnapshotManager | null = null;
   private configManager: ConfigManager | null = null;
@@ -1112,7 +1149,7 @@ export class StandaloneHandler {
 
     const outputPath = ensureWithinDirectory(
       this.workspaceRoot,
-      options.outputPath,
+      toWorkspaceRelativeOutputPath(this.workspaceRoot, options.outputPath),
     );
     assertNoSymlinkPath(this.workspaceRoot, outputPath);
     assertBufferSizeWithinLimit(
