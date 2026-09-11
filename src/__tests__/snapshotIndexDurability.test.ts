@@ -108,6 +108,9 @@ describe('takeSnapshot rollback keeps the claim and the disk in agreement', () =
 
     storage = {
       getWorkspaceRoot: () => dir,
+      // The scan path resolves the store location through the storage layer so
+      // the parser excludes the directory snapshots are actually written to.
+      getSnapshotDirectory: () => path.join(dir, '.snapshots'),
       loadSnapshotIndexAndMetadata: jest.fn().mockResolvedValue(null),
       saveSnapshotIndex: jest.fn().mockResolvedValue(undefined),
       saveSnapshotData: jest.fn().mockResolvedValue(undefined),

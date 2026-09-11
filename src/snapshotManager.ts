@@ -316,7 +316,10 @@ export class SnapshotManager {
     // The configured location, not the parser's default: the store lives inside
     // the scanned workspace, so a parser that assumes `.snapshots` captures the
     // store's own index and payload files into every snapshot.
-    const parser = new GitignoreParser(workspaceRoot, getSnapshotLocation());
+    const parser = new GitignoreParser(
+      workspaceRoot,
+      this.getStoreLocationForScan(workspaceRoot),
+    );
     log(`Initialized GitignoreParser for workspace: ${workspaceRoot}`);
 
     // --- Get Git Info ---
@@ -752,7 +755,10 @@ export class SnapshotManager {
     // TODO: Consider extracting this file filtering logic into a reusable private method
     // Configured store location, as in takeSnapshotInternal: the store is not
     // workspace content and must not appear in a change calculation either.
-    const parser = new GitignoreParser(workspaceRoot, getSnapshotLocation());
+    const parser = new GitignoreParser(
+      workspaceRoot,
+      this.getStoreLocationForScan(workspaceRoot),
+    );
     const excludePattern = parser.getExcludeGlobPattern();
     const negatedGlobs = parser.getNegatedGlobs();
     const initialCurrentFiles = await vscode.workspace.findFiles(
@@ -994,6 +1000,36 @@ export class SnapshotManager {
   // --- End: Preview Helper Method (REMOVED) ---
 
   /**
+   * The snapshot store path, relative to the workspace root, as the storage
+   * layer actually resolved it.
+   *
+   * The scan must exclude the same directory the snapshots are written to, and
+   * `snapshotStorage` resolves `snapshotLocation` **once** at activation while
+   * this used to re-read the setting on every snapshot. Those two reads can
+   * disagree: a configuration read taken while the workspace settings are being
+   * rewritten (a restore writes `.vscode/settings.json`) can come back with the
+   * defaults, naming `.snapshots` while the store really is `.snapshots-test`.
+   * The store was then captured into the very snapshot being written -- the
+   * self-referential capture this exclusion exists to prevent, and the phantom
+   * `deleted` entries it leaves behind also defeat the auto-snapshot
+   * no-changes skip. Resolving through the storage layer removes the second
+   * source of truth; the deletion guard already resolves the store this way.
+   *
+   * Falls back to the configured value when the store is unknown or lives
+   * outside the workspace, where a workspace scan cannot reach it anyway.
+   */
+  private getStoreLocationForScan(workspaceRoot: string): string {
+    const storeDirectory = this.storage.getSnapshotDirectory();
+    if (workspaceRoot && storeDirectory) {
+      const relative = path.relative(workspaceRoot, storeDirectory);
+      if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+        return relative;
+      }
+    }
+    return getSnapshotLocation();
+  }
+
+  /**
    * Whether a workspace-relative path names something inside the snapshot
    * store.
    *
@@ -1084,7 +1120,10 @@ export class SnapshotManager {
     // store here is what made a restore delete the snapshot payloads it was
     // restoring around (they are written after their own snapshot's scan, so
     // the snapshot never lists them).
-    const parser = new GitignoreParser(workspaceRoot, getSnapshotLocation());
+    const parser = new GitignoreParser(
+      workspaceRoot,
+      this.getStoreLocationForScan(workspaceRoot),
+    );
     const excludePattern = parser.getExcludeGlobPattern();
     const negatedGlobs = parser.getNegatedGlobs();
     const initialCurrentFiles = await vscode.workspace.findFiles(

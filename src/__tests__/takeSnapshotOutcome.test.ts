@@ -5,6 +5,9 @@ describe('takeSnapshot outcome', () => {
     const manager = new SnapshotManager(null);
     (manager as any).storage = {
       getWorkspaceRoot: () => '/tmp/does-not-matter',
+      // The scan path resolves the store location through the storage layer so
+      // the parser excludes the directory snapshots are actually written to.
+      getSnapshotDirectory: () => '/tmp/does-not-matter/.snapshots',
       isBinaryFile: () => false,
       checkSuspiciousFilesForBinaryContent: async () => new Set<string>(),
       readFileContent: async () => 'same',
