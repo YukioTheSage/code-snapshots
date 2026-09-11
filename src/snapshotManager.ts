@@ -762,11 +762,13 @@ export class SnapshotManager {
   > {
     logVerbose(`Calculating changes for snapshot ${snapshot.id}`);
 
-    // Restoring a selective snapshot touches only the files it captured
-    // (applySnapshotRestoreInternal), so the preview must not advertise
-    // deletions of files the snapshot never looked at. The predicate is the
-    // same one the capture guard uses: a rule-based snapshot with an empty
-    // selection is a whole-tree capture and keeps the old preview behavior.
+    // Restoring a selective snapshot performs no deletions at all: apply skips
+    // the phase wholesale (`deletionCandidates = isSelectiveCapture ? [] : ...`),
+    // so the preview must not advertise any deletion for one -- neither of a file
+    // the snapshot never looked at, nor of a file a pre-guard capture tombstoned.
+    // The predicate is the same one the capture guard uses: a rule-based snapshot
+    // with an empty selection is a whole-tree capture and keeps the old preview
+    // behavior.
     const isSelectiveCapture =
       snapshot.isSelective === true &&
       Array.isArray(snapshot.selectedFiles) &&
@@ -924,11 +926,10 @@ export class SnapshotManager {
         expectedSnapshotFiles.get(relativePath)?.deleted
       ) {
         // File exists in workspace but not in snapshot (or marked deleted): Deletion
-        if (isSelectiveCapture && !expectedSnapshotFiles.has(relativePath)) {
-          // Not captured, therefore not deleted by apply: omit it from the
-          // preview. A path the snapshot explicitly marks `{deleted: true}` is
-          // present in `expectedSnapshotFiles`, so this guard does not fire for
-          // it and it is still reported.
+        if (isSelectiveCapture) {
+          // For a selective capture nothing in this snapshot is deleted by
+          // apply, whatever the entry says: a file it never looked at, or one a
+          // pre-guard capture recorded as `{deleted: true}`, is left alone.
           continue;
         }
         const workspacePath = ensureWithinDirectory(
@@ -964,6 +965,15 @@ export class SnapshotManager {
     // Also explicitly add files marked as deleted in the snapshot metadata,
     // even if they don't currently exist in the workspace (idempotency)
     for (const [relativePath, fileData] of expectedSnapshotFiles.entries()) {
+      if (isSelectiveCapture) {
+        // Legacy selective snapshots -- captured before the capture guard above
+        // existed -- carry `{deleted: true}` tombstones for files they never
+        // looked at, because the pre-guard pass compared the previous snapshot
+        // against a workspace list the selective filter had already narrowed.
+        // Apply deletes nothing for a selective snapshot, so reporting one here
+        // would re-introduce exactly the over-claim this method now avoids.
+        continue;
+      }
       if (
         fileData.deleted &&
         !changes.some(

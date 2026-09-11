@@ -41,6 +41,13 @@ const EMPTY_SELECTION_KEPT_FILE = path.join(
  */
 const PREVIEW_PROBE_REL = "preview-scope-probe.txt";
 const PREVIEW_PROBE_FILE = path.join(FIXTURE_ROOT ?? "", PREVIEW_PROBE_REL);
+/**
+ * A file the legacy-tombstone test owns: captured by the whole-tree base it
+ * tombstones against, removed before the preview runs, and deleted again in that
+ * test's teardown.
+ */
+const LEGACY_PROBE_REL = "legacy-tombstone-probe.txt";
+const LEGACY_PROBE_FILE = path.join(FIXTURE_ROOT ?? "", LEGACY_PROBE_REL);
 
 /**
  * The key a snapshot records `rel` under.
@@ -672,7 +679,10 @@ suite("per-file snapshot operations", function () {
    * never looked at, so their absence is no evidence that they are extraneous.
    * `calculateRestoreChanges` still read that same absence as a deletion and
    * listed every uncaptured workspace file as `- file` / "Deleted", so the user
-   * was told N files would go and then none did.
+   * was told N files would go and then none did. The skip is wholesale -- apply
+   * deletes nothing at all for such a snapshot -- so the preview reports no
+   * deletion for one, tombstones included (the legacy test at the end of this
+   * suite covers the tombstoned shape).
    */
   test("the restore preview does not promise deletions a selective restore will not perform", async () => {
     const appKey = snapshotKey(APP_REL);
@@ -718,9 +728,9 @@ suite("per-file snapshot operations", function () {
 
     // Preconditions: this really is the selective capture the preview is about,
     // it holds the file it selected, and the file it never looked at has no
-    // entry at all in it. That absence is what the preview must stop reading as
-    // a deletion -- with a `{deleted:true}` marker present the preview would
-    // have something real to report and the assertion below would be vacuous.
+    // entry at all in it -- not even a `{deleted:true}` tombstone, which is the
+    // separate, older shape the legacy test at the end of this suite covers.
+    // This test is about the uncaptured case alone.
     assert.strictEqual(
       scope.snapshot.isSelective,
       true,
@@ -866,6 +876,187 @@ suite("per-file snapshot operations", function () {
     } finally {
       // The probe belongs to this test: the fixture is left as it was found.
       fs.rmSync(PREVIEW_PROBE_FILE, { force: true });
+    }
+  });
+
+  /**
+   * Legacy data, and the reason the preview skips deletions *wholesale* for a
+   * selective snapshot rather than only the uncaptured case.
+   *
+   * Selective snapshots persisted BEFORE Task 1's capture guard carry
+   * `{ deleted: true }` tombstones for every file they never looked at: the
+   * pre-guard deletion pass (`takeSnapshotInternal`) compared the previous
+   * snapshot against a workspace list the selective filter had already narrowed,
+   * so every unselected file looked gone and was tombstoned. Task 1 stops new
+   * ones but cannot rewrite stored ones, and those stored snapshots are exactly
+   * the population this remediation exists for.
+   *
+   * Applying such a snapshot deletes nothing at all -- restore skips its deletion
+   * phase wholesale (`deletionCandidates = isSelectiveCapture ? [] : ...`) -- so
+   * any `'D'` line in the preview is a promise apply will not keep. Both
+   * producers of `'D'` are covered here: a tombstone for a path that is GONE from
+   * the workspace (only the metadata loop can report it) and one for a path that
+   * is still there (the deletion loop). The control below proves both markers are
+   * effective, so the zero cannot be vacuous.
+   */
+  test("the preview reports no deletions for a selective snapshot carrying legacy tombstones", async () => {
+    const appKey = snapshotKey(APP_REL);
+    const otherKey = snapshotKey(OTHER_REL);
+    const probeKey = snapshotKey(LEGACY_PROBE_REL);
+    const probeContent = "// captured by the base, deleted before the preview\n";
+
+    assert.strictEqual(
+      fs.existsSync(LEGACY_PROBE_FILE),
+      false,
+      `precondition: ${LEGACY_PROBE_REL} already exists, so this test cannot tell when it was removed`,
+    );
+    assert.ok(
+      fs.existsSync(OTHER_FILE),
+      `precondition: ${OTHER_REL} is missing, so the still-present tombstone below has nothing to point at`,
+    );
+    const workspaceRoot = manager.getWorkspaceRoot();
+    assert.ok(
+      workspaceRoot,
+      "precondition: the manager reports no workspace root, so no preview can be calculated",
+    );
+
+    let legacy: any;
+    try {
+      // The probe is captured by a whole-tree snapshot first, so the tombstone
+      // injected below is read against a previous snapshot that really held it.
+      fs.writeFileSync(LEGACY_PROBE_FILE, probeContent, "utf8");
+      await waitFor(
+        `${LEGACY_PROBE_REL} to become visible to workspace.findFiles`,
+        async () =>
+          (await vscode.workspace.findFiles(`**/${LEGACY_PROBE_REL}`)).length ===
+          1
+            ? true
+            : undefined,
+      );
+      const base = await api.takeSnapshot({
+        description: "legacy tombstone base",
+        silent: true,
+      });
+      assert.strictEqual(
+        base.success,
+        true,
+        `the base snapshot failed: ${JSON.stringify(base)}`,
+      );
+      assert.ok(
+        base.snapshot.files[probeKey],
+        `precondition: the base did not capture ${LEGACY_PROBE_REL}; recorded keys: ${JSON.stringify(
+          Object.keys(base.snapshot.files),
+        )}`,
+      );
+
+      // The selective capture: the shape a pre-Task-1 store holds for it.
+      const scope = await api.takeSnapshot({
+        description: "legacy selective tombstone carrier",
+        isSelective: true,
+        selectedFiles: [appKey],
+        silent: true,
+      });
+      assert.strictEqual(
+        scope.success,
+        true,
+        `the selective snapshot failed: ${JSON.stringify(scope)}`,
+      );
+
+      // Removed only now: the tombstoned probe is absent from the workspace when
+      // the preview runs, so the deletion loop (which iterates the workspace)
+      // cannot be the loop that reports it -- only the metadata loop can.
+      fs.rmSync(LEGACY_PROBE_FILE);
+
+      // The manager's own snapshot object: the one the store persists and the
+      // preview reads. The tombstones are injected here because the capture guard
+      // Task 1 added is exactly what stops new ones being written.
+      legacy = manager.getSnapshotById(scope.snapshot.id);
+      assert.ok(legacy, `the manager no longer holds snapshot ${scope.snapshot.id}`);
+      assert.strictEqual(
+        legacy.files[probeKey],
+        undefined,
+        `precondition: the selective capture already holds ${LEGACY_PROBE_REL}, so injecting the tombstone below would overwrite a real entry`,
+      );
+      assert.strictEqual(
+        legacy.files[otherKey],
+        undefined,
+        `precondition: the selective capture already holds ${OTHER_REL}, so injecting the tombstone below would overwrite a real entry`,
+      );
+      legacy.files[probeKey] = { deleted: true };
+      legacy.files[otherKey] = { deleted: true };
+
+      // The markers really are in the snapshot the preview is handed ...
+      assert.deepStrictEqual(
+        legacy.files[probeKey],
+        { deleted: true },
+        `the injected tombstone for ${LEGACY_PROBE_REL} is not in the snapshot`,
+      );
+      assert.deepStrictEqual(
+        legacy.files[otherKey],
+        { deleted: true },
+        `the injected tombstone for ${OTHER_REL} is not in the snapshot`,
+      );
+      // ... and each sits in the state that makes its own loop the reporter.
+      assert.strictEqual(
+        fs.existsSync(LEGACY_PROBE_FILE),
+        false,
+        `precondition: ${LEGACY_PROBE_REL} is back in the workspace, so the deletion loop could report its tombstone`,
+      );
+      assert.strictEqual(
+        fs.existsSync(OTHER_FILE),
+        true,
+        `precondition: ${OTHER_REL} left the workspace, so the deletion loop cannot report its tombstone`,
+      );
+
+      // Control: the same file map with the selective flag cleared is reported by
+      // the preview the way it always was -- each tombstone produces its own
+      // `'D'` entry, one per loop -- so the empty result below is the selective
+      // skip rather than an inert marker.
+      const wholeTreeShaped = {
+        ...legacy,
+        isSelective: false,
+        selectedFiles: [] as string[],
+      };
+      const controlChanges = await manager.calculateRestoreChanges(
+        wholeTreeShaped,
+        workspaceRoot,
+      );
+      const controlDeletions: [string, string][] = [
+        [probeKey, "metadata loop"],
+        [otherKey, "deletion loop"],
+      ];
+      for (const [key, loop] of controlDeletions) {
+        assert.ok(
+          controlChanges.some(
+            (c: any) => c.relativePath === key && c.status === "D",
+          ),
+          `control: the ${loop} no longer reports the tombstone for ${key} even for a whole-tree snapshot, so the marker had no effect and the zero asserted below would be vacuous: ${JSON.stringify(
+            controlChanges.filter((c: any) => c.status === "D"),
+          )}`,
+        );
+      }
+
+      // R16: apply deletes nothing for a selective snapshot, so the preview must
+      // not claim any deletion at all -- uncaptured files or legacy tombstones.
+      const changes = await manager.calculateRestoreChanges(
+        legacy,
+        workspaceRoot,
+      );
+      const deleted = changes.filter((c: any) => c.status === "D");
+      assert.strictEqual(
+        deleted.length,
+        0,
+        `the preview still promises legacy-tombstone deletions a selective restore will not perform: ${JSON.stringify(
+          deleted,
+        )}`,
+      );
+    } finally {
+      // Leave the fixture and the store's snapshot object as they were found.
+      fs.rmSync(LEGACY_PROBE_FILE, { force: true });
+      if (legacy) {
+        delete legacy.files[probeKey];
+        delete legacy.files[otherKey];
+      }
     }
   });
 });
