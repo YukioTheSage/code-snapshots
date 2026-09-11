@@ -51,6 +51,23 @@ export class GitignoreParser {
     this.patterns.push('node_modules');
     this.patterns.push('.git');
 
+    // CLI byproducts. These are written by the tool itself, so capturing them
+    // pollutes every snapshot of the same tree: `.vscode/codelapse.json` is
+    // CLI configuration, `.snapshotignore` is the ignore file itself, and
+    // `*.backup-<timestamp>` files are created by restore operations.
+    this.patterns.push('.snapshotignore');
+    this.patterns.push('.vscode/codelapse.json');
+    this.patterns.push('**/.vscode/codelapse.json');
+    this.patterns.push('*.backup-*');
+    this.patterns.push('**/*.backup-*');
+    this.patterns.push('*.codelapse-tmp*');
+    this.patterns.push('**/*.codelapse-tmp*');
+
+    // Contents of the snapshot directory, for callers that check file paths
+    // rather than pruning the directory during a walk.
+    this.patterns.push('**/.snapshots');
+    this.patterns.push('**/.snapshots/**');
+
     // Explicitly handle virtual environments
     this.patterns.push('venv');
     this.patterns.push('venv/');
