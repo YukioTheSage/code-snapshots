@@ -95,6 +95,22 @@ export class CodeLapseClient extends EventEmitter {
   }
 
   /**
+   * Reject every request still in flight, cancelling each one's timeout.
+   *
+   * Used by an explicit `disconnect()` and by an unsolicited socket `close`. A
+   * request that outlives its connection must be told the connection is gone:
+   * leaving it to its own timer reports "Request timeout" -- or "Authentication
+   * timed out" mid-handshake -- for a connection that was simply lost, and
+   * delays that wrong answer by up to `connectionTimeout`.
+   */
+  private rejectAllPending(reason: string): void {
+    // Iterating a copy of the keys, because `takePendingRequest` deletes.
+    for (const id of [...this.pendingRequests.keys()]) {
+      this.takePendingRequest(id)?.reject(new Error(reason));
+    }
+  }
+
+  /**
    * Execute a direct API call to the extension
    */
   async callApi(method: string, data: any): Promise<any> {
@@ -244,6 +260,10 @@ export class CodeLapseClient extends EventEmitter {
         this.connected = false;
         this.authenticated = false;
         this.socket = undefined;
+        // Settle whatever was in flight before notifying listeners: without
+        // this, a request on the wire when the connection dropped waited out
+        // its own timeout and then blamed itself.
+        this.rejectAllPending('Connection closed');
         this.emit('disconnected');
       });
 
@@ -364,10 +384,7 @@ export class CodeLapseClient extends EventEmitter {
     }
 
     // Reject all pending requests, cancelling each one's timeout as it goes.
-    // Iterating a copy of the keys, because `takePendingRequest` deletes.
-    for (const id of [...this.pendingRequests.keys()]) {
-      this.takePendingRequest(id)?.reject(new Error('Connection closed'));
-    }
+    this.rejectAllPending('Connection closed');
 
     this.removeAllListeners();
   }
