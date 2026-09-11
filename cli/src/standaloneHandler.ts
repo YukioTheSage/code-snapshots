@@ -375,6 +375,26 @@ export class StandaloneHandler {
   }
 
   /**
+   * A snapshot whose capture really was narrowed to a file list.
+   *
+   * `isSelective` alone is not enough: a rule-based producer emits
+   * `isSelective: true` with an EMPTY selection when its rule matched nothing,
+   * and that capture ran over the whole tree, so its `{deleted:true}` markers
+   * are real. Same predicate as the extension's restore.
+   */
+  private capturedFileList(snapshot: Snapshot | null): string[] | null {
+    if (
+      snapshot?.isSelective === true &&
+      Array.isArray(snapshot.selectedFiles) &&
+      snapshot.selectedFiles.length > 0
+    ) {
+      return snapshot.selectedFiles;
+    }
+
+    return null;
+  }
+
+  /**
    * Restore a snapshot
    */
   public async restoreSnapshot(
@@ -388,10 +408,28 @@ export class StandaloneHandler {
       throw new Error('Handler not initialized');
     }
 
-    await this.snapshotManager.restoreSnapshot(
-      await this.resolveSnapshotId(snapshotId),
-      options,
+    const resolvedId = await this.resolveSnapshotId(snapshotId);
+    const capturedFiles = this.capturedFileList(
+      await this.snapshotManager.getSnapshot(resolvedId),
     );
+
+    // Legacy selective snapshots record a `{deleted:true}` tombstone for every
+    // file the selection did not include (the pre-guard deletion pass compared
+    // the previous snapshot against a scan the selective filter had already
+    // narrowed). Core's restore walks the whole `files` map when it is given no
+    // list and unlinks every tombstoned path, so without this a standalone
+    // restore deleted exactly the files the snapshot never captured.
+    // Restricting the restore to the captured list is what keeps those files
+    // alive.
+    //
+    // Only when the caller named no files of their own: an explicit selection is
+    // a deliberate narrowing and is passed through untouched.
+    const restoreOptions =
+      capturedFiles && !Array.isArray(options?.selectedFiles)
+        ? { ...options, selectedFiles: capturedFiles }
+        : options;
+
+    await this.snapshotManager.restoreSnapshot(resolvedId, restoreOptions);
   }
 
   /**

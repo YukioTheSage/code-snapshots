@@ -422,6 +422,27 @@ export class SnapshotManager {
       // Get files to restore
       const filesToRestore = options.selectedFiles || Object.keys(snapshot.files);
 
+      // A genuinely selective capture photographs the files it was given and
+      // nothing else. The scan below is narrowed to that list, so the deletion
+      // pass that follows it records a `{deleted:true}` tombstone for EVERY file
+      // of the previous snapshot the selection did not include -- a lie about
+      // the workspace, not a deletion. Restoring such a snapshot must not act on
+      // those markers: the paths they name were never captured, so the workspace
+      // copy is the only one left.
+      //
+      // The predicate mirrors the capture side and the extension's restore:
+      // `isSelective` alone is not enough, because a rule-based producer emits
+      // `isSelective: true` with an empty selection when its rule matched
+      // nothing, and that capture ran over the whole tree -- its markers are
+      // real.
+      const isSelectiveCapture =
+        snapshot.isSelective === true &&
+        Array.isArray(snapshot.selectedFiles) &&
+        snapshot.selectedFiles.length > 0;
+      const capturedFiles = new Set(
+        isSelectiveCapture ? snapshot.selectedFiles : [],
+      );
+
       // Restore each file
       await runWithConcurrencyLimit(filesToRestore, 50, async (relativePath) => {
         const fileData = snapshot.files[relativePath];
@@ -434,6 +455,12 @@ export class SnapshotManager {
 
         // Handle deleted files
         if (fileData.deleted) {
+          if (isSelectiveCapture && !capturedFiles.has(relativePath)) {
+            // A tombstone for a file this capture never looked at: it has no
+            // base dependency to repair and nothing was recorded about it, so
+            // the workspace copy stays.
+            return;
+          }
           try {
             const stats = await fs.promises.lstat(fullPath);
             if (stats.isSymbolicLink()) {
