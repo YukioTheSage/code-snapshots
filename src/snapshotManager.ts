@@ -1194,12 +1194,41 @@ export class SnapshotManager {
     const skipped: string[] = [];
     const refusedDeletions: string[] = [];
 
+    // A selective snapshot is an explicit claim about SOME files, never a
+    // statement about the whole workspace: its capture holds no entry for the
+    // files it never looked at, so "absent from the snapshot" is no evidence
+    // that a file is extraneous. Restoring one therefore writes back the files
+    // it captured and deletes nothing.
+    //
+    // The predicate must match the capture side exactly (takeSnapshotInternal),
+    // because a rule-based producer passes `isSelective: true` with the files a
+    // rule matched, and an empty selection means the capture ran over the whole
+    // tree: its `{deleted:true}` markers are real, and skipping its deletion
+    // phase would leave files the user actually deleted in the workspace.
+    const isSelectiveCapture =
+      snapshot.isSelective === true &&
+      Array.isArray(snapshot.selectedFiles) &&
+      snapshot.selectedFiles.length > 0;
+    if (isSelectiveCapture) {
+      const capturedCount = snapshot.selectedFiles?.length ?? 0;
+      log(
+        `Restore Apply: selective snapshot — skipping deletion phase (${capturedCount} captured file(s) are its whole scope).`,
+      );
+    }
+
     // 1. Handle Deletions: Files in workspace but not in snapshot (or marked deleted)
     //
     // Sequential rather than a forEach that pushes promises: the callback could
     // not be awaited, so a rejection had nowhere to go, and every deletion was
     // started at once with no back-pressure.
-    for (const relativePath of currentWorkspaceFilesRelative) {
+    //
+    // Empty by construction for a selective capture; the guards inside the loop
+    // (the snapshot store, unrecoverable content) therefore keep judging every
+    // deletion of a whole-tree capture, exactly as before.
+    const deletionCandidates: Iterable<string> = isSelectiveCapture
+      ? []
+      : currentWorkspaceFilesRelative;
+    for (const relativePath of deletionCandidates) {
       const inSnapshot = expectedSnapshotFiles.has(relativePath);
       const markedDeleted = expectedSnapshotFiles.get(relativePath)?.deleted;
       // Delete only when the file is not in the snapshot at all, or the

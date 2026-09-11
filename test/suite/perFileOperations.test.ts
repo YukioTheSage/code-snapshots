@@ -18,6 +18,22 @@ const NOISE = "// per-file noise";
  */
 const DELETION_PROBE_REL = "per-file-deletion-probe.txt";
 const DELETION_PROBE_FILE = path.join(FIXTURE_ROOT ?? "", DELETION_PROBE_REL);
+/**
+ * Two more files this suite owns, both created and deleted inside the one test
+ * that uses them. `DELETED` is gone before the empty-selection snapshot is
+ * taken, so that snapshot records its deletion; `KEPT` is captured by it and
+ * removed afterwards, so a restore has to put it back.
+ */
+const EMPTY_SELECTION_DELETED_REL = "empty-selection-deleted-probe.txt";
+const EMPTY_SELECTION_DELETED_FILE = path.join(
+  FIXTURE_ROOT ?? "",
+  EMPTY_SELECTION_DELETED_REL,
+);
+const EMPTY_SELECTION_KEPT_REL = "empty-selection-kept-probe.txt";
+const EMPTY_SELECTION_KEPT_FILE = path.join(
+  FIXTURE_ROOT ?? "",
+  EMPTY_SELECTION_KEPT_REL,
+);
 
 /**
  * The key a snapshot records `rel` under.
@@ -361,5 +377,281 @@ suite("per-file snapshot operations", function () {
         after.snapshot.files[probeKey],
       )}`,
     );
+  });
+
+  /**
+   * A selective snapshot is an explicit claim about SOME files and never a
+   * statement about the rest of the workspace, so restoring it must write back
+   * the files it captured and touch nothing else.
+   *
+   * Its capture has no entry at all -- not even a `{deleted:true}` marker -- for
+   * the files it never looked at, and that absence is what the restore's
+   * deletion phase used to read as "extraneous": it deleted every workspace file
+   * the snapshot did not mention.
+   */
+  test("restoring a selective snapshot leaves files it never captured untouched", async () => {
+    const appKey = snapshotKey(APP_REL);
+    const otherKey = snapshotKey(OTHER_REL);
+    const drift = `${otherAtSnapshot}\n// drifted after the selective capture\n`;
+
+    // Preconditions: the fixture is exactly what this suite recorded, so the
+    // assertions below can only be satisfied by the snapshot and by leaving the
+    // fixture alone.
+    assertAppMatchesSnapshot("precondition");
+    assert.strictEqual(
+      fs.readFileSync(OTHER_FILE, "utf8"),
+      otherAtSnapshot,
+      `precondition: ${OTHER_REL} is not in the state this suite recorded`,
+    );
+
+    // A full snapshot first: the selective capture below needs a base that
+    // really holds both files, and the restore of a diff-only entry resolves
+    // through that chain.
+    const full = await api.takeSnapshot({
+      description: "restore scope base",
+      silent: true,
+    });
+    assert.strictEqual(
+      full.success,
+      true,
+      `the full snapshot failed: ${JSON.stringify(full)}`,
+    );
+    assert.ok(
+      full.snapshot.files[otherKey],
+      `precondition: the full snapshot does not hold ${OTHER_REL} under '${otherKey}': ${JSON.stringify(
+        Object.keys(full.snapshot.files),
+      )}`,
+    );
+
+    // Capture a selective snapshot of ONE file. `isSelective` is not derived
+    // from `selectedFiles`: the snapshot is built as
+    // `isSelective: contextOptions.isSelective || false`, so both must be given.
+    const scope = await api.takeSnapshot({
+      description: "selective restore scope",
+      isSelective: true,
+      selectedFiles: [appKey],
+      silent: true,
+    });
+    assert.strictEqual(
+      scope.success,
+      true,
+      `the selective snapshot failed: ${JSON.stringify(scope)}`,
+    );
+    const selectiveId = scope.snapshot.id;
+
+    // Preconditions: this really is the selective capture the test is about, it
+    // holds the selected file, and the file it never looked at has no entry at
+    // all in it. Without the last one the deletion phase would have a marker to
+    // act on and the restore below would be testing something else.
+    assert.strictEqual(
+      scope.snapshot.isSelective,
+      true,
+      "precondition: the snapshot is not selective, so it was a full capture",
+    );
+    assert.deepStrictEqual(
+      scope.snapshot.selectedFiles,
+      [appKey],
+      "precondition: the snapshot did not record the file this test selected",
+    );
+    assert.ok(
+      scope.snapshot.files[appKey],
+      `precondition: the selected file is missing from the snapshot; recorded keys: ${JSON.stringify(
+        Object.keys(scope.snapshot.files),
+      )}`,
+    );
+    assert.strictEqual(
+      scope.snapshot.files[otherKey],
+      undefined,
+      `precondition: the selective snapshot has an entry for ${OTHER_REL} (${JSON.stringify(
+        scope.snapshot.files[otherKey],
+      )}); recorded keys: ${JSON.stringify(Object.keys(scope.snapshot.files))}`,
+    );
+
+    // Change both files after the capture: the captured one has to come back,
+    // the uncaptured one has to stay as it is.
+    fs.appendFileSync(APP_FILE, `\n${NOISE}\n`);
+    fs.writeFileSync(OTHER_FILE, drift, "utf8");
+    assert.ok(
+      fs.readFileSync(APP_FILE, "utf8").includes(NOISE),
+      "precondition: the edit to src/app.ts did not land",
+    );
+    assert.strictEqual(
+      fs.readFileSync(OTHER_FILE, "utf8"),
+      drift,
+      `precondition: the edit to ${OTHER_REL} did not land`,
+    );
+
+    const result = await manager.applySnapshotRestore(selectiveId);
+
+    assert.strictEqual(
+      result.success,
+      true,
+      `the restore reported failure: ${JSON.stringify(result)}`,
+    );
+    // The bug: "absent from the snapshot" was read as "extraneous", so this
+    // restore deleted every workspace file the selective capture never looked
+    // at -- the whole workspace minus the one file it captured.
+    assert.deepStrictEqual(
+      result.deleted,
+      [],
+      `restoring a snapshot whose entire scope was ${JSON.stringify(
+        scope.snapshot.selectedFiles,
+      )} deleted ${JSON.stringify(result.deleted)}`,
+    );
+    assert.equal(
+      fs.readFileSync(APP_FILE, "utf8"),
+      appAtSnapshot,
+      "the captured file was not restored to the snapshot's content",
+    );
+    assert.ok(
+      fs.existsSync(OTHER_FILE),
+      `restoring the selective snapshot deleted ${OTHER_REL}, which it never captured`,
+    );
+    assert.equal(
+      fs.readFileSync(OTHER_FILE, "utf8"),
+      drift,
+      `${OTHER_REL} was modified by a restore of a snapshot that never captured it`,
+    );
+  });
+
+  /**
+   * The restore predicate is load-bearing, so pin the case it exists for.
+   *
+   * `isSelective: true` with an EMPTY `selectedFiles` is what the rule-based
+   * producers emit when a rule matches nothing (`src/changeNotifier.ts`), and
+   * the capture side treats it as a whole-tree capture -- the else branch runs,
+   * so its `{deleted:true}` markers are real. A restore that keyed its skip on
+   * `isSelective` alone would leave files the user really deleted sitting in the
+   * workspace, which is why the test below asserts the deletion, not just the
+   * restoration.
+   */
+  test("an empty-selection rule snapshot behaves as a whole-tree capture on restore", async () => {
+    const deletedKey = snapshotKey(EMPTY_SELECTION_DELETED_REL);
+    const keptKey = snapshotKey(EMPTY_SELECTION_KEPT_REL);
+    const deletedContent = "// captured, then deleted before the rule snapshot\n";
+    const keptContent = "// captured by the rule snapshot\n";
+    const recreatedContent = "// recreated after the rule snapshot\n";
+
+    try {
+      fs.writeFileSync(EMPTY_SELECTION_DELETED_FILE, deletedContent, "utf8");
+      fs.writeFileSync(EMPTY_SELECTION_KEPT_FILE, keptContent, "utf8");
+      await waitFor(
+        `${EMPTY_SELECTION_DELETED_REL} and ${EMPTY_SELECTION_KEPT_REL} to become visible to workspace.findFiles`,
+        async () =>
+          (
+            await vscode.workspace.findFiles("**/empty-selection-*-probe.txt")
+          ).length === 2
+            ? true
+            : undefined,
+      );
+
+      const base = await api.takeSnapshot({
+        description: "empty selection base",
+        silent: true,
+      });
+      assert.strictEqual(
+        base.success,
+        true,
+        `the base snapshot failed: ${JSON.stringify(base)}`,
+      );
+      // Precondition: both probes are captured under the keys this test looks
+      // them up by, so the deletion marker and the restore below are about the
+      // files this test created.
+      for (const [rel, key] of [
+        [EMPTY_SELECTION_DELETED_REL, deletedKey],
+        [EMPTY_SELECTION_KEPT_REL, keptKey],
+      ]) {
+        assert.ok(
+          base.snapshot.files[key],
+          `precondition: the base snapshot does not hold ${rel} under '${key}'; recorded keys: ${JSON.stringify(
+            Object.keys(base.snapshot.files),
+          )}`,
+        );
+      }
+
+      // Gone before the rule-based capture, so that capture can record it.
+      fs.rmSync(EMPTY_SELECTION_DELETED_FILE);
+
+      const rule = await api.takeSnapshot({
+        description: "rule with no matches",
+        isSelective: true,
+        selectedFiles: [],
+        silent: true,
+      });
+      assert.strictEqual(
+        rule.success,
+        true,
+        `the empty-selection snapshot failed: ${JSON.stringify(rule)}`,
+      );
+      const ruleId = rule.snapshot.id;
+
+      assert.strictEqual(
+        rule.snapshot.isSelective,
+        true,
+        "precondition: the snapshot does not carry isSelective: true",
+      );
+      assert.deepStrictEqual(
+        rule.snapshot.selectedFiles,
+        [],
+        "precondition: the selection is not empty, so this is not the case the restore predicate must let through",
+      );
+      // The deletion marker is the whole point: an empty selection is a
+      // whole-tree capture, so it really reports the probe gone.
+      assert.deepStrictEqual(
+        rule.snapshot.files[deletedKey],
+        { deleted: true },
+        `precondition: the empty-selection snapshot did not record ${EMPTY_SELECTION_DELETED_REL} as deleted: ${JSON.stringify(
+          rule.snapshot.files[deletedKey],
+        )}`,
+      );
+      assert.ok(
+        rule.snapshot.files[keptKey] && !rule.snapshot.files[keptKey].deleted,
+        `precondition: the empty-selection snapshot did not capture ${EMPTY_SELECTION_KEPT_REL}: ${JSON.stringify(
+          rule.snapshot.files[keptKey],
+        )}`,
+      );
+
+      // The workspace moves on: the deleted file is back, the captured one is
+      // gone.
+      fs.writeFileSync(EMPTY_SELECTION_DELETED_FILE, recreatedContent, "utf8");
+      fs.rmSync(EMPTY_SELECTION_KEPT_FILE);
+
+      const result = await manager.applySnapshotRestore(ruleId);
+
+      assert.strictEqual(
+        result.success,
+        true,
+        `the restore reported failure: ${JSON.stringify(result)}`,
+      );
+      // The deletion phase must still run for this snapshot: it describes the
+      // whole tree, and it says the probe is deleted.
+      assert.ok(
+        result.deleted.includes(deletedKey),
+        `the restore skipped the deletion bookkeeping of a whole-tree capture: deleted ${JSON.stringify(
+          result.deleted,
+        )}, restored ${JSON.stringify(result.restored)}`,
+      );
+      assert.strictEqual(
+        fs.existsSync(EMPTY_SELECTION_DELETED_FILE),
+        false,
+        `${EMPTY_SELECTION_DELETED_REL} is recorded as deleted in the snapshot but survived the restore`,
+      );
+      // And it restores what it captured rather than treating it as untracked.
+      assert.ok(
+        result.restored.includes(keptKey),
+        `the restore did not restore ${EMPTY_SELECTION_KEPT_REL}: restored ${JSON.stringify(
+          result.restored,
+        )}, skipped ${JSON.stringify(result.skipped)}`,
+      );
+      assert.strictEqual(
+        fs.readFileSync(EMPTY_SELECTION_KEPT_FILE, "utf8"),
+        keptContent,
+        "the restored file does not hold the snapshot's content",
+      );
+    } finally {
+      // Both probes belong to this test: the fixture is left as it was found.
+      fs.rmSync(EMPTY_SELECTION_DELETED_FILE, { force: true });
+      fs.rmSync(EMPTY_SELECTION_KEPT_FILE, { force: true });
+    }
   });
 });
