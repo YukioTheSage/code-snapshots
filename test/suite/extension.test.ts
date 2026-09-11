@@ -193,6 +193,15 @@ suite("CodeLapse Integration", function () {
     assert.ok(rejected, "delete of unknown id silently reported success");
   });
 
+  test("viewSnapshots returns without an interactive picker", async function () {
+    this.timeout(30000);
+    const outcome = await Promise.race([
+      vscode.commands.executeCommand("vscode-snapshots.viewSnapshots").then(() => "returned"),
+      new Promise((r) => setTimeout(() => r("hung"), 15000)),
+    ]);
+    assert.equal(outcome, "returned", "viewSnapshots never returned (headless picker hang)");
+  });
+
   test("tree views and diagnostics execute without throwing", async function () {
     this.timeout(120000);
     await vscode.commands.executeCommand("vscode-snapshots.viewSnapshots");

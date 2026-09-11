@@ -2,6 +2,7 @@ import { Pinecone, Index, RecordMetadata } from '@pinecone-database/pinecone';
 import { log, logVerbose } from '../logger';
 import { CredentialsManager } from './credentialsManager';
 import { CodeChunk } from './codeChunker';
+import { isInteractiveUiDisabled } from '../headless';
 
 interface VectorRecord {
   id: string;
@@ -73,8 +74,10 @@ export class VectorDatabaseService {
         if (!apiKey) {
           // Headless contexts (integration tests, CI) cannot answer an input
           // box, and `showInputBox` there never settles -- a delete whose
-          // purge awaited init would hang forever. Fail fast instead.
-          if (process.env.CODELAPSE_DISABLE_CREDENTIAL_PROMPTS === '1') {
+          // purge awaited init would hang forever. Fail fast instead. The
+          // predicate is shared (src/headless.ts) so this prompt site and the
+          // snapshot picker cannot drift apart.
+          if (isInteractiveUiDisabled()) {
             throw new Error('Pinecone API key required');
           }
           log('Pinecone API key not found. Prompting for credentials.');

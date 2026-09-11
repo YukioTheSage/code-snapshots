@@ -64,6 +64,11 @@ function main() {
       // credentials prompt would block delete/purge chains forever, so services
       // must fail fast instead of prompting (vscode-snapshots env contract).
       CODELAPSE_DISABLE_CREDENTIAL_PROMPTS: "1",
+      // HEADLESS TEST RUN: non-modal pickers (`showQuickPick` / `showInputBox`)
+      // HANG here rather than throwing, so any command that awaits one never
+      // returns. This is the general switch that makes such prompts no-ops
+      // (see src/headless.ts).
+      CODELAPSE_DISABLE_INTERACTIVE_UI: "1",
       // Don't inherit an accidentally-set ELECTRON_RUN_AS_NODE, which would
       // make Code.exe start up as plain Node instead of an extension host.
       ELECTRON_RUN_AS_NODE: undefined as any,

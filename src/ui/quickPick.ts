@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { SnapshotManager } from '../snapshotManager'; // Adjust path
+import { isInteractiveUiDisabled } from '../headless';
+import { log } from '../logger';
 
 // Class for Quick Pick UI
 export class SnapshotQuickPick {
@@ -82,7 +84,16 @@ export class SnapshotQuickPick {
       };
     });
 
-    // Show quick pick
+    // Show quick pick. In a headless host (integration tests, CI) nothing can
+    // answer it, and `showQuickPick` then never settles -- the caller would
+    // hang forever instead of failing. Return the same `undefined` a cancelled
+    // pick returns, so callers see the ordinary "user declined" path.
+    if (isInteractiveUiDisabled()) {
+      log(
+        'Interactive UI disabled (headless run); skipping the snapshot quick pick.',
+      );
+      return undefined;
+    }
     const selected = await vscode.window.showQuickPick(items.reverse(), {
       // Show newest first
       placeHolder: 'Select a snapshot to restore the workspace to',

@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 import { log, logVerbose } from '../logger';
 import { CredentialsManager } from './credentialsManager';
 import { CodeChunk } from './codeChunker';
+import { isInteractiveUiDisabled } from '../headless';
 import path = require('path');
 
 export class EmbeddingService {
@@ -43,8 +44,9 @@ export class EmbeddingService {
 
         if (!apiKey) {
           // Headless contexts (integration tests, CI) cannot answer an input
-          // box; fail fast instead of hanging on `showInputBox`.
-          if (process.env.CODELAPSE_DISABLE_CREDENTIAL_PROMPTS === '1') {
+          // box; fail fast instead of hanging on `showInputBox`. Shared
+          // predicate (src/headless.ts) so every prompt site agrees.
+          if (isInteractiveUiDisabled()) {
             throw new Error('Gemini API key required');
           }
           log('Gemini API key not found. Prompting for credentials.');
