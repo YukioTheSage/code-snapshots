@@ -15,9 +15,6 @@ import { RelationshipAnalyzer } from './relationshipAnalyzer';
 import {
   EnhancedSemanticSearchOptions,
   AIAgentResponse,
-  ResponseMetadata,
-  PerformanceMetrics,
-  SearchQualityMetrics,
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunk } from '../types/enhancedChunking';
 import { log } from '../logger';
@@ -1449,7 +1446,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async handleAnalyzeQuality(data: any): Promise<any> {
     try {
-      const { target, snapshotId, metrics = ['all'] } = data;
+      const { target, snapshotId } = data;
 
       if (!target || !snapshotId) {
         throw new Error('target and snapshotId are required');
@@ -1517,12 +1514,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async handleEnhancedChunkFile(data: any): Promise<any> {
     try {
-      const {
-        filePath,
-        snapshotId,
-        strategy = 'semantic',
-        options = {},
-      } = data;
+      const { filePath, snapshotId, strategy = 'semantic' } = data;
 
       if (!filePath || !snapshotId) {
         throw new Error('filePath and snapshotId are required');
@@ -1593,12 +1585,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async handleChunkSnapshot(data: any): Promise<any> {
     try {
-      const {
-        snapshotId,
-        strategy = 'semantic',
-        filePatterns,
-        options = {},
-      } = data;
+      const { snapshotId, strategy = 'semantic', filePatterns } = data;
 
       if (!snapshotId) {
         throw new Error('snapshotId is required');
@@ -1685,7 +1672,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async handleListChunks(data: any): Promise<any> {
     try {
-      const { snapshotId, filePath, filters = {} } = data;
+      const { snapshotId, filePath } = data;
 
       if (!snapshotId) {
         throw new Error('snapshotId is required');
@@ -1942,7 +1929,6 @@ export class CliConnectorService implements vscode.Disposable {
 
       if (parallel) {
         // Enhanced parallel processing with better concurrency control
-        const semaphore = new Array(maxConcurrency).fill(null);
         const chunks = [];
 
         for (let i = 0; i < operations.length; i += maxConcurrency) {
