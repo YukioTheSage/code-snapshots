@@ -85,6 +85,10 @@ codelapse snapshot create "Refactored user authentication" --notes "Implemented 
 codelapse workspace state --json --silent
 ```
 
+> `workspace state` and `workspace files` need the VS Code extension running:
+> standalone mode serves `workspace info` only. See the mode availability table
+> in `API.md` for the full per-feature breakdown.
+
 ### Emergency Restore
 
 ```bash

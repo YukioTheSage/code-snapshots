@@ -24,9 +24,15 @@ codelapse <command> --help
 ## Global Options
 
 - `--json` - Output in JSON format (AI-friendly)
-- `--silent` - Silent mode - no user prompts or status messages
-- `--verbose` - Verbose output for debugging
+- `--silent` - Silent mode - no user prompts or status messages. It suppresses
+  *all* non-JSON stdout, including listings, so pair it with `--json` in
+  automation: a silent `snapshot list` prints nothing at all.
+- `--verbose` - Verbose output for debugging, including which mode was selected
 - `--timeout <ms>` - Connection timeout in milliseconds (default: 5000)
+
+> **Exit status mirrors the payload.** The process exits 0 when the JSON
+> payload's top-level `success` is `true` and 1 when it is `false`, for every
+> command including `api` and `batch`.
 
 > There is **no** global `--mode`. Mode selection is automatic: standalone
 > first, then IPC if the extension is running. The flag cannot be added under
@@ -38,12 +44,24 @@ codelapse <command> --help
 
 > **Which groups need the extension running.** Commands are served by the
 > CodeLapse extension over IPC. With no extension running the CLI falls back to
-> **standalone mode**, which implements snapshot, config, workspace, file and
-> `git` commit operations against `.snapshots/` directly — but *not* the
+> **standalone mode**, which implements snapshot operations (create, list with
+> `--tags`/`--favorites`/`--limit`/`--since`, show, restore, delete, compare,
+> navigate), config, file-level operations, `workspace info`, and the `git`
+> operations that need only a repository — against `.snapshots/` directly.
+> It does *not* implement `workspace state` / `workspace files`, the
 > `analyze`, `chunk`, `search index`, `rules`, `filter` and `diagnostics` API
-> methods. Those fail with an explicit "not supported in standalone mode" error
-> rather than returning anything invented. Start VS Code with the extension
-> active to use them.
+> methods, or the git operations that compare against commits. Those fail with
+> an explicit "not supported in standalone mode" error rather than returning
+> anything invented. Start VS Code with the extension active to use them.
+>
+> `git info`, `git branches` and the git write operations need a runnable
+> `git` executable; when it cannot be run the command fails with
+> "git is not available" and exits 1 instead of printing empty fields.
+>
+> Snapshot ids may be abbreviated to any unique prefix or fragment, so
+> `snapshot show 1789120661991` works for
+> `snapshot-1789120661991-fe3a3996`. An ambiguous abbreviation is refused with
+> the list of candidates.
 
 ### Connection & Status
 - `codelapse status` - Check connection to CodeLapse extension
@@ -235,6 +253,10 @@ codelapse filter tags "auth,feature"
 # Filter by date (last 2 days)
 codelapse filter date "2d"
 
+# Also accepted: 1h, 1w, 3m, 1y, the keyword "today",
+# ISO dates ("2025-01-31") and ranges ("2025-01-01..2025-12-31").
+# Anything else fails with a message listing the accepted forms.
+
 # Mark snapshot as favorite
 codelapse filter favorite abc123
 
@@ -271,6 +293,14 @@ echo '[
 # Execute batch commands
 codelapse batch commands.json
 ```
+
+Both file shapes are accepted: the bare top-level array above, and a
+`{"commands": [ ... ]}` wrapper around the same array. Anything else is
+refused with an error naming both.
+
+Each entry is validated against the API allowlist before anything runs, and
+`success` in the result reflects whether every command succeeded. A command
+that fails does not stop the rest of the batch.
 
 ## JSON Output Format
 

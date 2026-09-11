@@ -87,7 +87,7 @@ cd my-project
 
 # Initialize/Check status
 codelapse status
-# Output: CodeLapse ready (standalone mode)
+# Output: ✓ Connected (standalone mode)
 ```
 
 #### 3. Verify IPC Mode (Optional)
@@ -97,7 +97,7 @@ code .
 
 # Check status (CLI will auto-detect extension)
 codelapse status
-# Output: CodeLapse ready (ipc mode)
+# Output: ✓ Connected to CodeLapse extension (mode: ipc)
 ```
 
 ### Troubleshooting Setup
@@ -340,6 +340,10 @@ Execute multiple commands from a single JSON file for complex, automated workflo
 
 codelapse batch batch-commands.json
 ```
+
+A `{ "commands": [ ... ] }` wrapper around the same array is accepted too.
+Entries are validated against the API allowlist before anything runs, and a
+failing command is reported per entry without stopping the batch.
 
 ### Real-time Event Streaming
 Use `codelapse watch` to monitor for snapshot and workspace changes in real-time, enabling reactive AI workflows.

@@ -414,10 +414,19 @@ codelapse filter tags "auth,security"
 
 #### `filter date <range>`
 
-Filter snapshots by date.
+Filter snapshots by date. Accepted range forms:
+
+- relative: `1h`, `2d`, `1w`, `3m`, `1y` (hours, days, weeks, months, years ago)
+- the keyword `today`
+- an ISO date such as `2025-01-31` (meaning "since that date")
+- an ISO range: `2025-01-01..2025-12-31`
+
+Anything else fails with a message listing these forms and exits 1, rather
+than throwing an internal error.
 
 ```bash
 codelapse filter date "2d"
+codelapse filter date "today"
 codelapse filter date "2025-01-01..2025-12-31"
 ```
 
@@ -1086,6 +1095,20 @@ codelapse diagnostics performance --time-range 1d
 ### `batch <file>`
 
 Execute batch commands from a JSON file (AI-friendly).
+
+Two file shapes are accepted:
+
+```json
+[{"method": "takeSnapshot", "data": {"description": "..."}}]
+```
+
+```json
+{"commands": [{"method": "takeSnapshot", "data": {"description": "..."}}]}
+```
+
+Every entry is validated against the API allowlist before any command runs;
+a failing command is recorded as a failed entry and does not stop the batch.
+`success` is `true` only when every entry succeeded.
 
 ```bash
 codelapse batch commands.json
