@@ -13,7 +13,10 @@ export interface TerminalApiInterface {
     id: string,
     options?: RestoreOptions,
   ): Promise<RestoreResponse>;
-  deleteSnapshot(id: string): Promise<boolean>;
+  deleteSnapshot(
+    id: string,
+    options?: { skipConfirm?: boolean },
+  ): Promise<boolean>;
   navigateSnapshot(direction: 'previous' | 'next'): Promise<NavigationResponse>;
 
   // Snapshot content operations

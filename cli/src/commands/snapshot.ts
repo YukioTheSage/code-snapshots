@@ -214,7 +214,15 @@ export class SnapshotCommands {
 
   async delete(id: string, options: any): Promise<void> {
     try {
-      const result = await this.client.callApi('deleteSnapshot', { id });
+      // `-y/--yes` promises, in `--help`, to skip the confirmation. The
+      // extension gates its modal dialog on `options.skipConfirm`
+      // (`SnapshotManager.deleteSnapshot`), so the flag has to travel in the
+      // payload. Commander parsed `options.yes` and this method dropped it,
+      // which is why the popup appeared even with `-y`.
+      const result = await this.client.callApi('deleteSnapshot', {
+        id,
+        skipConfirm: !!options?.yes,
+      });
       printResult(
         {
           success: true,

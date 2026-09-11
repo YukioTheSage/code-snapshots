@@ -353,7 +353,16 @@ export class CliConnectorService implements vscode.Disposable {
           );
           break;
         case 'deleteSnapshot':
-          result = await this.terminalApiService.deleteSnapshot(data.id);
+          // The last place `skipConfirm` can be lost on its way from the CLI
+          // to the dialog: forwarding only `data.id` left
+          // `!options?.skipConfirm` with no choice but to raise the modal.
+          // Strict boolean, because this suppresses the confirmation for a
+          // destructive operation arriving over IPC -- only a real `true` may
+          // do that, and a malformed value ("false", 1, {}) fails closed and
+          // keeps the dialog.
+          result = await this.terminalApiService.deleteSnapshot(data.id, {
+            skipConfirm: data.skipConfirm === true,
+          });
           break;
         case 'navigateSnapshot':
           result = await this.terminalApiService.navigateSnapshot(
