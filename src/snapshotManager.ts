@@ -95,6 +95,15 @@ export type TakeSnapshotOutcome =
   | { created: false; reason: 'no-changes' };
 
 /**
+ * The search index's purge hook. Kept structural so the snapshot engine keeps
+ * no compile-time dependency on semantic search, which is optional and fails
+ * without credentials.
+ */
+export interface SnapshotIndexPurgeTarget {
+  deleteSnapshotIndexing?(id: string): Promise<void>;
+}
+
+/**
  * Chooses which snapshots can be pruned without making any surviving snapshot
  * unreadable. Snapshots are deltas: an entry with only a `baseSnapshotId` is
  * reconstructable solely while that base still exists, so removing a referenced
@@ -205,6 +214,7 @@ export class SnapshotManager {
    */
   private activeSnapshotId: string | null = null;
   private storage: SnapshotStorage;
+  private semanticSearchService?: SnapshotIndexPurgeTarget;
   private gitApi: GitAPI | null; // Store Git API instance
   private writeLock: Promise<void> = Promise.resolve();
   private _onDidChangeSnapshots = new vscode.EventEmitter<void>(); // Event emitter
@@ -1734,16 +1744,24 @@ export class SnapshotManager {
    * by exact `"<snapshotId>::"` prefix, which is why the cache assertions for
    * this task already passed.
    */
+  /**
+   * Inject the search index's purge hook. A typed call keeps a rename from
+   * silently breaking the only path that removes deleted snapshots from search.
+   */
+  public setSemanticSearchService(
+    service: SnapshotIndexPurgeTarget | undefined,
+  ): void {
+    this.semanticSearchService = service;
+  }
+
   private async purgeSnapshot(snapshotId: string): Promise<void> {
     await this.storage.deleteSnapshotData(snapshotId);
 
-    const semanticSearchService = (this as any).semanticSearchService as
-      | { deleteSnapshotIndexing?: (id: string) => Promise<void> }
-      | undefined;
-
-    if (typeof semanticSearchService?.deleteSnapshotIndexing === 'function') {
+    if (
+      typeof this.semanticSearchService?.deleteSnapshotIndexing === 'function'
+    ) {
       try {
-        await semanticSearchService.deleteSnapshotIndexing(snapshotId);
+        await this.semanticSearchService.deleteSnapshotIndexing(snapshotId);
       } catch (error) {
         // Purge is best-effort on the derived store: a failure to clear vectors
         // must not stop the snapshot itself from being removed, but it must be

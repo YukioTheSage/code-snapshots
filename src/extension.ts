@@ -159,7 +159,7 @@ export async function activate(context: vscode.ExtensionContext) {
       context,
       semanticSearchService,
     );
-    (snapshotManager as any).semanticSearchService = semanticSearchService;
+    snapshotManager.setSemanticSearchService(semanticSearchService);
     context.subscriptions.push(semanticSearchService);
 
     // Initialize Terminal API Service
