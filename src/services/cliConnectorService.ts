@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import * as diff from 'diff';
 import { ConfigManager, MAX_JSON_PAYLOAD_BYTES } from 'codelapse-core';
+import { toRatio } from './qualityScale';
 import { resolveSetting } from '../configSource';
 import { TerminalApiService } from './terminalApiService';
 import { SemanticSearchService } from './semanticSearchService';
@@ -1741,40 +1742,117 @@ export class CliConnectorService implements vscode.Disposable {
   }
 
   /**
+   * Resolve one chunk of a snapshot file, or throw.
+   *
+   * Every handler below used to return a well-formed payload with fabricated
+   * values regardless of what was asked for, so a caller could not tell a real
+   * answer from a placeholder.
+   */
+  private async resolveChunk(
+    snapshotId: string,
+    filePath: string,
+    chunkId: string,
+  ): Promise<EnhancedCodeChunk> {
+    const content = await this.terminalApiService.getSnapshotFileContent(
+      snapshotId,
+      filePath,
+    );
+    if (content === null) {
+      throw new Error(`File not found in snapshot ${snapshotId}: ${filePath}`);
+    }
+
+    const chunks = await this.enhancedCodeChunker.chunkFileEnhanced(
+      filePath,
+      content,
+      snapshotId,
+    );
+    const chunk = chunks.find((candidate) => candidate.id === chunkId);
+    if (!chunk) {
+      throw new Error(`Chunk not found: ${chunkId}`);
+    }
+    return chunk;
+  }
+
+  /**
+   * Snapshot ids are the prefix before the first `_` in a strategy chunk id.
+   */
+  private extractSnapshotIdFromChunkId(chunkId: string): string | undefined {
+    const separator = chunkId.indexOf('_');
+    return separator > 0 ? chunkId.slice(0, separator) : undefined;
+  }
+
+  /**
+   * Resolve a chunk either against the payload's file path or, when the caller
+   * only has a chunk id, by walking the snapshot's files until one produces it.
+   */
+  private async resolveChunkInSnapshot(
+    snapshotId: string,
+    chunkId: string,
+    filePath?: string,
+  ): Promise<{ filePath: string; chunk: EnhancedCodeChunk }> {
+    if (filePath) {
+      return {
+        filePath,
+        chunk: await this.resolveChunk(snapshotId, filePath, chunkId),
+      };
+    }
+
+    const snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+    if (!snapshot) {
+      throw new Error(`Snapshot not found: ${snapshotId}`);
+    }
+
+    for (const candidate of Object.keys(snapshot.files)) {
+      const file = snapshot.files[candidate];
+      if (file.deleted || file.isBinary) {
+        continue;
+      }
+      try {
+        return {
+          filePath: candidate,
+          chunk: await this.resolveChunk(snapshotId, candidate, chunkId),
+        };
+      } catch {
+        // This file does not contain the requested chunk; try the next one.
+      }
+    }
+
+    throw new Error(`Chunk not found: ${chunkId}`);
+  }
+
+  /**
    * Handle chunk analysis request
    */
   private async handleAnalyzeChunk(data: any): Promise<any> {
     try {
-      const { chunkId, snapshotId, analysisType = 'full' } = data;
+      const { chunkId, analysisType = 'full' } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
       if (!chunkId || !snapshotId) {
         throw new Error('chunkId and snapshotId are required');
       }
 
-      // This would need to be implemented with actual chunk storage/retrieval
-      // For now, return a structured response format
+      const { filePath, chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+
       return {
         success: true,
         chunkId,
         snapshotId,
+        filePath,
         analysisType,
         analysis: {
           qualityMetrics: {
-            overallScore: 75,
-            readabilityScore: 80,
-            maintainabilityScore: 70,
-            complexityScore: 15,
+            ...chunk.qualityMetrics,
+            complexityScore: chunk.enhancedMetadata.complexityScore,
           },
-          relationships: [],
-          securityConcerns: [],
-          suggestions: [
-            {
-              type: 'improvement',
-              description: 'Consider adding more documentation',
-              priority: 'medium',
-              effort: 'minimal',
-            },
-          ],
+          relationships: chunk.relationships,
+          securityConcerns:
+            (chunk.enhancedMetadata as any).securityConcerns ?? [],
         },
         metadata: {
           analysisTime: Date.now(),
@@ -1872,45 +1950,109 @@ export class CliConnectorService implements vscode.Disposable {
         throw new Error('target and snapshotId are required');
       }
 
-      // Quality analysis implementation would go here
-      // For now, return structured response
-      //
-      // Placeholder data (see docs/KNOWN_ISSUES.md, "Six commands return
-      // placeholder data"), but each field on the unit its name carries:
-      // `readability`, `testCoverage` and `duplication` are the 0-100
-      // score/risk fields their `readabilityScore` / `testCoverage` /
-      // `duplicationRisk` siblings are in `QualityMetrics`; `documentation` is
-      // that interface's one ratio field and `complexity` is a raw count.
-      // These were written 0.82 / 0.65 / 0.12 -- ratios in 0-100 fields -- next
-      // to an in-contract `maintainability: 75`, and `codelapse analyze quality`
-      // prints the payload verbatim, so a client saw two scales in one object.
+      let chunks: EnhancedCodeChunk[] = [];
+      const content = await this.terminalApiService.getSnapshotFileContent(
+        snapshotId,
+        target,
+      );
+      if (content !== null) {
+        chunks = await this.enhancedCodeChunker.chunkFileEnhanced(
+          target,
+          content,
+          snapshotId,
+        );
+      } else {
+        const resolved = await this.resolveChunkInSnapshot(
+          snapshotId,
+          target,
+          data.filePath,
+        );
+        chunks = [resolved.chunk];
+      }
+
+      if (chunks.length === 0) {
+        throw new Error(`No chunks found for target: ${target}`);
+      }
+
+      const average = (
+        read: (chunk: EnhancedCodeChunk) => number | undefined,
+      ): number | undefined => {
+        const values = chunks
+          .map(read)
+          .filter((value): value is number => typeof value === 'number');
+        return values.length === 0
+          ? undefined
+          : values.reduce((sum, value) => sum + value, 0) / values.length;
+      };
+
+      const metricReaders: Record<
+        string,
+        (chunk: EnhancedCodeChunk) => number | undefined
+      > = {
+        readability: (chunk) => chunk.qualityMetrics.readabilityScore,
+        maintainability: (chunk) => chunk.qualityMetrics.maintainabilityScore,
+        testCoverage: (chunk) => chunk.qualityMetrics.testCoverage,
+        documentation: (chunk) => chunk.qualityMetrics.documentationRatio,
+        complexity: (chunk) =>
+          (chunk.enhancedMetadata as any).complexityScore,
+        duplication: (chunk) => chunk.qualityMetrics.duplicationRisk,
+      };
+
+      const requested =
+        Array.isArray(data.metrics) &&
+        data.metrics.length > 0 &&
+        !data.metrics.includes('all')
+          ? data.metrics
+          : Object.keys(metricReaders);
+      const metrics: Record<string, number> = {};
+      for (const metric of requested) {
+        const reader = metricReaders[metric];
+        if (!reader) {
+          continue;
+        }
+        const value = average(reader);
+        if (value !== undefined) {
+          metrics[metric] = value;
+        }
+      }
+
+      const overallScore =
+        average((chunk) => chunk.qualityMetrics.overallScore) ?? 0;
+      const recommendations: Array<Record<string, unknown>> = [];
+      if (
+        metrics.documentation !== undefined &&
+        metrics.documentation < 0.3
+      ) {
+        recommendations.push({
+          category: 'documentation',
+          priority: 'high',
+          description: 'Increase documentation coverage',
+        });
+      }
+      if (
+        metrics.maintainability !== undefined &&
+        metrics.maintainability < 70
+      ) {
+        recommendations.push({
+          category: 'maintainability',
+          priority: 'medium',
+          description: 'Simplify complex sections reported by the chunker',
+        });
+      }
+
       return {
         success: true,
         target,
         snapshotId,
         qualityAnalysis: {
-          overallScore: 78,
-          metrics: {
-            readability: 82,
-            maintainability: 75,
-            testCoverage: 65,
-            documentation: 0.58,
-            complexity: 18,
-            duplication: 12,
-          },
+          overallScore,
+          metrics,
           trends: {
-            improving: ['readability', 'testCoverage'],
-            declining: ['documentation'],
-            stable: ['maintainability', 'complexity'],
+            improving: [],
+            declining: [],
+            stable: Object.keys(metrics),
           },
-          recommendations: [
-            {
-              category: 'documentation',
-              priority: 'high',
-              description: 'Increase documentation coverage',
-              estimatedEffort: '2-4 hours',
-            },
-          ],
+          recommendations,
         },
         metadata: {
           analysisTime: Date.now(),
@@ -1928,7 +2070,6 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle enhanced file chunking request
    */
@@ -2098,29 +2239,121 @@ export class CliConnectorService implements vscode.Disposable {
         throw new Error('snapshotId is required');
       }
 
-      // This would need actual chunk storage implementation
-      // For now, return mock data structure
+      const filePaths: string[] = [];
+      let snapshot: Snapshot | null = null;
+      if (filePath) {
+        filePaths.push(filePath);
+      } else {
+        snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+        if (!snapshot) {
+          throw new Error(`Snapshot not found: ${snapshotId}`);
+        }
+        filePaths.push(
+          ...Object.keys(snapshot.files).filter((candidate) => {
+            const file = snapshot!.files[candidate];
+            return !file.deleted && !file.isBinary;
+          }),
+        );
+      }
+
+      const collected: EnhancedCodeChunk[] = [];
+      for (const candidate of filePaths) {
+        const content = await this.terminalApiService.getSnapshotFileContent(
+          snapshotId,
+          candidate,
+        );
+        if (content === null) {
+          continue;
+        }
+        collected.push(
+          ...(await this.enhancedCodeChunker.chunkFileEnhanced(
+            candidate,
+            content,
+            snapshotId,
+          )),
+        );
+      }
+
+      const filters = data.filters ?? {};
+      let filtered = collected;
+      if (Array.isArray(filters.semanticTypes) && filters.semanticTypes.length > 0) {
+        filtered = filtered.filter((chunk) =>
+          filters.semanticTypes.includes(chunk.enhancedMetadata.semanticType),
+        );
+      }
+      if (typeof filters.qualityThreshold === 'number') {
+        filtered = filtered.filter(
+          (chunk) =>
+            toRatio(chunk.qualityMetrics.overallScore) >=
+              filters.qualityThreshold,
+        );
+      }
+      if (Array.isArray(filters.complexityRange)) {
+        const [min, max] = filters.complexityRange;
+        filtered = filtered.filter((chunk) => {
+          const complexity = (chunk.enhancedMetadata as any).complexityScore;
+          return complexity >= min && complexity <= max;
+        });
+      }
+      if (Array.isArray(filters.hasPatterns) && filters.hasPatterns.length > 0) {
+        filtered = filtered.filter((chunk) =>
+          filters.hasPatterns.some((pattern: string) =>
+            (chunk.enhancedMetadata.designPatterns ?? []).includes(pattern),
+          ),
+        );
+      }
+      if (
+        Array.isArray(filters.excludeSmells) &&
+        filters.excludeSmells.length > 0
+      ) {
+        filtered = filtered.filter(
+          (chunk) =>
+            !filters.excludeSmells.some((smell: string) =>
+              (chunk.enhancedMetadata.codeSmells ?? []).includes(smell),
+            ),
+        );
+      }
+
+      const sortBy = data.sortBy || 'startLine';
+      const sortOrder = data.sortOrder === 'desc' ? -1 : 1;
+      filtered = [...filtered].sort((a, b) => {
+        const read = (chunk: EnhancedCodeChunk): number => {
+          switch (sortBy) {
+            case 'qualityScore':
+              return toRatio(chunk.qualityMetrics.overallScore);
+            case 'complexityScore':
+              return (chunk.enhancedMetadata as any).complexityScore ?? 0;
+            case 'endLine':
+              return chunk.endLine;
+            default:
+              return chunk.startLine;
+          }
+        };
+        return (read(a) - read(b)) * sortOrder;
+      });
+
+      const page = Math.max(1, data.pagination?.page ?? 1);
+      const limit = Math.max(1, data.pagination?.limit ?? 50);
+      const total = filtered.length;
+      const chunks = filtered
+        .slice((page - 1) * limit, page * limit)
+        .map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          semanticType: chunk.enhancedMetadata.semanticType,
+          qualityScore: chunk.qualityMetrics.overallScore,
+          complexityScore: (chunk.enhancedMetadata as any).complexityScore,
+          lastModified: snapshot?.timestamp ?? 0,
+        }));
+
       return {
         success: true,
         snapshotId,
-        filePath,
-        chunks: [
-          {
-            id: 'chunk-1',
-            filePath: filePath || 'example.ts',
-            startLine: 1,
-            endLine: 25,
-            semanticType: 'function',
-            qualityScore: 85,
-            complexityScore: 12,
-            lastModified: Date.now(),
-          },
-        ],
-        pagination: {
-          total: 1,
-          page: 1,
-          limit: 50,
-        },
+        ...(filePath ? { filePath } : {}),
+        chunks,
+        pagination: { total, page, limit },
         metadata: {
           queryTime: Date.now(),
           version: '1.0.0',
@@ -2134,7 +2367,6 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle get chunk metadata request
    */
@@ -2145,38 +2377,47 @@ export class CliConnectorService implements vscode.Disposable {
         includeRelationships = true,
         includeQuality = true,
       } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
-      if (!chunkId) {
-        throw new Error('chunkId is required');
+      if (!chunkId || !snapshotId) {
+        throw new Error('chunkId and snapshotId are required');
       }
 
-      // Mock metadata response
+      const { chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+      const lines = chunk.content.split('\n');
+      const blank = lines.filter((line) => line.trim().length === 0).length;
+      const comments = lines.filter((line) =>
+        /^\s*(\/\/|\/\*|\*|#)/.test(line),
+      ).length;
+
       return {
         success: true,
         chunkId,
+        snapshotId,
         metadata: {
-          semanticType: 'function',
-          complexityScore: 15,
-          maintainabilityIndex: 78,
-          dependencies: ['lodash', 'express'],
-          designPatterns: ['Factory'],
-          codeSmells: [],
-          securityConcerns: [],
+          semanticType: chunk.enhancedMetadata.semanticType,
+          complexityScore: (chunk.enhancedMetadata as any).complexityScore,
+          maintainabilityIndex: (chunk.enhancedMetadata as any)
+            .maintainabilityIndex,
+          dependencies: chunk.enhancedMetadata.dependencies ?? [],
+          designPatterns: chunk.enhancedMetadata.designPatterns ?? [],
+          codeSmells: chunk.enhancedMetadata.codeSmells ?? [],
+          securityConcerns:
+            (chunk.enhancedMetadata as any).securityConcerns ?? [],
           linesOfCode: {
-            total: 24,
-            code: 18,
-            comments: 4,
-            blank: 2,
+            total: lines.length,
+            code: lines.length - blank - comments,
+            comments,
+            blank,
           },
         },
-        relationships: includeRelationships ? [] : undefined,
-        qualityMetrics: includeQuality
-          ? {
-              overallScore: 82,
-              readabilityScore: 85,
-              maintainabilityScore: 78,
-            }
-          : undefined,
+        relationships: includeRelationships ? chunk.relationships : undefined,
+        qualityMetrics: includeQuality ? chunk.qualityMetrics : undefined,
         responseMetadata: {
           retrievalTime: Date.now(),
           version: '1.0.0',
@@ -2190,36 +2431,58 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle get chunk context request
    */
   private async handleGetChunkContext(data: any): Promise<any> {
     try {
-      const { chunkId, contextRadius = 5 } = data;
+      const { chunkId, contextRadius = data.radius ?? 5 } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
-      if (!chunkId) {
-        throw new Error('chunkId is required');
+      if (!chunkId || !snapshotId) {
+        throw new Error('chunkId and snapshotId are required');
       }
 
-      // Mock context response
+      const { filePath, chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+      const content =
+        (await this.terminalApiService.getSnapshotFileContent(
+          snapshotId,
+          filePath,
+        )) ?? chunk.content;
+      const lines = content.split('\n');
+      const radius = Math.max(0, Number(contextRadius) || 0);
+      const surroundingContext = lines
+        .slice(
+          Math.max(0, chunk.startLine - radius),
+          Math.min(lines.length, chunk.endLine + radius + 1),
+        )
+        .join('\n');
+      const contextInfo = chunk.contextInfo;
+      const fileContext =
+        contextInfo?.fileContext ??
+        {
+          totalLines: lines.length,
+          fileSize: content.length,
+        };
+
       return {
         success: true,
         chunkId,
+        snapshotId,
+        filePath,
         context: {
-          surroundingContext: '// Context lines would be here',
-          architecturalLayer: 'service',
-          frameworkContext: ['express', 'typescript'],
-          businessContext: 'User authentication service',
-          fileContext: {
-            totalLines: 150,
-            fileSize: 4500,
-            lastModified: new Date(),
-            siblingChunks: ['chunk-2', 'chunk-3'],
-          },
+          surroundingContext,
+          architecturalLayer: contextInfo?.architecturalLayer,
+          frameworkContext: contextInfo?.frameworkContext ?? [],
+          fileContext,
         },
         metadata: {
-          contextRadius,
+          contextRadius: radius,
           retrievalTime: Date.now(),
           version: '1.0.0',
         },
@@ -2235,41 +2498,53 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle get chunk dependencies request
    */
   private async handleGetChunkDependencies(data: any): Promise<any> {
     try {
       const { chunkId, includeTransitive = false, maxDepth = 3 } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
-      if (!chunkId) {
-        throw new Error('chunkId is required');
+      if (!chunkId || !snapshotId) {
+        throw new Error('chunkId and snapshotId are required');
       }
 
-      // Mock dependencies response
+      const { chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+      const relationships = chunk.relationships ?? [];
+      const direct = relationships
+        .filter((relationship) => relationship.direction !== 'incoming')
+        .map((relationship) => ({
+          chunkId: relationship.targetChunkId,
+          type: relationship.type,
+          strength: relationship.strength,
+          description: relationship.description,
+          direction: relationship.direction,
+        }));
+      const dependents = relationships
+        .filter((relationship) => relationship.direction === 'incoming')
+        .map((relationship) => ({
+          chunkId: relationship.targetChunkId,
+          type: relationship.type,
+          strength: relationship.strength,
+          description: relationship.description,
+          direction: relationship.direction,
+        }));
+
       return {
         success: true,
         chunkId,
+        snapshotId,
         dependencies: {
-          direct: [
-            {
-              chunkId: 'chunk-2',
-              type: 'imports',
-              strength: 0.9,
-              description: 'Imports utility functions',
-            },
-          ],
-          transitive: includeTransitive ? [] : undefined,
+          direct,
+          ...(includeTransitive ? { transitive: [] } : {}),
         },
-        dependents: [
-          {
-            chunkId: 'chunk-4',
-            type: 'calls',
-            strength: 0.8,
-            description: 'Called by main handler',
-          },
-        ],
+        dependents,
         metadata: {
           includeTransitive,
           maxDepth,
@@ -2285,7 +2560,6 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle batch analyze request with enhanced error handling and progress tracking
    */

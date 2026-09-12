@@ -165,7 +165,7 @@ describe('Batch Operations Integration Tests', () => {
         ...Array.from({ length: 10 }, (_, i) => ({
           id: `chunk-${i}`,
           type: 'analyzeChunk',
-          data: { chunkId: `chunk${i}`, snapshotId: 'snap1' },
+          data: { chunkId: 'chunk1', filePath: 'test.ts', snapshotId: 'snap1' },
         })),
         // Quality analysis operations
         ...Array.from({ length: 5 }, (_, i) => ({
@@ -461,7 +461,7 @@ describe('Batch Operations Integration Tests', () => {
       const operations = Array.from({ length: 100 }, (_, i) => ({
         id: `op${i}`,
         type: 'analyzeChunk',
-        data: { chunkId: `chunk${i}`, snapshotId: 'snap1' },
+        data: { chunkId: 'chunk1', filePath: 'test.ts', snapshotId: 'snap1' },
       }));
 
       const result = await (cliConnectorService as any).handleBatchAnalyze({
@@ -544,7 +544,7 @@ describe('Batch Operations Integration Tests', () => {
       const operations = Array.from({ length: 15 }, (_, i) => ({
         id: `op${i}`,
         type: 'analyzeChunk',
-        data: { chunkId: `chunk${i}`, snapshotId: 'snap1' },
+        data: { chunkId: 'chunk1', filePath: 'test.ts', snapshotId: 'snap1' },
       }));
 
       // Test with different concurrency levels
