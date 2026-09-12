@@ -7,8 +7,22 @@ export function getSnapshotLocation(): string {
   return resolveSetting('snapshotLocation', '.snapshots').value;
 }
 
+/**
+ * Maximum snapshots to keep. Never below 1.
+ *
+ * 0 (or a negative value) would make the prune guard's safety loop exit
+ * immediately, so the snapshot just taken would be pruned with nothing left to
+ * reference it -- the data loss this floor exists to prevent. A hand-edited
+ * settings.json can hold either, and the manifest's `minimum` only constrains
+ * the Settings UI, so the read is clamped rather than trusted. Values at or
+ * above 1 are returned unchanged, and a wrong-typed value falls back to the
+ * same default the setting declares.
+ */
 export function getMaxSnapshots(): number {
-  return resolveSetting('maxSnapshots', 50).value;
+  const resolved = resolveSetting<unknown>('maxSnapshots', 50).value;
+  return typeof resolved === 'number' && Number.isFinite(resolved)
+    ? Math.max(1, resolved)
+    : 50;
 }
 
 /**

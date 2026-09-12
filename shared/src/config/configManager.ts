@@ -70,6 +70,12 @@ export class ConfigManager {
     key: K,
     value: CodelapseConfig[K],
   ): Promise<void> {
+    // `set` is a direct API call like `setNested`, so it passes the same schema
+    // validation. `saveConfigFile` does not check the values it writes, so
+    // without this a typed `set('maxSnapshots', 0)` persisted the value the
+    // config-file validator would reject on the next load.
+    this.assertValueMatchesSchema(key, value, 'set');
+
     const config = this.getConfig();
     config[key] = value;
     await this.saveConfigFile(config);
@@ -294,18 +300,27 @@ export class ConfigManager {
       config.snapshotLocation = process.env[ENV_VARS.SNAPSHOT_LOCATION]!;
     }
 
-    // Max snapshots. Below 1 the retention trim's excess is at least the store
-    // length, so the snapshot just taken would itself be a prune candidate;
-    // reject it through the same validator the config file uses rather than
-    // letting a stray `0` delete every snapshot.
-    if (process.env[ENV_VARS.MAX_SNAPSHOTS]) {
-      const maxSnapshots = parseInt(process.env[ENV_VARS.MAX_SNAPSHOTS]!, 10);
-      if (!isNaN(maxSnapshots)) {
+    // Max snapshots. Ambient input is sanitised, not fatal: an out-of-range or
+    // non-numeric value is ignored with a log, and the file/default value
+    // survives. Throwing here failed the whole config resolution instead --
+    // the extension's `resolveSetting` catch then discarded every value from
+    // codelapse.json. The floor itself lives in the shared validator, which the
+    // file path also enforces; `setNested` and `set` throw for the same value.
+    const rawMaxSnapshots = process.env[ENV_VARS.MAX_SNAPSHOTS];
+    if (rawMaxSnapshots) {
+      const maxSnapshots = parseInt(rawMaxSnapshots, 10);
+      try {
         validatePartialCodelapseConfig(
           { maxSnapshots },
           ENV_VARS.MAX_SNAPSHOTS,
         );
         config.maxSnapshots = maxSnapshots;
+      } catch (error) {
+        console.warn(
+          `Ignoring ${ENV_VARS.MAX_SNAPSHOTS}="${rawMaxSnapshots}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     }
 
@@ -404,7 +419,11 @@ export class ConfigManager {
     }
   }
 
-  private assertValueMatchesSchema(keyPath: string, value: unknown): void {
+  private assertValueMatchesSchema(
+    keyPath: string,
+    value: unknown,
+    context = 'setNested',
+  ): void {
     const schemaEntry = this.configSchema[keyPath];
     if (!schemaEntry) {
       return;
@@ -425,7 +444,7 @@ export class ConfigManager {
     // config-file path would reject. Non-numbers fall through to the type check
     // below and keep their existing message.
     if (keyPath === 'maxSnapshots' && typeof value === 'number') {
-      validatePartialCodelapseConfig({ maxSnapshots: value }, 'setNested');
+      validatePartialCodelapseConfig({ maxSnapshots: value }, context);
       return;
     }
 

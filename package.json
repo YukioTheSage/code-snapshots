@@ -199,6 +199,7 @@
         "vscode-snapshots.maxSnapshots": {
           "type": "number",
           "default": 50,
+          "minimum": 1,
           "description": "Maximum number of snapshots to keep"
         },
         "vscode-snapshots.maxSnapshotStoreBytes": {
