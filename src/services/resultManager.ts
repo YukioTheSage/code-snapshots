@@ -457,11 +457,12 @@ export class ResultManager {
   ): Promise<EnhancedSemanticSearchResult[]> {
     return Promise.all(
       results.map(async (result) => {
-        // The pipeline's internal decisions are all ratios, but the metric
-        // itself is not: see qualityScale.ts. `DEFAULT_QUALITY_METRICS` is the
-        // one copy, and it is what every result is ranked with until the search
-        // path produces real metrics.
-        const qualityMetrics: QualityMetrics = { ...DEFAULT_QUALITY_METRICS };
+        // A result that carries metrics of its own is ranked on them; the
+        // constant remains only as the fallback for results that carry none,
+        // which is what it was always meant to be.
+        const qualityMetrics: QualityMetrics = result.qualityMetrics
+          ? { ...result.qualityMetrics }
+          : { ...DEFAULT_QUALITY_METRICS };
 
         // Create default context info
         const contextInfo: ContextInfo = {

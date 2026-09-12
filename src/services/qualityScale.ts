@@ -46,12 +46,9 @@ export function fromRatio(ratio: number): number {
 /**
  * Default metrics for a result that carries none.
  *
- * The search path produces no quality metrics at all -- `SemanticSearchResult`
- * has no such field -- so this constant is what every result is ranked with
- * today, which is why the quality criterion contributes the same number to
- * every composite score. Making the metrics real requires the search path to
- * compute them, which is a behaviour change this plan does not make; see
- * docs/KNOWN_ISSUES.md.
+ * The search path now computes metrics for every result it can chunk, and
+ * `ResultManager` prefers those. This constant remains the fallback for results
+ * that arrive without metrics, so hand-built or unenriched results still rank.
  */
 export const DEFAULT_QUALITY_METRICS: QualityMetrics = {
   overallScore: 70,

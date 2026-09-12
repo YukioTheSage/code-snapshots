@@ -28,6 +28,7 @@ import {
   SearchQualityMetrics,
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
+import { QualityMetrics } from '../types/enhancedChunking';
 import { QualityMetricsCalculator } from './qualityMetricsCalculator';
 import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
 import { RelationshipAnalyzer } from './relationshipAnalyzer';
@@ -77,6 +78,14 @@ export interface SemanticSearchResult {
   rankingScore?: number;
   content: string;
   timestamp: number;
+  /**
+   * Quality metrics for this chunk, computed from its own content.
+   *
+   * Optional because only the search path can produce them; `ResultManager`
+   * keeps its default for anything that arrives without them, so a caller that
+   * builds a `SemanticSearchResult` by hand is unaffected.
+   */
+  qualityMetrics?: QualityMetrics;
 }
 
 /**
@@ -296,7 +305,7 @@ export class SemanticSearchService implements vscode.Disposable {
 
         const fileKey = `${result.snapshotId}:${result.filePath}`;
 
-        processedResults.push({
+        const processedResult: SemanticSearchResult = {
           snapshotId: result.snapshotId,
           snapshot,
           filePath: result.filePath,
@@ -305,6 +314,9 @@ export class SemanticSearchService implements vscode.Disposable {
           score: result.score,
           content: contentWithContext,
           timestamp: snapshot.timestamp,
+        };
+        processedResults.push({
+          ...(await this.attachQualityMetrics(processedResult)),
           fileKey,
         });
       } catch (error) {
@@ -588,6 +600,42 @@ export class SemanticSearchService implements vscode.Disposable {
     }
   }
 
+  /**
+   * Compute this result's quality metrics with the chunker already constructed
+   * for exactly this path. Computed once per result and cached on the result
+   * object because ranking reads the metrics several times.
+   */
+  private async attachQualityMetrics(
+    result: SemanticSearchResult,
+  ): Promise<SemanticSearchResult> {
+    if (result.qualityMetrics) {
+      return result;
+    }
+
+    try {
+      const chunks = await this.enhancedCodeChunker.chunkFileEnhanced(
+        result.filePath,
+        result.content,
+        result.snapshotId,
+      );
+      const chunk =
+        chunks.find(
+          (candidate) =>
+            candidate.startLine <= result.startLine &&
+            candidate.endLine >= result.endLine,
+        ) ?? chunks[0];
+      return chunk
+        ? { ...result, qualityMetrics: chunk.qualityMetrics }
+        : result;
+    } catch (error) {
+      // Metrics are an enhancement, not a precondition: a chunker failure must
+      // leave the result searchable with the default metrics.
+      log(
+        `Unable to compute quality metrics for ${result.filePath}: ${error}`,
+      );
+      return result;
+    }
+  }
   /**
    * Process and enhance search results with AI-specific metadata using ResultManager
    */
