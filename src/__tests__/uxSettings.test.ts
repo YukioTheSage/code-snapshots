@@ -226,6 +226,11 @@ describe('ux.confirmRestoreOperations is wired to the restore prompt', () => {
       ],
       getUnrecoverableFilesFor: () => [],
       applySnapshotRestore,
+      // Every restore now takes a protective snapshot before it applies.
+      takeSnapshot: jest.fn().mockResolvedValue({
+        created: true,
+        snapshot: { id: 'snapshot-backup' },
+      }),
     };
 
     registerCommands({

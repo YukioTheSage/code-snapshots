@@ -86,7 +86,14 @@ describe('listSelectableFiles', () => {
  * of the guard is entirely in whether the restore runs afterwards.
  */
 describe('Take Snapshot & Restore', () => {
-  function buildHarness(takeOutcome: unknown) {
+  function buildHarness(
+    takeOutcome: unknown,
+    options: {
+      visibleTextEditors?: unknown[];
+      protectiveOutcome?: unknown;
+      onProgress?: (message: string) => void;
+    } = {},
+  ) {
     const handlers: Record<string, (arg?: unknown) => Promise<unknown>> = {};
     (
       vscode.commands as unknown as { registerCommand: jest.Mock }
@@ -105,7 +112,11 @@ describe('Take Snapshot & Restore', () => {
       jest.fn(
         async (_options: unknown, task: (p: unknown, t: unknown) => unknown) =>
           task(
-            { report: jest.fn() },
+            {
+              report: jest.fn((status: { message?: string }) => {
+                if (status?.message) options.onProgress?.(status.message);
+              }),
+            },
             {
               isCancellationRequested: false,
               onCancellationRequested: jest.fn(() => ({ dispose: jest.fn() })),
@@ -136,7 +147,7 @@ describe('Take Snapshot & Restore', () => {
     ];
     (
       vscode.window as unknown as { visibleTextEditors: unknown[] }
-    ).visibleTextEditors = [
+    ).visibleTextEditors = options.visibleTextEditors ?? [
       {
         document: {
           isDirty: true,
@@ -151,7 +162,15 @@ describe('Take Snapshot & Restore', () => {
       skipped: [],
       refusedDeletions: [],
       deleted: [],
+      divergentBuffers: [],
     });
+
+    const takeSnapshot = jest.fn().mockResolvedValue(
+      options.protectiveOutcome ?? {
+        created: true,
+        snapshot: { id: 'snapshot-backup' },
+      },
+    );
 
     const snapshot = {
       id: 'snap-1',
@@ -162,6 +181,7 @@ describe('Take Snapshot & Restore', () => {
 
     const snapshotManager = {
       getSnapshotById: () => snapshot,
+      takeSnapshot,
       getWorkspaceRoot: () => ROOT,
       calculateRestoreChanges: async () => [
         { label: 'a.ts', description: '', relativePath: 'a.ts', status: 'M' },
@@ -190,6 +210,7 @@ describe('Take Snapshot & Restore', () => {
     return {
       handlers,
       applySnapshotRestore,
+      takeSnapshot,
       warning: vscode.window.showWarningMessage as jest.Mock,
     };
   }
@@ -264,4 +285,62 @@ describe('Take Snapshot & Restore', () => {
     // Failing closed must not fail always.
     expect(applySnapshotRestore).toHaveBeenCalledWith('snap-1');
   });
-});
+  it('takes a protective snapshot before a restore with no dirty editors', async () => {
+    const { handlers, applySnapshotRestore, takeSnapshot } = buildHarness(
+      undefined,
+      { visibleTextEditors: [] },
+    );
+
+    await handlers['vscode-snapshots.jumpToSnapshot']('snap-1');
+
+    // Without unsaved buffers the command used to restore straight over the
+    // on-disk state, which no later Ctrl+Z can bring back.
+    expect(takeSnapshot).toHaveBeenCalledTimes(1);
+    expect(takeSnapshot.mock.calls[0][1]).toMatchObject({
+      tags: expect.arrayContaining(['backup']),
+    });
+    expect(applySnapshotRestore).toHaveBeenCalledWith('snap-1');
+  });
+
+  it('still restores when the protective snapshot has nothing to record', async () => {
+    const { handlers, applySnapshotRestore, takeSnapshot } = buildHarness(
+      undefined,
+      {
+        visibleTextEditors: [],
+        protectiveOutcome: { created: false, reason: 'no-changes' },
+      },
+    );
+
+    await handlers['vscode-snapshots.jumpToSnapshot']('snap-1');
+
+    // The pre-restore state is already the newest snapshot, so nothing can be
+    // lost and the restore is not blocked.
+    expect(takeSnapshot).toHaveBeenCalled();
+    expect(applySnapshotRestore).toHaveBeenCalledWith('snap-1');
+  });
+
+  it('does not claim to be backing up before it has', async () => {
+    const progressMessages: string[] = [];
+    const { handlers, takeSnapshot } = buildHarness(undefined, {
+      visibleTextEditors: [],
+      onProgress: (message) => progressMessages.push(message),
+    });
+
+    await handlers['vscode-snapshots.jumpToSnapshot']('snap-1');
+
+    expect(progressMessages).not.toContain('Backing up current state...');
+    const snapshotMessageIndex = progressMessages.findIndex((message) =>
+      message.includes('snapshot-backup'),
+    );
+    const restoreFilesIndex = progressMessages.indexOf('Restoring files...');
+    expect(snapshotMessageIndex).toBeGreaterThanOrEqual(0);
+    expect(snapshotMessageIndex).toBeLessThan(restoreFilesIndex);
+    expect(takeSnapshot).toHaveBeenCalled();
+
+    const information = vscode.window.showInformationMessage as jest.Mock;
+    expect(
+      information.mock.calls.some(([message]) =>
+        String(message).includes('snapshot-backup'),
+      ),
+    ).toBe(true);
+  });});

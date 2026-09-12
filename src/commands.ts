@@ -527,6 +527,34 @@ function registerJumpToSnapshotCommand({
       }
       // --- End: Conflict Resolution UI ---
 
+      // A restore overwrites the workspace from disk and writes nothing to VS
+      // Code's undo stack, so the pre-restore state is the only thing a user can
+      // be brought back to -- and a snapshot is the only mechanism this product
+      // has for that. Taken unconditionally rather than only when unsaved
+      // buffers exist: a snapshot reads files from disk, so the dirty-buffer
+      // prompt never protected the state this protects. A "nothing changed"
+      // outcome is not a failure -- the newest snapshot already holds it.
+      let protectiveOutcome: TakeSnapshotOutcome | undefined;
+      try {
+        protectiveOutcome = await snapshotManager.takeSnapshot(
+          `Backup before restoring ${snapshot.description || targetSnapshotId}`,
+          { tags: ['backup', 'auto'] },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`Failed to take protective snapshot before restore: ${message}`);
+        vscode.window.showErrorMessage(
+          `Cannot restore snapshot: failed to take a protective snapshot first (${message}).`,
+        );
+        return;
+      }
+      const protectiveId = protectiveOutcome?.created ? protectiveOutcome.snapshot.id : undefined;
+      log(
+        protectiveOutcome?.created
+          ? `Protective snapshot ${protectiveId} taken before restore.`
+          : 'Workspace unchanged since the newest snapshot; no protective snapshot needed.',
+      );
+
       // --- Apply Restore with Progress ---
       await vscode.window.withProgress(
         {
@@ -563,12 +591,11 @@ function registerJumpToSnapshotCommand({
             );
 
             progress.report({
-              message: 'Backing up current state...',
+              message: protectiveOutcome?.created
+                ? `Protective snapshot ready: ${protectiveId}`
+                : 'No new protective snapshot needed',
               increment: 15,
             });
-
-            // Implement a step to optionally create a backup snapshot of the current state
-            // This would be a good place to add that functionality in the future
 
             throwIfCancelled(token);
 
@@ -625,21 +652,27 @@ function registerJumpToSnapshotCommand({
             if (snapshot.tags && snapshot.tags.length > 0) {
               actions.push('Filter by Tags');
             }
+            if (protectiveId) {
+              actions.push('Show backup');
+            }
 
             // A selective restore writes only the files its snapshot captured, so
             // the workspace is not now that snapshot's state. Reporting an
             // unqualified success is the same over-claim the preview was fixed
             // for: the user would read "Restored snapshot ..." as "the workspace
             // matches it".
+            const backupSummary = protectiveId
+              ? ` The previous state is saved as snapshot ${protectiveId}.`
+              : '';
             const restoredSummary = result.selective
               ? `Restored ${
                   result.restored.length
                 } captured file(s) from snapshot '${
                   snapshot.description || snapshot.id
-                }'; the rest of the workspace was left untouched.`
+                }'; the rest of the workspace was left untouched.${backupSummary}`
               : `Restored snapshot '${
                   snapshot.description || snapshot.id
-                }' from ${snapshotDate}.`;
+                }' from ${snapshotDate}.${backupSummary}`;
 
             vscode.window
               .showInformationMessage(restoredSummary, ...actions)
@@ -655,6 +688,15 @@ function registerJumpToSnapshotCommand({
                     'vscode-snapshots.filterByTags',
                     snapshot.tags,
                   );
+                } else if (selection === 'Show backup' && protectiveId) {
+                  // The backup is itself a snapshot; opening it is the undo
+                  // path. Guard against re-entering the restore that created it.
+                  if (protectiveId !== targetSnapshotId) {
+                    vscode.commands.executeCommand(
+                      'vscode-snapshots.jumpToSnapshot',
+                      protectiveId,
+                    );
+                  }
                 }
               });
           } catch (error: unknown) {
