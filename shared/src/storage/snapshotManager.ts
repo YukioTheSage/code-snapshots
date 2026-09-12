@@ -64,7 +64,22 @@ export class SnapshotManager {
       // A store can already be over the configured size when a session opens,
       // and nothing else revisits it until the next take. The lock is free
       // here: initialize is the outermost call.
-      await this.withWriteLock(() => this.enforceSnapshotSizeLimitInternal());
+      //
+      // Retention is best effort: the storage layer rethrows every deletion
+      // failure except "not found" -- a file lock on Windows or a symlink it
+      // refuses to follow is enough. `initPromise` is assigned once, so a
+      // rejection here would be re-thrown by every later call and poison the
+      // manager for the whole session. The load above stays fatal on purpose;
+      // only the trim is guarded.
+      try {
+        await this.withWriteLock(() => this.enforceSnapshotSizeLimitInternal());
+      } catch (error) {
+        console.warn(
+          'Retention: the store could not be trimmed when it was opened: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The session continues with the store as it is.',
+        );
+      }
     })();
     await this.initPromise;
     this.initialized = true;
@@ -446,8 +461,18 @@ export class SnapshotManager {
     }
 
     // Then the byte limit: a store can be inside its snapshot count and still
-    // hold more bytes than the user allowed.
-    await this.enforceSnapshotSizeLimitInternal(snapshot.id);
+    // hold more bytes than the user allowed. Best effort: the snapshot above is
+    // already written and indexed, so a retention failure must not turn a
+    // successful take into a failed one.
+    try {
+      await this.enforceSnapshotSizeLimitInternal(snapshot.id);
+    } catch (error) {
+      console.warn(
+        'Retention: could not be trimmed after this snapshot: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. The snapshot was taken; only the trim stopped.',
+      );
+    }
 
     return snapshot;
   }
@@ -735,6 +760,13 @@ export class SnapshotManager {
    * `justCreatedSnapshotId` is the snapshot the caller has this moment written.
    * Its own trim must never delete it: it is dropped from the candidates by id
    * rather than by its position among them.
+   *
+   * Best effort, in two phases: a failure to persist the rebuilt survivors
+   * aborts the trim with the excess kept (nothing may be deleted whose
+   * survivors were not written first), and a failure to delete one candidate is
+   * reported while the rest of the batch still runs (every survivor was
+   * persisted before the deletes started, so a candidate left behind cannot
+   * orphan anything). Both callers guard this call as well.
    */
   private async enforceSnapshotSizeLimitInternal(
     justCreatedSnapshotId?: string,
@@ -812,22 +844,64 @@ export class SnapshotManager {
     }
 
     // Persist the rewrites before anything is deleted: a survivor whose base is
-    // gone cannot be rebuilt afterwards.
-    for (const survivor of materialization.touched) {
-      await this.storage.saveSnapshot(survivor);
+    // gone cannot be rebuilt afterwards. If they cannot be written the trim
+    // stops here -- deleting a base whose survivors were never persisted is the
+    // orphaning this guard exists to prevent -- and the excess is kept.
+    try {
+      for (const survivor of materialization.touched) {
+        await this.storage.saveSnapshot(survivor);
+      }
+    } catch (error) {
+      console.warn(
+        'Retention: keeping the excess. The store exceeds its ' +
+          limitBytes +
+          ' byte limit but ' +
+          materialization.touched.length +
+          ' rebuilt survivor(s) of the ' +
+          candidates.length +
+          ' selected could not be persisted: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. Nothing was deleted.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: this.storage.measureSnapshotStore().totalBytes,
+        trimmed: [],
+        stillOverLimit: true,
+      };
     }
+
     // Candidates reference each other down the chain, so one candidate whose
     // base is another candidate is not an orphan: it leaves in this batch too.
     // Only a dependent outside the batch could be left behind, and the
     // materialization above already rebuilt those.
+    //
+    // A delete that still fails -- a lock or a refused symlink -- is reported
+    // and the rest of the batch is still attempted: every survivor was
+    // materialized and persisted above, so a candidate left behind cannot
+    // orphan anything.
+    const trimmed: string[] = [];
     for (const id of candidates) {
-      await this.deleteSnapshotInternal(id, { alsoDeleting: removable });
+      try {
+        await this.deleteSnapshotInternal(id, { alsoDeleting: removable });
+        trimmed.push(id);
+      } catch (error) {
+        console.warn(
+          'Retention: could not delete ' +
+            id +
+            ' while trimming the store to ' +
+            limitBytes +
+            ' bytes: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The remaining candidates are still attempted.',
+        );
+      }
     }
 
     const after = this.storage.measureSnapshotStore();
     console.log(
       'Retention: trimmed ' +
-        candidates.length +
+        trimmed.length +
         ' snapshot(s); the store now holds ' +
         after.totalBytes +
         ' bytes against a ' +
@@ -838,7 +912,7 @@ export class SnapshotManager {
     return {
       bytesBefore: sizes.totalBytes,
       bytesAfter: after.totalBytes,
-      trimmed: candidates,
+      trimmed,
       stillOverLimit: after.totalBytes > limitBytes,
     };
   }
