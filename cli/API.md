@@ -79,7 +79,7 @@ codelapse snapshot list -t "auth" -l 10
 
 | Option | Description |
 |--------|-------------|
-| `-t, --tags <tags>` | Filter by tags (comma-separated) |
+| `-t, --tags <tags>` | Filter by all listed tags (comma-separated) |
 | `-f, --favorites` | Show only favorites |
 | `-l, --limit <number>` | Limit number of results |
 | `--since <date>` | Show snapshots since date (ISO string or relative like `1h`, `2d`) |
@@ -401,7 +401,7 @@ codelapse filter favorites -l 10
 
 #### `filter tags <tags>`
 
-Filter snapshots by tags.
+Filter snapshots that carry all listed tags.
 
 ```bash
 codelapse filter tags "auth,security"

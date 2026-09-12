@@ -100,7 +100,7 @@ codelapse <command> --help
 
 ### Filtering & Favorites
 - `codelapse filter favorites` - Show favorite snapshots
-- `codelapse filter tags <tags>` - Filter by tags
+- `codelapse filter tags <tags>` - Filter by all listed tags
 - `codelapse filter date <range>` - Filter by date range
 - `codelapse filter file <file-path>` - Filter by file path
 - `codelapse filter favorite <snapshot-id>` - Toggle favorite status
@@ -247,7 +247,7 @@ codelapse rules test "**/*.{ts,js}" --path ./src
 # Show favorite snapshots
 codelapse filter favorites --limit 20
 
-# Filter by tags
+# Filter by tags (all listed tags must match)
 codelapse filter tags "auth,feature"
 
 # Filter by date (last 2 days)

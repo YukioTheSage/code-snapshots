@@ -128,8 +128,14 @@ export class TerminalApiService implements TerminalApiInterface {
       if (filter) {
         // Apply tag filter
         if (filter.tags && filter.tags.length > 0) {
+          // AND, not OR: `filterTags.every(...)` in the tree view already
+          // decided this for the surface users see, and the same CLI command
+          // must not mean two things depending on which mode answered it.
+          const required = filter.tags;
           snapshots = snapshots.filter(
-            (s) => s.tags && s.tags.some((tag) => filter.tags!.includes(tag)),
+            (s) =>
+              s.tags !== undefined &&
+              required.every((tag) => s.tags!.includes(tag)),
           );
         }
 
