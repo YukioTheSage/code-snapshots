@@ -3,9 +3,18 @@ import * as vscode from 'vscode'; // Ensure vscode is imported for QuickPick etc
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { promises as fsPromises } from 'fs'; // Import promises API
-import { GitignoreParser, runWithConcurrencyLimit } from 'codelapse-core';
+import {
+  GitignoreParser,
+  runWithConcurrencyLimit,
+  selectSizePruneCandidates,
+  type SnapshotSizePruneResult,
+} from 'codelapse-core';
 import { log, logVerbose } from './logger';
-import { getMaxSnapshots, getSnapshotLocation } from './config';
+import {
+  getMaxSnapshotStoreBytes,
+  getMaxSnapshots,
+  getSnapshotLocation,
+} from './config';
 import { createDiff } from './snapshotDiff'; // Removed unused applyDiff import
 import { SnapshotStorage } from './snapshotStorage';
 import { API as GitAPI } from './types/git'; // Import Git API type
@@ -217,6 +226,12 @@ export class SnapshotManager {
   private semanticSearchService?: SnapshotIndexPurgeTarget;
   private gitApi: GitAPI | null; // Store Git API instance
   private writeLock: Promise<void> = Promise.resolve();
+  /**
+   * The load the constructor starts. Activation retention awaits it, because
+   * loadSnapshots() fills the snapshot list asynchronously and an enforcement
+   * that ran first would see an empty list.
+   */
+  private loadPromise: Promise<void> = Promise.resolve();
   private _onDidChangeSnapshots = new vscode.EventEmitter<void>(); // Event emitter
   public readonly onDidChangeSnapshots: vscode.Event<void> =
     this._onDidChangeSnapshots.event; // Public event
@@ -226,7 +241,7 @@ export class SnapshotManager {
     log('Initializing SnapshotManager');
     this.gitApi = gitApi; // Store the Git API
     this.storage = new SnapshotStorage(); // Initialize storage handler
-    this.loadSnapshots(); // Load initial state
+    this.loadPromise = this.loadSnapshots(); // Load initial state
 
     // Listen for storage path changes (e.g., workspace folder opened/closed)
     // This might require an event emitter in SnapshotStorage if needed beyond constructor init
@@ -772,6 +787,11 @@ export class SnapshotManager {
 
     // Enforce max snapshots limit
     await this.enforceSnapshotLimit(); // This now uses storage for deletion
+
+    // Then the byte limit: a store can be inside its snapshot count and still
+    // hold more bytes than the user allows. The snapshot just written is passed
+    // so its own trim can never delete it.
+    await this.enforceSnapshotSizeLimitInternal(snapshot.id);
 
     // Log summary of what was done
     const filesProcessed = Object.keys(snapshot.files).length;
@@ -2147,6 +2167,155 @@ export class SnapshotManager {
         `Pruned ${removedSnapshots.length} snapshot(s); ${this.snapshots.length} remain. Fired onDidChangeSnapshots event after enforceSnapshotLimit`,
       );
     }
+  }
+
+  /**
+   * Remove the oldest snapshots until the store fits maxSnapshotStoreBytes.
+   *
+   * Called with the write lock already held, from takeSnapshotInternal; the
+   * public entry point is enforceSnapshotSizeLimitOnActivation.
+   *
+   * 0 disables the limit and the store is not measured at all in that case,
+   * which is what keeps activation as cheap as it was before this setting
+   * existed. The active snapshot is never a candidate, and a candidate is only
+   * deleted after materializeDependents has rewritten every surviving
+   * reference to it -- when that cannot be done nothing is deleted and the
+   * excess is kept.
+   *
+   * `justCreatedSnapshotId` is the snapshot the caller has this moment
+   * written. Its own trim must never delete it, and the loaded list is sorted
+   * by timestamp rather than by store order, so its position in the array is
+   * no evidence that it is the newest: it is excluded by id instead.
+   */
+  private async enforceSnapshotSizeLimitInternal(
+    justCreatedSnapshotId?: string,
+  ): Promise<SnapshotSizePruneResult> {
+    const limitBytes = getMaxSnapshotStoreBytes();
+    if (!(limitBytes > 0)) {
+      return {
+        bytesBefore: 0,
+        bytesAfter: 0,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
+    const sizes = this.storage.measureSnapshotStore();
+    if (sizes.totalBytes <= limitBytes) {
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
+    // Oldest first by timestamp, the order the count prune already uses
+    // (pruneCandidates and selectPrunableSnapshots), because the size
+    // selector consumes whatever order it is handed. The snapshot a take has
+    // just written is dropped by id, not by its position.
+    const byAge = [...this.snapshots]
+      .filter((snapshot) => snapshot.id !== justCreatedSnapshotId)
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    const candidates = selectSizePruneCandidates(
+      byAge,
+      sizes,
+      limitBytes,
+      this.activeSnapshotId,
+    );
+
+    if (candidates.length === 0) {
+      log(
+        'Size retention: the store holds ' +
+          sizes.totalBytes +
+          ' bytes against a ' +
+          limitBytes +
+          ' byte limit and no snapshot is removable; the active snapshot is never pruned.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: true,
+      };
+    }
+
+    const removable = new Set(candidates);
+    const materialization = await this.materializeDependents(removable);
+    if (!materialization.ok) {
+      log(
+        'Size retention: keeping ' +
+          this.snapshots.length +
+          ' snapshots. The store is over its ' +
+          limitBytes +
+          ' byte limit but a survivor of the ' +
+          candidates.length +
+          ' oldest cannot be rebuilt; nothing was deleted.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: true,
+      };
+    }
+
+    // Persist the rewrites before anything is deleted: a survivor whose base is
+    // gone cannot be rebuilt afterwards.
+    for (const survivor of materialization.touched) {
+      await this.storage.saveSnapshotData(survivor);
+    }
+
+    const removedSnapshots = this.snapshots.filter((snapshot) =>
+      removable.has(snapshot.id),
+    );
+    this.snapshots = this.snapshots.filter(
+      (snapshot) => !removable.has(snapshot.id),
+    );
+
+    // No detachIfActiveSnapshotRemoved() here: the candidate selection excludes
+    // the active snapshot by construction, so the workspace cannot be left
+    // pointing at something that was just deleted.
+    for (const snapshot of removedSnapshots) {
+      await this.purgeSnapshot(snapshot.id);
+    }
+
+    await this.saveSnapshotIndex();
+    this.refreshIntegrityReport();
+
+    const after = this.storage.measureSnapshotStore();
+    log(
+      'Size retention: trimmed ' +
+        removedSnapshots.length +
+        ' snapshot(s); the store now holds ' +
+        after.totalBytes +
+        ' bytes against a ' +
+        limitBytes +
+        ' byte limit.',
+    );
+    this._onDidChangeSnapshots.fire();
+
+    return {
+      bytesBefore: sizes.totalBytes,
+      bytesAfter: after.totalBytes,
+      trimmed: candidates,
+      stillOverLimit: after.totalBytes > limitBytes,
+    };
+  }
+
+  /**
+   * Retention for a window that is opening.
+   *
+   * A store can already be over the configured size before anything is taken,
+   * and nothing else revisits it until the next take. Waits for the load the
+   * constructor started before reading the snapshot list.
+   */
+  public async enforceSnapshotSizeLimitOnActivation(): Promise<SnapshotSizePruneResult> {
+    await this.loadPromise;
+    return await this.withWriteLock(() =>
+      this.enforceSnapshotSizeLimitInternal(),
+    );
   }
 
   /**

@@ -4,7 +4,11 @@ import * as path from 'path';
 import { log, logVerbose } from './logger';
 import { Snapshot } from './snapshotManager';
 import { applyDiff } from './snapshotDiff';
-import { runWithConcurrencyLimit } from 'codelapse-core';
+import {
+  measureSnapshotStore as measureStoreBytes,
+  runWithConcurrencyLimit,
+  type SnapshotStoreSizes,
+} from 'codelapse-core';
 import { SnapshotContentProvider } from './snapshotContentProvider';
 import { getSnapshotLocation } from './config';
 import { assertNoSymlinkPath, validateSnapshotId } from './pathSecurity';
@@ -208,6 +212,17 @@ export class SnapshotStorage {
 
   public getSnapshotDirectory(): string {
     return this.snapshotDirectory;
+  }
+
+  /**
+   * Byte accounting for the snapshot store.
+   *
+   * The retention path reads it only when maxSnapshotStoreBytes is non-zero, so
+   * activation stays as cheap as it was for every store that does not set a
+   * limit.
+   */
+  public measureSnapshotStore(): SnapshotStoreSizes {
+    return measureStoreBytes(this.snapshotDirectory);
   }
 
   private getQuarantineDirectory(): string {

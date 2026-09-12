@@ -65,6 +65,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // Initialize core components
     log('Initializing SnapshotManager...'); // Use logger
     const snapshotManager = new SnapshotManager(gitApi); // Pass Git API
+    // A store can already be over the configured size when the window opens,
+    // and nothing else revisits it until the next take.
+    await snapshotManager.enforceSnapshotSizeLimitOnActivation();
 
     log('Initializing StatusBarController...'); // Use logger
     const statusBarController = new StatusBarController(snapshotManager);
