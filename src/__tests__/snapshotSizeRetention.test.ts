@@ -240,10 +240,18 @@ describe('size-based retention in the extension', () => {
     // The count limit has its own call; a store inside its snapshot count but
     // over its byte budget is only revisited if this call exists.
     expect(spy).toHaveBeenCalledTimes(1);
+    // Ruling 1 depends on the snapshot that was just written being handed to
+    // the trim, so the argument is pinned and not only the call.
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringMatching(/^snapshot-\d+-[0-9a-f]{8}$/),
+    );
   });
 
   it('waits for the store to load before enforcing at activation', async () => {
     const manager = new SnapshotManager(null);
+    // A disabled limit returns before the load wait, so this waits with a
+    // limit configured: the wait is what the test is about.
+    limitMock.mockReturnValue(1000);
     let loaded = false;
     (manager as any).loadPromise = (async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -266,6 +274,27 @@ describe('size-based retention in the extension', () => {
     await manager.enforceSnapshotSizeLimitOnActivation();
 
     expect(seen).toEqual([true]);
+  });
+
+  it('does not wait for the load when the limit is disabled', async () => {
+    const manager = new SnapshotManager(null);
+    let loadSettled = false;
+    (manager as any).loadPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        loadSettled = true;
+        resolve();
+      }, 0);
+    });
+    const measureSnapshotStore = jest.fn();
+    (manager as any).storage = { measureSnapshotStore };
+
+    const result = await manager.enforceSnapshotSizeLimitOnActivation();
+
+    // A store with no limit must cost activation exactly what it did before
+    // this setting existed: no load wait, no lock, no walk.
+    expect(loadSettled).toBe(false);
+    expect(result.trimmed).toEqual([]);
+    expect(measureSnapshotStore).not.toHaveBeenCalled();
   });
 
   it('is wired into activation', () => {

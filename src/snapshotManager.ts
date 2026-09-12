@@ -258,6 +258,17 @@ export class SnapshotManager {
   }
 
   /**
+   * The snapshot store directory as the storage layer resolved it.
+   *
+   * Activation retention names it when a prune fails: the location is
+   * configurable, so the workspace alone would not say which store could not
+   * be trimmed.
+   */
+  public getStoreDirectory(): string {
+    return this.storage.getSnapshotDirectory();
+  }
+
+  /**
    * Load existing snapshots using the SnapshotStorage module.
    */
   private async loadSnapshots() {
@@ -2308,10 +2319,26 @@ export class SnapshotManager {
    * Retention for a window that is opening.
    *
    * A store can already be over the configured size before anything is taken,
-   * and nothing else revisits it until the next take. Waits for the load the
-   * constructor started before reading the snapshot list.
+   * and nothing else revisits it until the next take.
+   *
+   * A disabled limit returns before the load wait and before the write lock, so
+   * opening a window costs exactly what it did before this setting existed.
+   * With a limit configured, the load the constructor started is awaited first:
+   * loadSnapshots() fills the snapshot list asynchronously and an enforcement
+   * that ran ahead of it would read an empty list and silently do nothing.
    */
   public async enforceSnapshotSizeLimitOnActivation(): Promise<SnapshotSizePruneResult> {
+    // Read before anything else: 0 disables the limit, and nothing below it
+    // should run -- not the load wait, not the lock, not the store walk.
+    if (!(getMaxSnapshotStoreBytes() > 0)) {
+      return {
+        bytesBefore: 0,
+        bytesAfter: 0,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
     await this.loadPromise;
     return await this.withWriteLock(() =>
       this.enforceSnapshotSizeLimitInternal(),

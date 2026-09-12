@@ -24,6 +24,28 @@ import { CliConnectorService } from './services/cliConnectorService';
 // The class definition previously here has been moved to src/snapshotContentProvider.ts
 // --- End Snapshot Content Provider Removed ---
 
+/**
+ * Retention for a window that is opening, guarded so it cannot take the rest
+ * of activation down with it.
+ *
+ * This is the first thing activation does that deletes anything, and the
+ * storage layer rethrows every deletion failure except "not found" -- a file
+ * lock on Windows or a symlink it refuses to follow is enough. Retention is
+ * best-effort everywhere else, so a prune that cannot complete reports itself
+ * and lets the status bar, the tree views and every command be created.
+ */
+export async function enforceStartupRetention(
+  snapshotManager: SnapshotManager,
+): Promise<void> {
+  try {
+    await snapshotManager.enforceSnapshotSizeLimitOnActivation();
+  } catch (error) {
+    log(
+      `Size retention at activation failed for ${snapshotManager.getStoreDirectory()}: ${error}`,
+    );
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   // Make activate async
   // Initialize logger first
@@ -66,8 +88,9 @@ export async function activate(context: vscode.ExtensionContext) {
     log('Initializing SnapshotManager...'); // Use logger
     const snapshotManager = new SnapshotManager(gitApi); // Pass Git API
     // A store can already be over the configured size when the window opens,
-    // and nothing else revisits it until the next take.
-    await snapshotManager.enforceSnapshotSizeLimitOnActivation();
+    // and nothing else revisits it until the next take. Guarded: a prune that
+    // cannot complete must not stop the rest of activation.
+    await enforceStartupRetention(snapshotManager);
 
     log('Initializing StatusBarController...'); // Use logger
     const statusBarController = new StatusBarController(snapshotManager);
