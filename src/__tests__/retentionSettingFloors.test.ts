@@ -69,7 +69,10 @@ describe('getMaxSnapshots floor', () => {
   it('never resolves below 1 when codelapse.json carries 0', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelapse-floor-'));
     // The shared loader rejects a 0 and quarantines the file, which logs.
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    // Swallow the log: the spy is only here to keep the suite's output clean.
+    const errorSpy = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
     try {
       fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
       fs.writeFileSync(
