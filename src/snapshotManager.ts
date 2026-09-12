@@ -69,6 +69,11 @@ export interface RestoreResult {
   /** Relative paths deleted from the workspace. */
   deleted: string[];
   /**
+   * Relative paths whose on-disk content was replaced while a dirty buffer
+   * still held different text.
+   */
+  divergentBuffers: string[];
+  /**
    * Whether only the files this snapshot captured were written, leaving the rest
    * of the workspace alone.
    *
@@ -1440,7 +1445,8 @@ export class SnapshotManager {
     await this.saveSnapshotIndex();
 
     // Refresh open editors to reflect changes
-    await this.refreshOpenEditors();
+    const divergentBuffers: string[] = [];
+    await this.refreshOpenEditors(divergentBuffers);
 
     // Notify listeners (e.g., tree view) about the change
     this._onDidChangeSnapshots.fire();
@@ -1452,6 +1458,7 @@ export class SnapshotManager {
       skipped,
       refusedDeletions,
       deleted,
+      divergentBuffers,
       selective: isSelectiveCapture,
     };
   }
@@ -1890,7 +1897,9 @@ export class SnapshotManager {
    * The edit is applied per document rather than as one workspace-wide edit, so
    * a single unreadable file cannot abort the refresh for the others.
    */
-  private async refreshOpenEditors() {
+  private async refreshOpenEditors(divergentBuffers?: string[]) {
+    const workspaceRoot = this.storage.getWorkspaceRoot();
+
     for (const editor of vscode.window.visibleTextEditors) {
       const document = editor.document;
 
@@ -1904,6 +1913,15 @@ export class SnapshotManager {
         // Never touch a buffer with unsaved changes: the replacement below is a
         // full-document overwrite, so the user's edits would vanish.
         if (document.isDirty) {
+          // The disk copy was just replaced while this buffer still holds text
+          // the user has not saved. Skipping the re-sync is what keeps their
+          // edits alive; not reporting it is what left them with a workspace
+          // that matches no snapshot and no explanation.
+          if (workspaceRoot) {
+            divergentBuffers?.push(
+              path.relative(workspaceRoot, document.uri.fsPath),
+            );
+          }
           log(
             `Skipping refresh for ${document.uri.fsPath} due to unsaved changes`,
           );

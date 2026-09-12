@@ -190,9 +190,12 @@ describe('ux.confirmRestoreOperations is wired to the restore prompt', () => {
     });
 
     const applySnapshotRestore = jest.fn().mockResolvedValue({
+      success: true,
       restored: ['a.ts'],
       deleted: [],
       skipped: [],
+      refusedDeletions: [],
+      divergentBuffers: [],
     });
     const showQuickPick = jest.fn().mockResolvedValue(undefined);
     (vscode.window as unknown as { showQuickPick: jest.Mock }).showQuickPick =
