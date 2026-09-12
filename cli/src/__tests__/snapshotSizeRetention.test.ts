@@ -195,7 +195,7 @@ describe('shared size retention', () => {
     );
   });
 
-  it('warns and keeps deleting the rest when a candidate cannot be deleted', async () => {
+  it('warns and stops the batch when a candidate cannot be deleted', async () => {
     const manager = new SnapshotManager(root);
     await manager.initialize();
     const first = await manager.takeSnapshot({ description: 'first' });
@@ -228,8 +228,9 @@ describe('shared size retention', () => {
 
     await reopened.initialize();
 
-    // 'first' survived its refused delete; 'second' still went, and the
-    // survivor was rebuilt and persisted before either of them.
+    // Newest first: 'second' went, then the refused delete of 'first' stopped
+    // the batch. The survivor was rebuilt and persisted before either delete,
+    // so the store this leaves behind is readable.
     expect((await reopened.getSnapshots()).map((s) => s.id)).toEqual([
       first.id,
       third.id,
@@ -356,5 +357,154 @@ describe('shared size retention', () => {
       first.id,
       second.id,
     ]);
+  });
+
+  it('deletes the batch newest first and stops at the failed candidate, orphaning no survivor', async () => {
+    const manager = new SnapshotManager(root);
+    await manager.initialize();
+    const first = await manager.takeSnapshot({ description: 'first' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'y'.repeat(4000), 'utf8');
+    const second = await manager.takeSnapshot({ description: 'second' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'z'.repeat(4000), 'utf8');
+    const third = await manager.takeSnapshot({ description: 'third' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'w'.repeat(4000), 'utf8');
+    const fourth = await manager.takeSnapshot({ description: 'fourth' });
+
+    // Loaded before the limit is lowered: the pass under test is the explicit
+    // one below, not the one initialize() would otherwise run.
+    const reopened = new SnapshotManager(root);
+    await reopened.initialize();
+
+    const before = measureSnapshotStore(storeDir);
+    // A limit that needs all three older snapshots gone, so the whole chain is
+    // one candidate batch; 'fourth' is the snapshot the store is positioned at
+    // and is never a candidate.
+    writeConfig({
+      maxSnapshots: 50,
+      maxSnapshotStoreBytes:
+        before.totalBytes -
+        before.perSnapshotBytes[first.id] -
+        before.perSnapshotBytes[second.id] -
+        before.perSnapshotBytes[third.id] +
+        1,
+    });
+    (
+      reopened as unknown as { config: { clearCache: () => void } }
+    ).config.clearCache();
+
+    const storage = storageOf(reopened);
+    const realDelete = storage.deleteSnapshot.bind(storage);
+    storage.deleteSnapshot = jest.fn((id: string) =>
+      id === second.id
+        ? Promise.reject(new Error('EPERM: operation not permitted'))
+        : realDelete(id),
+    );
+
+    const result = await (
+      reopened as unknown as {
+        enforceSnapshotSizeLimitInternal: () => Promise<{ trimmed: string[] }>;
+      }
+    ).enforceSnapshotSizeLimitInternal();
+
+    // The newest candidate went first, so stopping at the failure leaves every
+    // surviving candidate's base in place; the failed one keeps its own base.
+    expect(result.trimmed).toEqual([third.id]);
+    expect((await reopened.getSnapshots()).map((s) => s.id)).toEqual([
+      first.id,
+      second.id,
+      fourth.id,
+    ]);
+    expect(fs.existsSync(path.join(storeDir, third.id))).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('EPERM: operation not permitted'),
+    );
+
+    // Disk agrees: a fresh manager resolves every survivor, including the one
+    // whose delete failed and the base it stores its delta against.
+    writeConfig({ maxSnapshots: 50, maxSnapshotStoreBytes: 0 });
+    const fresh = new SnapshotManager(root);
+    await fresh.initialize();
+    expect((await fresh.getSnapshots()).map((s) => s.id)).toEqual([
+      first.id,
+      second.id,
+      fourth.id,
+    ]);
+    expect(await fresh.getSnapshotFileContent(first.id, 'tracked.txt')).toBe(
+      'x'.repeat(4000),
+    );
+    expect(await fresh.getSnapshotFileContent(second.id, 'tracked.txt')).toBe(
+      'y'.repeat(4000),
+    );
+    expect(await fresh.getSnapshotFileContent(fourth.id, 'tracked.txt')).toBe(
+      'w'.repeat(4000),
+    );
+  });
+
+  it('rolls the unpersisted rewrites back so the next pass still sees the base', async () => {
+    const manager = new SnapshotManager(root);
+    await manager.initialize();
+    const first = await manager.takeSnapshot({ description: 'first' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'y'.repeat(4000), 'utf8');
+    const second = await manager.takeSnapshot({ description: 'second' });
+
+    const before = measureSnapshotStore(storeDir);
+    writeConfig({
+      maxSnapshots: 50,
+      maxSnapshotStoreBytes:
+        before.totalBytes - before.perSnapshotBytes[first.id],
+    });
+    (
+      manager as unknown as { config: { clearCache: () => void } }
+    ).config.clearCache();
+
+    // The rewrite of 'second' can never be written, so the delta on disk and
+    // the base it references are all the store has left to fall back on.
+    const storage = storageOf(manager);
+    const realSave = storage.saveSnapshot.bind(storage);
+    const saveSpy = jest.fn((snapshot: { id: string }) =>
+      snapshot.id === second.id
+        ? Promise.reject(new Error('ENOSPC: no space left on device'))
+        : realSave(snapshot),
+    );
+    storage.saveSnapshot = saveSpy;
+    const enforce = () =>
+      (
+        manager as unknown as {
+          enforceSnapshotSizeLimitInternal: () => Promise<{
+            trimmed: string[];
+          }>;
+        }
+      ).enforceSnapshotSizeLimitInternal();
+
+    const firstPass = await enforce();
+    expect(firstPass.trimmed).toEqual([]);
+    expect(fs.existsSync(path.join(storeDir, first.id))).toBe(true);
+
+    // A second pass reads the dependency from memory. Had the failed pass left
+    // its rewrite there, this pass would find no dependent, skip the save and
+    // delete the base of a survivor whose content was never written.
+    const secondPass = await enforce();
+
+    expect(secondPass.trimmed).toEqual([]);
+    expect(fs.existsSync(path.join(storeDir, first.id))).toBe(true);
+    expect(
+      saveSpy.mock.calls.filter(
+        (call) => (call[0] as { id: string }).id === second.id,
+      ),
+    ).toHaveLength(2);
+
+    // Disk and memory agree again: a fresh manager resolves the survivor
+    // through the base the failed passes left in place.
+    writeConfig({ maxSnapshots: 50, maxSnapshotStoreBytes: 0 });
+    const reopened = new SnapshotManager(root);
+    await reopened.initialize();
+    expect((await reopened.getSnapshots()).map((s) => s.id)).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(
+      await reopened.getSnapshotFileContent(second.id, 'tracked.txt'),
+    ).toBe('y'.repeat(4000));
+    expect(fs.existsSync(path.join(storeDir, first.id))).toBe(true);
   });
 });

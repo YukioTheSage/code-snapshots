@@ -599,15 +599,43 @@ export class SnapshotManager {
   }
 
   /**
+   * Put the pre-rewrite file maps of `originals` back.
+   *
+   * Memory has to match disk whenever a materialization was not persisted: the
+   * next enforcement pass reads the dependents out of these maps, and a
+   * materialized copy still in memory would hide the base the store still needs
+   * -- that pass would find no dependent, skip the save and delete the base.
+   */
+  private restoreOriginalFiles(
+    originals: Map<string, Snapshot['files']>,
+  ): void {
+    for (const [id, files] of originals) {
+      const target = this.snapshots.find((snapshot) => snapshot.id === id);
+      if (target) {
+        target.files = files;
+      }
+    }
+  }
+
+  /**
    * Rewrites the delta entries of survivors that point into `pruned` into full
    * content, resolving while the chain is still intact, so deleting those bases
    * loses nothing. Cancels on the first unresolvable entry: a partially
    * materialized list must not be persisted, so the originals are restored and
    * the caller persists nothing.
+   *
+   * `originals` maps every touched snapshot id to its pre-rewrite file map, so
+   * a caller that cannot persist the rewrites can put memory back with
+   * `restoreOriginalFiles`. On `ok: false` they have already been restored
+   * here and there is nothing to persist.
    */
   private async materializeDependents(
     pruned: Set<string>,
-  ): Promise<{ ok: boolean; touched: Snapshot[] }> {
+  ): Promise<{
+    ok: boolean;
+    touched: Snapshot[];
+    originals: Map<string, Snapshot['files']>;
+  }> {
     const originals = new Map<string, Snapshot['files']>();
     const touched: Snapshot[] = [];
 
@@ -628,16 +656,11 @@ export class SnapshotManager {
           relativePath,
         );
         if (content === null) {
-          for (const [id, files] of originals) {
-            const target = this.snapshots.find((s) => s.id === id);
-            if (target) {
-              target.files = files;
-            }
-          }
+          this.restoreOriginalFiles(originals);
           console.error(
             `Delete: cannot materialize ${relativePath} of ${snapshot.id}: base ${fileData.baseSnapshotId} is unreadable or does not record it.`,
           );
-          return { ok: false, touched: [] };
+          return { ok: false, touched: [], originals };
         }
         if (!originals.has(snapshot.id)) {
           // Shallow copy is enough: only the rewritten keys are replaced below.
@@ -650,7 +673,7 @@ export class SnapshotManager {
         touched.push(snapshot);
       }
     }
-    return { ok: true, touched };
+    return { ok: true, touched, originals };
   }
 
   /**
@@ -762,11 +785,13 @@ export class SnapshotManager {
    * rather than by its position among them.
    *
    * Best effort, in two phases: a failure to persist the rebuilt survivors
-   * aborts the trim with the excess kept (nothing may be deleted whose
-   * survivors were not written first), and a failure to delete one candidate is
-   * reported while the rest of the batch still runs (every survivor was
-   * persisted before the deletes started, so a candidate left behind cannot
-   * orphan anything). Both callers guard this call as well.
+   * aborts the trim, rolls the in-memory rewrites back and keeps the excess
+   * (nothing may be deleted whose survivors were not written first); a failed
+   * delete is reported and stops the batch, which is only safe because the
+   * batch is removed newest-first -- a candidate's base is its predecessor, so
+   * whatever survives a stop still has its base. `trimmed` lists only the
+   * deletions that succeeded, in the order they were attempted. Both callers
+   * guard this call as well.
    */
   private async enforceSnapshotSizeLimitInternal(
     justCreatedSnapshotId?: string,
@@ -852,10 +877,14 @@ export class SnapshotManager {
         await this.storage.saveSnapshot(survivor);
       }
     } catch (error) {
+      // Nothing was written, so the in-memory materialization is rolled back:
+      // a later pass reads the dependents from memory, and a materialized copy
+      // left behind would hide the base that is still needed -- that pass would
+      // skip the save and delete it.
+      this.restoreOriginalFiles(materialization.originals);
+      const after = this.storage.measureSnapshotStore();
       console.warn(
-        'Retention: keeping the excess. The store exceeds its ' +
-          limitBytes +
-          ' byte limit but ' +
+        'Retention: the trim stopped. ' +
           materialization.touched.length +
           ' rebuilt survivor(s) of the ' +
           candidates.length +
@@ -865,23 +894,26 @@ export class SnapshotManager {
       );
       return {
         bytesBefore: sizes.totalBytes,
-        bytesAfter: this.storage.measureSnapshotStore().totalBytes,
+        bytesAfter: after.totalBytes,
         trimmed: [],
-        stillOverLimit: true,
+        stillOverLimit: after.totalBytes > limitBytes,
       };
     }
 
     // Candidates reference each other down the chain, so one candidate whose
     // base is another candidate is not an orphan: it leaves in this batch too.
     // Only a dependent outside the batch could be left behind, and the
-    // materialization above already rebuilt those.
+    // materialization above already rebuilt those. `alsoDeleting` is what
+    // stops the batch's own members from looking like dependents here.
     //
-    // A delete that still fails -- a lock or a refused symlink -- is reported
-    // and the rest of the batch is still attempted: every survivor was
-    // materialized and persisted above, so a candidate left behind cannot
-    // orphan anything.
+    // Newest first, and stop at the first failure. Selection stays oldest-first;
+    // only this order is reversed, because a candidate's base is its
+    // predecessor in the batch. Removing the newest first means a failure leaves
+    // the base of every surviving candidate in place, while deleting
+    // oldest-first -- or continuing past the failure -- would remove the base of
+    // a candidate that has to stay: the orphan this guard exists to prevent.
     const trimmed: string[] = [];
-    for (const id of candidates) {
+    for (const id of [...candidates].reverse()) {
       try {
         await this.deleteSnapshotInternal(id, { alsoDeleting: removable });
         trimmed.push(id);
@@ -893,8 +925,9 @@ export class SnapshotManager {
             limitBytes +
             ' bytes: ' +
             (error instanceof Error ? error.message : String(error)) +
-            '. The remaining candidates are still attempted.',
+            '. The trim stops here; no older candidate is removed.',
         );
+        break;
       }
     }
 
