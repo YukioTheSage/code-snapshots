@@ -50,8 +50,8 @@ describe('shared retention', () => {
     const reopened = new SnapshotManager(root);
     await reopened.initialize();
     expect((await reopened.getSnapshots()).map((s) => s.id)).toEqual([second.id]);
-    // The trim removed the entry the pointer named, so the persisted position
-    // has to follow the survivor instead of staying on the old number.
+    // The trim removed an earlier entry, so the persisted pointer has to follow
+    // the survivor rather than keep the old number.
     expect(reopened.getCurrentSnapshot()?.id).toBe(second.id);
     expect(
       await reopened.getSnapshotFileContent(second.id, 'tracked.txt'),
@@ -152,6 +152,45 @@ describe('shared retention', () => {
     expect(
       await reopened.getSnapshotFileContent(third.id, 'tracked.txt'),
     ).toBe('v1');
+  });
+
+  it('trims by store order when the clock steps backwards', async () => {
+    writeConfig(root, { maxSnapshots: 3 });
+
+    const manager = new SnapshotManager(root);
+    await manager.initialize();
+    const first = await manager.takeSnapshot({ description: 'first' });
+    const second = await manager.takeSnapshot({ description: 'second' });
+    const third = await manager.takeSnapshot({ description: 'third' });
+
+    // An NTP correction after a VM resume, a WSL clock jump or a hand-set clock
+    // can move Date.now() backwards between takes. The snapshot about to be
+    // created is still the newest in the store; only the clock disagrees.
+    const nowSpy = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(first.timestamp - 60_000);
+
+    try {
+      const fourth = await manager.takeSnapshot({ description: 'fourth' });
+
+      // One slot over the limit: the store's oldest entry goes, never the one
+      // the clock just claimed predates everything else.
+      expect((await manager.getSnapshots()).map((s) => s.id)).toEqual([
+        second.id,
+        third.id,
+        fourth.id,
+      ]);
+      expect(fs.existsSync(path.join(storeDir, first.id))).toBe(false);
+
+      const reopened = new SnapshotManager(root);
+      await reopened.initialize();
+      expect(reopened.getCurrentSnapshot()?.id).toBe(fourth.id);
+      expect(
+        await reopened.getSnapshotFileContent(fourth.id, 'tracked.txt'),
+      ).toBe('v1');
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('drops an index entry whose directory is already gone when deleted explicitly', async () => {

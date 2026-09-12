@@ -399,9 +399,13 @@ export class SnapshotManager {
     const maxSnapshots = this.config.get('maxSnapshots');
     const excess = this.snapshots.length - maxSnapshots;
     if (excess > 0) {
-      const candidates = [...this.snapshots]
-        .sort((a, b) => a.timestamp - b.timestamp)
-        .slice(0, excess);
+      // Selection follows the store's own order (oldest first by construction:
+      // appended on take, loaded in index order) and never the wall clock. A
+      // clock that steps backwards -- an NTP correction after a VM resume, a
+      // WSL jump, a hand-set clock -- would otherwise sort the snapshot that
+      // was just created to the front and trim it moments after its index entry
+      // was written.
+      const candidates = this.snapshots.slice(0, excess);
       const materialization = await this.materializeDependents(
         new Set(candidates.map((snapshot) => snapshot.id)),
       );
