@@ -3,6 +3,36 @@ import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 
 /**
+ * The root as a prefix that `resolved` can be compared against.
+ *
+ * `path.normalize` preserves a trailing separator, so appending `path.sep` to a
+ * root that already ends in one produced a doubled separator and rejected every
+ * path under it; a drive root (`C:\`) did the same. Removing the trailing
+ * separator first is what makes the check about containment rather than about
+ * how the caller happened to spell the root.
+ */
+function containmentPrefix(normalizedRoot: string): string {
+  const withoutTrailingSeparator =
+    normalizedRoot.endsWith(path.sep) && normalizedRoot !== path.sep
+      ? normalizedRoot.slice(0, -path.sep.length)
+      : normalizedRoot;
+  return withoutTrailingSeparator.endsWith(path.sep)
+    ? withoutTrailingSeparator
+    : withoutTrailingSeparator + path.sep;
+}
+
+function isWithin(normalizedRoot: string, resolved: string): boolean {
+  const prefix = containmentPrefix(normalizedRoot);
+  // The root itself, or the root's own prefix when it is a drive/filesystem
+  // root (`C:\` already ends in a separator).
+  return (
+    resolved === normalizedRoot ||
+    resolved === prefix ||
+    resolved.startsWith(prefix)
+  );
+}
+
+/**
  * Validates that a resolved path stays within the expected root directory.
  * Prevents path traversal attacks (e.g., "../../etc/passwd").
  */
@@ -19,10 +49,7 @@ export function ensureWithinDirectory(
   const normalizedRoot = path.normalize(rootDir);
   const resolved = path.normalize(path.resolve(normalizedRoot, untrustedPath));
 
-  if (
-    resolved !== normalizedRoot &&
-    !resolved.startsWith(normalizedRoot + path.sep)
-  ) {
+  if (!isWithin(normalizedRoot, resolved)) {
     throw new Error(
       `Path traversal blocked: "${untrustedPath}" resolves outside root directory`,
     );
@@ -41,10 +68,7 @@ export async function assertNoSymlinkPath(
   const normalizedRoot = path.resolve(rootDir);
   const normalizedTarget = path.resolve(absolutePath);
 
-  if (
-    normalizedTarget !== normalizedRoot &&
-    !normalizedTarget.startsWith(normalizedRoot + path.sep)
-  ) {
+  if (!isWithin(normalizedRoot, normalizedTarget)) {
     throw new Error(
       `Path safety check failed: "${absolutePath}" is outside root directory`,
     );
@@ -82,10 +106,7 @@ export function assertNoSymlinkPathSync(
   const normalizedRoot = path.resolve(rootDir);
   const normalizedTarget = path.resolve(absolutePath);
 
-  if (
-    normalizedTarget !== normalizedRoot &&
-    !normalizedTarget.startsWith(normalizedRoot + path.sep)
-  ) {
+  if (!isWithin(normalizedRoot, normalizedTarget)) {
     throw new Error(
       `Path safety check failed: "${absolutePath}" is outside root directory`,
     );
