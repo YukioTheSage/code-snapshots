@@ -659,7 +659,7 @@
     "@google/genai": "^0.10.0",
     "@google/generative-ai": "^0.24.0",
     "@pinecone-database/pinecone": "^5.1.2",
-    "codelapse-core": "^0.9.5",
+    "codelapse-core": "file:shared",
     "diff": "^5.0.0",
     "java-parser": "^2.3.3",
     "minimatch": "^10.0.1",

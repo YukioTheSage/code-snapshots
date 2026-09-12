@@ -55,7 +55,7 @@
   "author": "YukioTheSage",
   "license": "MIT",
   "dependencies": {
-    "codelapse-core": "^0.9.5",
+    "codelapse-core": "file:../shared",
     "commander": "^11.0.0",
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
