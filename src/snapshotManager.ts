@@ -2149,8 +2149,30 @@ export class SnapshotManager {
       new Set(candidates),
     );
     if (materialization.ok) {
-      for (const snapshot of materialization.touched) {
-        await this.storage.saveSnapshotData(snapshot);
+      // Persist the rewrites before anything is deleted: a survivor whose base
+      // is gone cannot be rebuilt afterwards. Persisting can fail part-way --
+      // the saves that landed stay on disk, and every touched survivor is
+      // rolled back in memory below, so memory may lag disk, never lead it, and
+      // the next prune redoes them. Nothing is purged until all of them are
+      // written.
+      let persisted = 0;
+      try {
+        for (const snapshot of materialization.touched) {
+          await this.storage.saveSnapshotData(snapshot);
+          persisted += 1;
+        }
+      } catch (error) {
+        this.restoreOriginalFiles(materialization.originals);
+        log(
+          'Snapshot limit: the prune stopped. ' +
+            persisted +
+            ' of ' +
+            materialization.touched.length +
+            ' rebuilt survivor(s) were persisted before the failure: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The rewrites were rolled back in memory, so the next prune redoes them; nothing was deleted.',
+        );
+        return;
       }
     }
 
@@ -2169,10 +2191,34 @@ export class SnapshotManager {
       );
     }
 
-    const removable = new Set(removableIds);
-    const removedSnapshots = this.snapshots.filter((s) => removable.has(s.id));
-
-    this.snapshots = this.snapshots.filter((s) => !removable.has(s.id));
+    // Purge newest first and stop at the first failure: a candidate's base is
+    // its predecessor, so removing the newest first means a failure leaves the
+    // base of every surviving candidate in place, while deleting oldest-first --
+    // or continuing past the failure -- would remove the base of a candidate
+    // that has to stay. The refusal is reported, never rethrown: the snapshot
+    // this take wrote is already indexed and saved, and the excess is kept.
+    //
+    // A snapshot leaves `this.snapshots` only after its purge succeeded, so the
+    // index written below lists exactly what survives.
+    const purged: string[] = [];
+    for (const id of [...removableIds].reverse()) {
+      try {
+        await this.purgeSnapshot(id);
+      } catch (error) {
+        log(
+          'Snapshot limit: could not delete ' +
+            id +
+            ' while pruning to ' +
+            maxSnapshots +
+            ' snapshots: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The prune stops here; no older candidate is removed.',
+        );
+        break;
+      }
+      this.snapshots = this.snapshots.filter((snapshot) => snapshot.id !== id);
+      purged.push(id);
+    }
 
     // Pruning takes from the oldest end, so it can remove the snapshot the
     // workspace reflects. Identity survives reordering, which is why the
@@ -2180,23 +2226,18 @@ export class SnapshotManager {
     // position was only correct while the removed set was a prefix.
     this.detachIfActiveSnapshotRemoved();
 
-    // Delete snapshot data using storage
-    for (const snapshot of removedSnapshots) {
-      await this.purgeSnapshot(snapshot.id);
-    }
-
     // Update index since snapshots were removed
     await this.saveSnapshotIndex();
 
     // Emit event if snapshots were actually removed
-    if (removedSnapshots.length > 0) {
+    if (purged.length > 0) {
       // Pruning removes deltas other snapshots may depend on, so rebuild the
       // report before listeners render. (The early returns above do not change
       // the list, so they need no refresh.)
       this.refreshIntegrityReport();
       this._onDidChangeSnapshots.fire();
       log(
-        `Pruned ${removedSnapshots.length} snapshot(s); ${this.snapshots.length} remain. Fired onDidChangeSnapshots event after enforceSnapshotLimit`,
+        `Pruned ${purged.length} snapshot(s); ${this.snapshots.length} remain. Fired onDidChangeSnapshots event after enforceSnapshotLimit`,
       );
     }
   }

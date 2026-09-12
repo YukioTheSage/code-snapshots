@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SnapshotManager } from '../snapshotManager';
 import type { Snapshot } from '../snapshotManager';
-import { getMaxSnapshotStoreBytes } from '../config';
+import { getMaxSnapshotStoreBytes, getMaxSnapshots } from '../config';
 import type { SnapshotStoreSizes } from 'codelapse-core';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -11,12 +11,13 @@ import type { SnapshotStoreSizes } from 'codelapse-core';
 // constructing a manager in this suite never walks a real store; the retention
 // tests opt in per test.
 jest.mock('../config', () => ({
-  getMaxSnapshots: () => 50,
+  getMaxSnapshots: jest.fn(() => 50),
   getSnapshotLocation: () => '.snapshots',
   getMaxSnapshotStoreBytes: jest.fn(() => 0),
 }));
 
 const limitMock = getMaxSnapshotStoreBytes as unknown as jest.Mock;
+const maxSnapshotsMock = getMaxSnapshots as unknown as jest.Mock;
 
 function storeSizes(
   perSnapshotBytes: Record<string, number>,
@@ -58,6 +59,7 @@ function danglingBaseIds(snapshots: Snapshot[]): string[] {
 describe('size-based retention in the extension', () => {
   afterEach(() => {
     limitMock.mockReturnValue(0);
+    maxSnapshotsMock.mockReturnValue(50);
   });
 
   /**
@@ -398,5 +400,155 @@ describe('size-based retention in the extension', () => {
     ).toEqual(['b', 'b']);
     expect(storage.deleteSnapshotData).not.toHaveBeenCalled();
     expect(manager.getSnapshots().map((s) => s.id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('count-based retention in the extension', () => {
+  afterEach(() => {
+    maxSnapshotsMock.mockReturnValue(50);
+  });
+
+  /**
+   * `takeSnapshotInternal` needs the storage surface its capture uses; the
+   * prune-only test drives `enforceSnapshotLimit` directly so the fixture set
+   * stays the same across passes.
+   */
+  async function managerForCountPrune(
+    fixtures: Snapshot[],
+    activeSnapshotId: string | null,
+  ) {
+    const manager = new SnapshotManager(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const storage = {
+      getWorkspaceRoot: () => '/ws',
+      getSnapshotDirectory: () => '/ws/.snapshots',
+      isBinaryFile: () => false,
+      checkSuspiciousFilesForBinaryContent: async () => new Set<string>(),
+      // The capture has to see a change against the base, or the take reports
+      // `created: false` and never reaches the count prune.
+      readFileContent: async () => 'CHANGED',
+      getSnapshotFileContent: jest.fn(async () => 'A'),
+      saveSnapshotData: jest.fn().mockResolvedValue(undefined),
+      deleteSnapshotData: jest.fn().mockResolvedValue(undefined),
+      saveSnapshotIndex: jest.fn().mockResolvedValue(undefined),
+    };
+
+    (manager as any).storage = storage;
+    (manager as any).snapshots = [...fixtures];
+    (manager as any).activeSnapshotId = activeSnapshotId;
+    (manager as any).refreshIntegrityReport();
+    return { manager, storage };
+  }
+
+  /** A store that resolves a file through the fixture's base chain. */
+  function chainResolver(snapshots: Snapshot[]) {
+    return async (id: string, filePath: string): Promise<string | null> => {
+      let current = snapshots.find((candidate) => candidate.id === id);
+      let entry = current?.files[filePath];
+      while (entry?.baseSnapshotId) {
+        current = snapshots.find(
+          (candidate) => candidate.id === entry?.baseSnapshotId,
+        );
+        entry = current?.files[filePath];
+      }
+      return entry?.content ?? null;
+    };
+  }
+
+  it('stops a take-time prune at the first purge failure, newest first', async () => {
+    const fixtures = [
+      snapshot('a', { 'f.ts': { content: 'A' } }, 1),
+      snapshot('b', { 'f.ts': { baseSnapshotId: 'a' } }, 2),
+      snapshot('c', { 'f.ts': { baseSnapshotId: 'b' } }, 3),
+      snapshot('d', { 'f.ts': { baseSnapshotId: 'c' } }, 4),
+    ];
+    const { manager, storage } = await managerForCountPrune(fixtures, 'd');
+    maxSnapshotsMock.mockReturnValue(2);
+    storage.deleteSnapshotData.mockImplementation((id: string) =>
+      id === 'b'
+        ? Promise.reject(new Error('EPERM: operation not permitted'))
+        : Promise.resolve(),
+    );
+
+    // The take is what runs the count prune, and it has to resolve.
+    const outcome = await (manager as any).takeSnapshotInternal('manual', {
+      tags: ['manual'],
+    });
+
+    expect(outcome.created).toBe(true);
+    const takenId = outcome.created
+      ? (outcome.snapshot as Snapshot).id
+      : 'missing';
+    expect((await manager.getSnapshots()).map((s) => s.id)).toEqual([
+      'a',
+      'b',
+      'd',
+      takenId,
+    ]);
+    // Newest first: 'c' went, then 'b' refused and stopped the prune, so 'a' --
+    // the base 'b' stores its delta against -- was never touched.
+    expect(
+      storage.deleteSnapshotData.mock.calls.map((call) => call[0]),
+    ).toEqual(['c', 'b']);
+
+    // What a fresh manager loads: the index written after the stop. Every
+    // survivor resolves through its base chain, 'd' included -- it was
+    // materialized before the purge.
+    const indexCalls = storage.saveSnapshotIndex.mock.calls;
+    const index = indexCalls[indexCalls.length - 1][0] as Snapshot[];
+    expect(index.map((s) => s.id)).toEqual(['a', 'b', 'd', takenId]);
+
+    const fresh = new SnapshotManager(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    (fresh as any).storage = {
+      loadSnapshotIndexAndMetadata: async () => ({
+        snapshots: index,
+        currentIndex: index.length - 1,
+      }),
+      getSnapshotFileContent: chainResolver(index),
+    };
+    await (fresh as any).loadSnapshots();
+
+    expect((await fresh.getSnapshots()).map((s) => s.id)).toEqual([
+      'a',
+      'b',
+      'd',
+      takenId,
+    ]);
+    // 'a' and 'b' are the candidates the stop protected, and 'd' resolves only
+    // because it was materialized before its base 'c' was purged.
+    for (const id of ['a', 'b', 'd']) {
+      expect(await fresh.getSnapshotFileContentPublic(id, 'f.ts')).toBe('A');
+    }
+  });
+
+  it('rolls the count prune back when a survivor save fails, so a later prune retries', async () => {
+    const fixtures = [
+      snapshot('a', { 'f.ts': { content: 'A' } }, 1),
+      snapshot('b', { 'f.ts': { baseSnapshotId: 'a' } }, 2),
+      snapshot('c', { 'f.ts': { baseSnapshotId: 'b' } }, 3),
+    ];
+    const { manager, storage } = await managerForCountPrune(fixtures, 'c');
+    maxSnapshotsMock.mockReturnValue(2);
+    let refused = 0;
+    storage.saveSnapshotData.mockImplementation(() => {
+      refused += 1;
+      return Promise.reject(new Error('ENOSPC: no space left on device'));
+    });
+
+    await (manager as any).enforceSnapshotLimit();
+    await (manager as any).enforceSnapshotLimit();
+
+    // 'b' is the survivor of the candidate 'a'. Its rewrite never reached disk,
+    // so the second prune has to see the dependency again -- through the rolled
+    // back memory -- retry the rewrite and refuse to purge 'a'.
+    expect(refused).toBe(2);
+    expect(storage.deleteSnapshotData).not.toHaveBeenCalled();
+    expect((await manager.getSnapshots()).map((s) => s.id)).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
   });
 });
