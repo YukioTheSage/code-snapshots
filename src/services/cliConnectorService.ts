@@ -1530,7 +1530,16 @@ export class CliConnectorService implements vscode.Disposable {
         fs.mkdirSync(vsCodeDir, { recursive: true });
       }
 
-      fs.writeFileSync(connectionFile, JSON.stringify(connectionInfo, null, 2));
+      // The file carries a live credential. `writeFileSync`'s default mode
+      // follows the umask, which is typically world-readable on Unix; an
+      // existing file keeps whatever mode it already had, so tighten it too.
+      if (process.platform !== 'win32' && fs.existsSync(connectionFile)) {
+        fs.chmodSync(connectionFile, 0o600);
+      }
+      fs.writeFileSync(connectionFile, JSON.stringify(connectionInfo, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
       log(`Created connection file: ${connectionFile}`);
     } catch (error) {
       log(`Failed to create connection file: ${error}`);
