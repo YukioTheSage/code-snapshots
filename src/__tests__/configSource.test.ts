@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { resolveSetting } from '../configSource';
 import * as vscode from 'vscode';
 

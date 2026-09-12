@@ -4,34 +4,19 @@ import { SnapshotManager, Snapshot } from '../snapshotManager';
 import { CredentialsManager } from './credentialsManager';
 import { CodeChunker, CodeChunk } from './codeChunker';
 import { EmbeddingService } from './embeddingService';
-import { VectorDatabaseService, SearchResult } from './vectorDatabaseService';
+import { VectorDatabaseService } from './vectorDatabaseService';
 import {
   EnhancedSemanticSearchOptions,
   EnhancedSemanticSearchResult,
-  SearchMode,
   RankingStrategy,
   ProcessedQuery,
   QueryIntent,
-  PenaltyFactor,
-  SearchStrategy,
-  SearchResultExplanation,
-  ConfidenceFactor,
-  ActionableSuggestion,
-  AlternativeResult,
-  EnhancedResultMetadata,
-  ComplexityMetrics,
   SecurityConsideration,
-  AIAgentResponse,
-  ResponseMetadata,
-  ResponseSuggestion,
   PerformanceMetrics,
-  SearchQualityMetrics,
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
 import { QualityMetrics } from '../types/enhancedChunking';
-import { QualityMetricsCalculator } from './qualityMetricsCalculator';
 import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
-import { RelationshipAnalyzer } from './relationshipAnalyzer';
 import { QueryProcessor, QueryContext } from './queryProcessor';
 import { ResultManager } from './resultManager';
 import { throwIfCancelled } from '../utils/cancellation';
@@ -114,8 +99,6 @@ export class SemanticSearchService implements vscode.Disposable {
 
   // Enhanced services for AI agent optimization
   private enhancedCodeChunker: EnhancedCodeChunker;
-  private qualityMetricsCalculator: QualityMetricsCalculator;
-  private relationshipAnalyzer: RelationshipAnalyzer;
   private queryProcessor: QueryProcessor;
   private resultManager: ResultManager;
 
@@ -139,8 +122,7 @@ export class SemanticSearchService implements vscode.Disposable {
     this.context = context;
     this.codeChunker = new CodeChunker();
     this.embeddingService = new EmbeddingService(credentialsManager);
-    const workspaceRoot =
-      this.snapshotManager.getWorkspaceRoot?.() ?? null;
+    const workspaceRoot = this.snapshotManager.getWorkspaceRoot?.() ?? null;
     this.vectorDatabaseService = new VectorDatabaseService(
       credentialsManager,
       getWorkspaceId(workspaceRoot),
@@ -148,8 +130,6 @@ export class SemanticSearchService implements vscode.Disposable {
 
     // Initialize enhanced services for AI agent optimization
     this.enhancedCodeChunker = new EnhancedCodeChunker();
-    this.qualityMetricsCalculator = new QualityMetricsCalculator();
-    this.relationshipAnalyzer = new RelationshipAnalyzer();
     this.queryProcessor = new QueryProcessor();
     this.resultManager = new ResultManager();
 
@@ -377,7 +357,13 @@ export class SemanticSearchService implements vscode.Disposable {
     });
 
     // Remove the fileKey property that was used internally
-    const finalResults = enhancedResults.map(({ fileKey, ...rest }) => rest);
+    const finalResults = enhancedResults.map((result) => {
+      const { fileKey, ...rest } = result;
+      // Kept as an explicit read so the destructuring-only variable is not an
+      // unused-binding lint warning.
+      void fileKey;
+      return rest;
+    });
 
     log(
       `Search returned ${finalResults.length} results with diversity optimization`,
@@ -497,61 +483,6 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Classify the intent of a search query
    */
-  private classifyQueryIntent(query: string): QueryIntent {
-    const lowerQuery = query.toLowerCase();
-
-    // Analyze query patterns to determine intent
-    let primary: QueryIntent['primary'] = 'find_implementation';
-    const secondary: string[] = [];
-    const context: string[] = [];
-    let confidence = 0.7;
-
-    // Pattern matching for intent classification
-    if (/\b(how to|example|sample|demo)\b/i.test(query)) {
-      primary = 'find_examples';
-      confidence = 0.9;
-      context.push('examples', 'tutorials');
-    } else if (/\b(error|bug|issue|problem|fix|debug)\b/i.test(query)) {
-      primary = 'debug_issue';
-      confidence = 0.85;
-      context.push('debugging', 'error_handling');
-    } else if (/\b(test|testing|spec|assert|mock)\b/i.test(query)) {
-      primary = 'find_implementation';
-      secondary.push('testing');
-      context.push('testing', 'quality_assurance');
-    } else if (/\b(pattern|design|architecture)\b/i.test(query)) {
-      primary = 'find_patterns';
-      confidence = 0.8;
-      context.push('patterns', 'architecture');
-    } else if (/\b(usage|used|call|invoke)\b/i.test(query)) {
-      primary = 'find_usage';
-      confidence = 0.8;
-      context.push('usage', 'dependencies');
-    } else if (/\b(similar|like|equivalent)\b/i.test(query)) {
-      primary = 'find_similar';
-      confidence = 0.85;
-      context.push('similarity', 'alternatives');
-    } else if (/\b(quality|performance|optimize|improve)\b/i.test(query)) {
-      primary = 'analyze_quality';
-      confidence = 0.8;
-      context.push('quality', 'performance');
-    }
-
-    return {
-      primary,
-      secondary,
-      confidence,
-      context,
-      suggestedParameters: {
-        searchMode: primary === 'find_patterns' ? 'behavioral' : 'hybrid',
-        rankingStrategy:
-          primary === 'analyze_quality' ? 'quality' : 'relevance',
-        includeQualityMetrics: primary === 'analyze_quality',
-        includeRelationships:
-          primary === 'find_usage' || primary === 'find_similar',
-      },
-    };
-  }
 
   /**
    * Execute enhanced search based on processed query
@@ -630,9 +561,7 @@ export class SemanticSearchService implements vscode.Disposable {
     } catch (error) {
       // Metrics are an enhancement, not a precondition: a chunker failure must
       // leave the result searchable with the default metrics.
-      log(
-        `Unable to compute quality metrics for ${result.filePath}: ${error}`,
-      );
+      log(`Unable to compute quality metrics for ${result.filePath}: ${error}`);
       return result;
     }
   }
@@ -817,34 +746,6 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Make sure specified snapshots are indexed
    */
-  private async ensureSnapshotsIndexed(snapshotIds: string[]): Promise<void> {
-    const unindexedSnapshots = snapshotIds.filter(
-      (id) => !this.indexedSnapshots.has(id),
-    );
-
-    if (unindexedSnapshots.length === 0) {
-      return;
-    }
-
-    log(
-      `Ensuring ${unindexedSnapshots.length} snapshots are indexed before search`,
-    );
-
-    // Process each snapshot sequentially
-    for (const snapshotId of unindexedSnapshots) {
-      try {
-        await this.indexSnapshot(snapshotId);
-        this.indexedSnapshots.add(snapshotId);
-        // Persist updated indexed snapshots
-        await this.context.workspaceState.update(
-          'semanticSearch.indexedSnapshots',
-          Array.from(this.indexedSnapshots),
-        );
-      } catch (error) {
-        log(`Error indexing snapshot ${snapshotId}: ${error}`);
-      }
-    }
-  }
 
   /**
    * Process and index a snapshot
@@ -1069,43 +970,14 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Enhance query for behavioral search
    */
-  private enhanceForBehavioralSearch(query: string): string {
-    return `${query} behavior functionality what does this code do`;
-  }
 
   /**
    * Enhance query for syntactic search
    */
-  private enhanceForSyntacticSearch(query: string): string {
-    return `${query} syntax structure pattern`;
-  }
 
   /**
    * Get boost factors based on query intent
    */
-  private getBoostFactors(intent: QueryIntent) {
-    const factors = [];
-
-    if (intent.primary === 'find_examples') {
-      factors.push({
-        condition: 'hasTests',
-        multiplier: 1.3,
-        description: 'Boost code with tests for examples',
-        weight: 0.8,
-      });
-    }
-
-    if (intent.primary === 'analyze_quality') {
-      factors.push({
-        condition: 'highQuality',
-        multiplier: 1.5,
-        description: 'Boost high-quality code for quality analysis',
-        weight: 0.9,
-      });
-    }
-
-    return factors;
-  }
 
   /**
    * Get penalty factors based on query intent.
@@ -1120,94 +992,18 @@ export class SemanticSearchService implements vscode.Disposable {
    * exists for this method. It can come back when a smell signal does; see
    * docs/KNOWN_ISSUES.md, "Every penalty condition is unreachable".
    */
-  private getPenaltyFactors(intent: QueryIntent): PenaltyFactor[] {
-    // The parameter stays so the call shape is unchanged if a penalty returns;
-    // `void` is what says "nothing is selected on this any more" instead of
-    // leaving an unused argument for the linter to report.
-    void intent;
-    return [];
-  }
 
   /**
    * Get expected result types based on intent
    */
-  private getExpectedResultTypes(intent: QueryIntent): string[] {
-    switch (intent.primary) {
-      case 'find_implementation':
-        return ['function', 'class', 'method'];
-      case 'find_examples':
-        return ['function', 'class', 'test'];
-      case 'find_patterns':
-        return ['class', 'interface', 'module'];
-      case 'find_usage':
-        return ['function', 'method', 'call'];
-      case 'analyze_quality':
-        return ['function', 'class', 'module'];
-      default:
-        return ['function', 'class'];
-    }
-  }
 
   /**
    * Calculate query complexity score
    */
-  private calculateQueryComplexity(query: string): number {
-    let complexity = 0.5; // Base complexity
-
-    // Length factor
-    if (query.length > 100) complexity += 0.3;
-    else if (query.length > 50) complexity += 0.2;
-
-    // Technical terms
-    const technicalTerms =
-      /\b(algorithm|pattern|architecture|performance|optimization|security)\b/gi;
-    const matches = query.match(technicalTerms);
-    if (matches) complexity += matches.length * 0.1;
-
-    // Multiple conditions
-    if (query.includes(' AND ') || query.includes(' OR ')) complexity += 0.2;
-
-    return Math.min(1.0, complexity);
-  }
 
   /**
    * Generate result explanation
    */
-  private async generateResultExplanation(
-    result: SemanticSearchResult,
-    processedQuery: ProcessedQuery,
-  ): Promise<SearchResultExplanation> {
-    const keyFeatures = this.extractKeyFeatures(result.content);
-    const matchedConcepts = this.findMatchedConcepts(
-      result.content,
-      processedQuery.originalQuery,
-    );
-
-    return {
-      whyRelevant: `This code matches your query "${
-        processedQuery.originalQuery
-      }" with a confidence score of ${(result.score * 100).toFixed(1)}%`,
-      keyFeatures,
-      matchedConcepts,
-      confidenceFactors: [
-        {
-          factor: 'semantic_similarity',
-          weight: 0.7,
-          description: 'Semantic similarity to query',
-          value: result.score,
-        },
-        {
-          factor: 'keyword_match',
-          weight: 0.3,
-          description: 'Keyword matching',
-          value: matchedConcepts.length > 0 ? 0.8 : 0.3,
-        },
-      ],
-      semanticSimilarity: `High semantic similarity (${(
-        result.score * 100
-      ).toFixed(1)}%) based on code functionality and context`,
-    };
-  }
 
   /**
    * Extract key features from code content
@@ -1275,7 +1071,6 @@ export class SemanticSearchService implements vscode.Disposable {
     contextRadius: number,
   ) {
     // Get surrounding context
-    const snapshot = result.snapshot;
     const content = await this.snapshotManager.getSnapshotFileContentPublic(
       result.snapshotId,
       result.filePath,
@@ -1348,106 +1143,14 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Generate actionable suggestions
    */
-  private async generateActionableSuggestions(
-    result: SemanticSearchResult,
-    qualityMetrics: any,
-  ): Promise<ActionableSuggestion[]> {
-    const suggestions: ActionableSuggestion[] = [];
-
-    // Quality-based suggestions
-    if (toRatio(qualityMetrics.readabilityScore) < 0.6) {
-      suggestions.push({
-        type: 'improvement',
-        description:
-          'Consider improving code readability with better variable names and comments',
-        priority: 'medium',
-        effort: 'moderate',
-        action: 'Refactor for readability',
-        expectedBenefit: 'Improved maintainability',
-      });
-    }
-
-    // `testCoverage` is a 0-100 field, but zero is zero on either scale, so the
-    // equality test needs no conversion.
-    if (qualityMetrics.testCoverage === 0) {
-      suggestions.push({
-        type: 'testing',
-        description: 'Add unit tests to improve code reliability',
-        priority: 'high',
-        effort: 'moderate',
-        action: 'Write unit tests',
-        expectedBenefit: 'Better code reliability and regression prevention',
-      });
-    }
-
-    return suggestions;
-  }
 
   /**
    * Find alternative results
    */
-  private async findAlternativeResults(
-    result: SemanticSearchResult,
-    allResults: SemanticSearchResult[],
-  ): Promise<AlternativeResult[]> {
-    const alternatives: AlternativeResult[] = [];
-
-    // Find similar results from the same file or related files
-    for (const other of allResults) {
-      if (other === result) continue;
-
-      // Same file, different location
-      if (
-        other.filePath === result.filePath &&
-        Math.abs(other.startLine - result.startLine) > 10
-      ) {
-        alternatives.push({
-          chunkId: `${other.snapshotId}:${other.filePath}:${other.startLine}`,
-          similarityScore: 0.8,
-          description: 'Similar code in the same file',
-          differences: ['Different location in file'],
-          preferWhen: 'Looking for related functionality in the same module',
-        });
-      }
-
-      if (alternatives.length >= 3) break; // Limit alternatives
-    }
-
-    return alternatives;
-  }
 
   /**
    * Create enhanced metadata
    */
-  private async createEnhancedMetadata(
-    result: SemanticSearchResult,
-    qualityMetrics: any,
-  ): Promise<EnhancedResultMetadata> {
-    const content = result.content;
-
-    return {
-      semanticType: this.detectSemanticType(content),
-      designPatterns: this.detectDesignPatterns(content),
-      architecturalLayer: this.detectArchitecturalLayer(result.filePath),
-      businessDomain: this.detectBusinessDomain(result.filePath),
-      frameworkContext: this.detectFrameworks(content),
-      dependencies: this.extractDependencies(content),
-      usageFrequency: 1, // TODO: Implement usage tracking
-      lastModified: result.timestamp,
-      complexityMetrics: {
-        cyclomaticComplexity: this.calculateCyclomaticComplexity(content),
-        cognitiveComplexity: this.calculateCognitiveComplexity(content),
-        linesOfCode: content.split('\n').length,
-        nestingDepth: this.calculateNestingDepth(content),
-        // `readabilityScore` is 0-100 in the contract and
-        // `maintainabilityIndex` is a 0-100 field, so no conversion is needed
-        // here. The `* 100` that used to be here belonged to the old 0-1
-        // manufacturing and would report a readability of 70 as 7000.
-        maintainabilityIndex: qualityMetrics.readabilityScore,
-      },
-      securityConsiderations: this.analyzeSecurityConsiderations(content),
-    };
-  }
 
   /**
    * Detect semantic type of code
@@ -1615,28 +1318,6 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Rank and filter enhanced results
    */
-  private rankAndFilterResults(
-    results: EnhancedSemanticSearchResult[],
-    processedQuery: ProcessedQuery,
-    options: EnhancedSemanticSearchOptions,
-  ): EnhancedSemanticSearchResult[] {
-    // Apply filters
-    let filteredResults = this.applyFilters(results, processedQuery.filters);
-
-    // Apply ranking strategy
-    filteredResults = this.applyRanking(
-      filteredResults,
-      processedQuery.searchStrategy.ranking,
-    );
-
-    // Apply diversification if enabled
-    if (processedQuery.searchStrategy.diversification) {
-      filteredResults = this.applyDiversification(filteredResults, options);
-    }
-
-    // Limit results
-    return filteredResults.slice(0, options.limit || 20);
-  }
 
   /**
    * Apply filters to results
@@ -1735,65 +1416,14 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Calculate quality metrics for a search result
    */
-  private async calculateQualityMetricsForResult(result: SemanticSearchResult) {
-    try {
-      const language = this.detectLanguageFromFilePath(result.filePath);
-      const linesOfCode = this.calculateLinesOfCode(result.content);
-
-      return await this.qualityMetricsCalculator.calculateQualityMetrics(
-        result.content,
-        language,
-        linesOfCode,
-      );
-    } catch (error) {
-      log(`Error calculating quality metrics: ${error}`);
-      return this.getDefaultQualityMetrics();
-    }
-  }
 
   /**
    * Analyze relationships for a search result
    */
-  private async analyzeResultRelationships(
-    result: SemanticSearchResult,
-    allResults: SemanticSearchResult[],
-  ) {
-    try {
-      // Create a simplified chunk representation for relationship analysis
-      const enhancedChunk = this.createEnhancedChunkFromResult(result);
-      const allChunks = allResults.map((r) =>
-        this.createEnhancedChunkFromResult(r),
-      );
-
-      const analysisResult =
-        await this.relationshipAnalyzer.analyzeChunkRelationships(
-          enhancedChunk,
-          allChunks,
-        );
-
-      return analysisResult.relationships;
-    } catch (error) {
-      log(`Error analyzing relationships: ${error}`);
-      return [];
-    }
-  }
 
   /**
    * Generate basic context info for a result
    */
-  private async generateBasicContextInfo(result: SemanticSearchResult) {
-    const contextInfo = await this.generateContextInfo(result, 5);
-    return {
-      ...contextInfo,
-      fileContext: {
-        totalLines: result.content.split('\n').length,
-        fileSize: result.content.length,
-        lastModified: new Date(result.timestamp),
-        encoding: 'utf-8',
-        siblingChunks: [],
-      },
-    };
-  }
 
   /**
    * Create an enhanced chunk from a search result

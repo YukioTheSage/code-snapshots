@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -12,9 +13,7 @@ describe('connection file permissions', () => {
     let service: CliConnectorService | undefined;
 
     try {
-      (vscode.workspace as any).workspaceFolders = [
-        { uri: { fsPath: root } },
-      ];
+      (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: root } }];
       service = new CliConnectorService(
         {} as never,
         {
@@ -29,7 +28,7 @@ describe('connection file permissions', () => {
 
       // `import * as fs` is a getter-only namespace; patch the CommonJS module
       // the service's namespace reads from instead.
-      const fsActual = require('fs') as typeof fs;
+      const fsActual = jest.requireActual<typeof import('fs')>('fs');
       const originalWriteFileSync = fsActual.writeFileSync;
       const calls: Array<{ file: string; options: unknown }> = [];
       (fsActual as any).writeFileSync = (

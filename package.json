@@ -622,6 +622,7 @@
     "esbuild-prod": "npm run check-types && node esbuild.js --production",
     "package": "npm run esbuild-prod && vsce package",
     "lint": "eslint \"src/**/*.ts\"",
+    "lint:budget": "jest --runInBand src/__tests__/deadCodeBudget.test.ts",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { SnapshotTreeDataProvider } from '../treeView';
 
 describe('auto-snapshot classification', () => {

@@ -16,11 +16,7 @@ const MAX_LOG_ENTRIES = 1000;
 const logEntries: LogEntry[] = [];
 const logListeners = new Set<(entry: LogEntry) => void>();
 
-function recordLog(
-  level: string,
-  message: string,
-  args: unknown[],
-): void {
+function recordLog(level: string, message: string, args: unknown[]): void {
   const entry: LogEntry = {
     timestamp: new Date().toISOString(),
     level,
@@ -113,7 +109,11 @@ export function clearLogEntries(options?: {
 
   for (let index = logEntries.length - 1; index >= 0; index--) {
     const entry = logEntries[index];
-    if (options?.level && options.level !== 'all' && entry.level !== options.level) {
+    if (
+      options?.level &&
+      options.level !== 'all' &&
+      entry.level !== options.level
+    ) {
       continue;
     }
     if (!Number.isNaN(threshold) && Date.parse(entry.timestamp) >= threshold) {

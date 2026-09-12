@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { CliConnectorService } from '../cliConnectorService';
 import * as vscode from 'vscode';
 

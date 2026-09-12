@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { VectorDatabaseService } from '../vectorDatabaseService';
 import type { CodeChunk } from '../codeChunker';
 

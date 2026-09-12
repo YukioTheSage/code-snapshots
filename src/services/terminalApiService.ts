@@ -335,7 +335,9 @@ export class TerminalApiService implements TerminalApiInterface {
   private readSharedAutoSnapshotRules(): AutoSnapshotRule[] {
     const workspaceRoot = this.snapshotManager.getWorkspaceRoot();
     if (!workspaceRoot) {
-      throw new Error('No workspace folder open; auto-snapshot rules require a workspace.');
+      throw new Error(
+        'No workspace folder open; auto-snapshot rules require a workspace.',
+      );
     }
     const rules = new ConfigManager(workspaceRoot).getNested(
       'autoSnapshot.rules',
@@ -348,7 +350,9 @@ export class TerminalApiService implements TerminalApiInterface {
   ): Promise<void> {
     const workspaceRoot = this.snapshotManager.getWorkspaceRoot();
     if (!workspaceRoot) {
-      throw new Error('No workspace folder open; auto-snapshot rules require a workspace.');
+      throw new Error(
+        'No workspace folder open; auto-snapshot rules require a workspace.',
+      );
     }
     await new ConfigManager(workspaceRoot).setNested(
       'autoSnapshot.rules',
@@ -363,9 +367,7 @@ export class TerminalApiService implements TerminalApiInterface {
     ).value;
   }
 
-  async addAutoSnapshotRule(
-    rule: AutoSnapshotRule,
-  ): Promise<AutoSnapshotRule> {
+  async addAutoSnapshotRule(rule: AutoSnapshotRule): Promise<AutoSnapshotRule> {
     const rules = this.readSharedAutoSnapshotRules();
     if (rules.some((existing) => existing.pattern === rule.pattern)) {
       throw new Error(`A rule for "${rule.pattern}" already exists.`);
@@ -449,7 +451,9 @@ export class TerminalApiService implements TerminalApiInterface {
     );
   }
 
-  async runDiagnostics(): Promise<ReturnType<DiagnosticsService['runDiagnostics']>> {
+  async runDiagnostics(): Promise<
+    ReturnType<DiagnosticsService['runDiagnostics']>
+  > {
     return await this.createDiagnosticsService().runDiagnostics();
   }
 
@@ -457,7 +461,9 @@ export class TerminalApiService implements TerminalApiInterface {
     return await this.createDiagnosticsService().healthCheck();
   }
 
-  async getSystemInfo(): Promise<ReturnType<DiagnosticsService['getSystemInfo']>> {
+  async getSystemInfo(): Promise<
+    ReturnType<DiagnosticsService['getSystemInfo']>
+  > {
     return this.createDiagnosticsService().getSystemInfo();
   }
 

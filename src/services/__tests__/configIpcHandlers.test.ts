@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -20,7 +21,10 @@ describe('CliConnectorService config methods', () => {
   let root: string;
   let service: CliConnectorService;
 
-  function dispatch(method: string, data: Record<string, unknown>): Promise<any> {
+  function dispatch(
+    method: string,
+    data: Record<string, unknown>,
+  ): Promise<any> {
     return (service as any).handleCliRequest({
       id: 'config-request',
       method,
@@ -30,16 +34,17 @@ describe('CliConnectorService config methods', () => {
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelapse-config-ipc-'));
-    (vscode.workspace as any).workspaceFolders = [
-      { uri: { fsPath: root } },
-    ];
+    (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: root } }];
     // No explicitly-set VS Code values in this fixture.
     (vscode.workspace as any).getConfiguration = jest.fn(() => ({
       inspect: () => undefined,
     }));
     service = new CliConnectorService(
       {} as TerminalApiService,
-      { extension: { packageJSON: { version: '0.9.5' } }, subscriptions: [] } as any,
+      {
+        extension: { packageJSON: { version: '0.9.5' } },
+        subscriptions: [],
+      } as any,
     );
   });
 
@@ -55,9 +60,9 @@ describe('CliConnectorService config methods', () => {
     });
     expect(setResponse.success).toBe(true);
     expect(setResponse.result.value).toBe(7);
-    expect(
-      fs.existsSync(path.join(root, '.vscode', 'codelapse.json')),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(root, '.vscode', 'codelapse.json'))).toBe(
+      true,
+    );
 
     const getResponse = await dispatch('getConfig', { key: 'maxSnapshots' });
     expect(getResponse.success).toBe(true);

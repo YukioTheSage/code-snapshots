@@ -13,8 +13,6 @@ import { SemanticSearchService } from './semanticSearchService';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
 import { QueryProcessor } from './queryProcessor';
 import { ResultManager } from './resultManager';
-import { QualityMetricsCalculator } from './qualityMetricsCalculator';
-import { RelationshipAnalyzer } from './relationshipAnalyzer';
 import {
   EnhancedSemanticSearchOptions,
   AIAgentResponse,
@@ -188,8 +186,6 @@ export class CliConnectorService implements vscode.Disposable {
   private enhancedCodeChunker: EnhancedCodeChunker;
   private queryProcessor: QueryProcessor;
   private resultManager: ResultManager;
-  private qualityMetricsCalculator: QualityMetricsCalculator;
-  private relationshipAnalyzer: RelationshipAnalyzer;
 
   constructor(
     terminalApiService: TerminalApiService,
@@ -218,8 +214,6 @@ export class CliConnectorService implements vscode.Disposable {
     this.enhancedCodeChunker = new EnhancedCodeChunker();
     this.queryProcessor = new QueryProcessor();
     this.resultManager = new ResultManager();
-    this.qualityMetricsCalculator = new QualityMetricsCalculator();
-    this.relationshipAnalyzer = new RelationshipAnalyzer();
 
     // Create platform-specific socket path
     const workspaceId = this.getWorkspaceId();
@@ -653,10 +647,7 @@ export class CliConnectorService implements vscode.Disposable {
    * Resolve a caller-supplied config path while keeping it inside the
    * workspace, matching the CLI's export/import containment rule.
    */
-  private resolveConfigFilePath(
-    workspaceRoot: string,
-    input: unknown,
-  ): string {
+  private resolveConfigFilePath(workspaceRoot: string, input: unknown): string {
     if (typeof input !== 'string' || input.trim().length === 0) {
       throw new Error('A config file path is required.');
     }
@@ -682,7 +673,11 @@ export class CliConnectorService implements vscode.Disposable {
     const entries: Array<{ keyPath: string; value: unknown }> = [];
     for (const [key, child] of Object.entries(value)) {
       const keyPath = prefix ? `${prefix}.${key}` : key;
-      if (typeof child === 'object' && child !== null && !Array.isArray(child)) {
+      if (
+        typeof child === 'object' &&
+        child !== null &&
+        !Array.isArray(child)
+      ) {
         entries.push(
           ...this.flattenConfigEntries(
             child as Record<string, unknown>,
@@ -1559,10 +1554,14 @@ export class CliConnectorService implements vscode.Disposable {
       if (process.platform !== 'win32' && fs.existsSync(connectionFile)) {
         fs.chmodSync(connectionFile, 0o600);
       }
-      fs.writeFileSync(connectionFile, JSON.stringify(connectionInfo, null, 2), {
-        encoding: 'utf8',
-        mode: 0o600,
-      });
+      fs.writeFileSync(
+        connectionFile,
+        JSON.stringify(connectionInfo, null, 2),
+        {
+          encoding: 'utf8',
+          mode: 0o600,
+        },
+      );
       log(`Created connection file: ${connectionFile}`);
     } catch (error) {
       log(`Failed to create connection file: ${error}`);
@@ -1993,8 +1992,7 @@ export class CliConnectorService implements vscode.Disposable {
         maintainability: (chunk) => chunk.qualityMetrics.maintainabilityScore,
         testCoverage: (chunk) => chunk.qualityMetrics.testCoverage,
         documentation: (chunk) => chunk.qualityMetrics.documentationRatio,
-        complexity: (chunk) =>
-          (chunk.enhancedMetadata as any).complexityScore,
+        complexity: (chunk) => (chunk.enhancedMetadata as any).complexityScore,
         duplication: (chunk) => chunk.qualityMetrics.duplicationRisk,
       };
 
@@ -2019,10 +2017,7 @@ export class CliConnectorService implements vscode.Disposable {
       const overallScore =
         average((chunk) => chunk.qualityMetrics.overallScore) ?? 0;
       const recommendations: Array<Record<string, unknown>> = [];
-      if (
-        metrics.documentation !== undefined &&
-        metrics.documentation < 0.3
-      ) {
+      if (metrics.documentation !== undefined && metrics.documentation < 0.3) {
         recommendations.push({
           category: 'documentation',
           priority: 'high',
@@ -2276,7 +2271,10 @@ export class CliConnectorService implements vscode.Disposable {
 
       const filters = data.filters ?? {};
       let filtered = collected;
-      if (Array.isArray(filters.semanticTypes) && filters.semanticTypes.length > 0) {
+      if (
+        Array.isArray(filters.semanticTypes) &&
+        filters.semanticTypes.length > 0
+      ) {
         filtered = filtered.filter((chunk) =>
           filters.semanticTypes.includes(chunk.enhancedMetadata.semanticType),
         );
@@ -2285,7 +2283,7 @@ export class CliConnectorService implements vscode.Disposable {
         filtered = filtered.filter(
           (chunk) =>
             toRatio(chunk.qualityMetrics.overallScore) >=
-              filters.qualityThreshold,
+            filters.qualityThreshold,
         );
       }
       if (Array.isArray(filters.complexityRange)) {
@@ -2295,7 +2293,10 @@ export class CliConnectorService implements vscode.Disposable {
           return complexity >= min && complexity <= max;
         });
       }
-      if (Array.isArray(filters.hasPatterns) && filters.hasPatterns.length > 0) {
+      if (
+        Array.isArray(filters.hasPatterns) &&
+        filters.hasPatterns.length > 0
+      ) {
         filtered = filtered.filter((chunk) =>
           filters.hasPatterns.some((pattern: string) =>
             (chunk.enhancedMetadata.designPatterns ?? []).includes(pattern),
@@ -2463,12 +2464,10 @@ export class CliConnectorService implements vscode.Disposable {
         )
         .join('\n');
       const contextInfo = chunk.contextInfo;
-      const fileContext =
-        contextInfo?.fileContext ??
-        {
-          totalLines: lines.length,
-          fileSize: content.length,
-        };
+      const fileContext = contextInfo?.fileContext ?? {
+        totalLines: lines.length,
+        fileSize: content.length,
+      };
 
       return {
         success: true,

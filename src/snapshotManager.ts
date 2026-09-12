@@ -1679,8 +1679,7 @@ export class SnapshotManager {
           s.id !== snapshotId &&
           Object.values(s.files).some(
             (fileData) =>
-              !fileData.deleted &&
-              fileData.baseSnapshotId === snapshotId,
+              !fileData.deleted && fileData.baseSnapshotId === snapshotId,
           ),
       );
 
@@ -1694,7 +1693,9 @@ export class SnapshotManager {
               `Delete refused for ${snapshotId}: ${survivors.length} later snapshot(s) cannot be rebuilt.`,
             );
             vscode.window.showErrorMessage(
-              `Cannot delete "${snapshotToDelete.description || snapshotId}": ${survivors.length} later snapshot(s) inherit files from it and cannot be rebuilt. Nothing was deleted.`,
+              `Cannot delete "${snapshotToDelete.description || snapshotId}": ${
+                survivors.length
+              } later snapshot(s) inherit files from it and cannot be rebuilt. Nothing was deleted.`,
             );
             return false;
           }

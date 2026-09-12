@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { SnapshotManager } from '../snapshotManager';
 
 describe('search index purge wiring', () => {

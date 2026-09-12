@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { MAX_JSON_PAYLOAD_BYTES } from 'codelapse-core';
 import { CliConnectorService } from '../cliConnectorService';
 import * as vscode from 'vscode';

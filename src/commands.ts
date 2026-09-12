@@ -548,7 +548,9 @@ function registerJumpToSnapshotCommand({
         );
         return;
       }
-      const protectiveId = protectiveOutcome?.created ? protectiveOutcome.snapshot.id : undefined;
+      const protectiveId = protectiveOutcome?.created
+        ? protectiveOutcome.snapshot.id
+        : undefined;
       log(
         protectiveOutcome?.created
           ? `Protective snapshot ${protectiveId} taken before restore.`
@@ -638,7 +640,11 @@ function registerJumpToSnapshotCommand({
             const divergentBuffers = result.divergentBuffers ?? [];
             if (divergentBuffers.length > 0) {
               vscode.window.showWarningMessage(
-                `Restored, but ${divergentBuffers.length} file(s) have unsaved edits that were kept: ${divergentBuffers.join(', ')}. The workspace matches no snapshot until you save or discard them.`,
+                `Restored, but ${
+                  divergentBuffers.length
+                } file(s) have unsaved edits that were kept: ${divergentBuffers.join(
+                  ', ',
+                )}. The workspace matches no snapshot until you save or discard them.`,
               );
             }
 

@@ -46,7 +46,9 @@ describe('TerminalApiService.filterSnapshots', () => {
     const { api } = service();
 
     await expect(
-      api.filterSnapshots({ searchText: 'PARSER' }).then((r) => r.filteredCount),
+      api
+        .filterSnapshots({ searchText: 'PARSER' })
+        .then((r) => r.filteredCount),
     ).resolves.toBe(1);
     await expect(
       api.filterSnapshots({ searchText: 'crlf' }).then((r) => r.filteredCount),

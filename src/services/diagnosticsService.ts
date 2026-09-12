@@ -126,8 +126,7 @@ export class DiagnosticsService {
     const storageStats = await this.tryGetStorageStats();
     const store = {
       snapshotCount: storageStats?.snapshotCount ?? snapshots.length,
-      totalBytes:
-        storageStats?.totalSize ?? this.estimateStoreBytes(snapshots),
+      totalBytes: storageStats?.totalSize ?? this.estimateStoreBytes(snapshots),
     };
 
     const config = new ConfigManager(this.workspaceRoot).validate();
@@ -255,7 +254,13 @@ export class DiagnosticsService {
       health[check.name] = { healthy: check.ok, message: check.detail };
     }
 
-    return { healthy: report.healthy, checks: report.checks, score, issues, health };
+    return {
+      healthy: report.healthy,
+      checks: report.checks,
+      score,
+      issues,
+      health,
+    };
   }
 
   public getLogs(options?: {
@@ -266,10 +271,9 @@ export class DiagnosticsService {
     return getLogEntries(options);
   }
 
-  public clearLogs(options?: {
-    olderThan?: string;
-    level?: string;
-  }): { clearedEntries: number } {
+  public clearLogs(options?: { olderThan?: string; level?: string }): {
+    clearedEntries: number;
+  } {
     return { clearedEntries: clearLogEntries(options) };
   }
 
@@ -291,9 +295,7 @@ export class DiagnosticsService {
       metrics: {
         avgSnapshotTime: 0,
         avgSearchTime: 0,
-        memoryUsage: Math.round(
-          process.memoryUsage().heapUsed / (1024 * 1024),
-        ),
+        memoryUsage: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
         cpuUsage: 0,
         activeOperations: 0,
       },

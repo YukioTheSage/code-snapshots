@@ -62,6 +62,9 @@ jobs:
           set -o pipefail
           npm run lint 2>&1 | tee /tmp/lint.txt
           echo "### Extension lint warnings: $(grep -c ' warning ' /tmp/lint.txt || true)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Lint budget
+        # The count may only fall; this fails if a new warning is added.
+        run: npm run lint:budget
       # Must be `format:check`, not `format -- --check`. The `format` script is
       # `prettier --write`, and passing `--check` alongside `--write` makes
       # prettier REWRITE the files and exit 0 -- so the previous invocation

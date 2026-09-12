@@ -2,7 +2,13 @@ import { TerminalApiService } from '../terminalApiService';
 
 describe('tag filter semantics', () => {
   const snapshots = [
-    { id: 'both', timestamp: 2, description: '', tags: ['auth', 'feature'], files: {} },
+    {
+      id: 'both',
+      timestamp: 2,
+      description: '',
+      tags: ['auth', 'feature'],
+      files: {},
+    },
     { id: 'one', timestamp: 1, description: '', tags: ['auth'], files: {} },
   ];
 

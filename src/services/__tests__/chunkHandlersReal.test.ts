@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { CliConnectorService } from '../cliConnectorService';
 
 describe('chunk handlers return derived data', () => {
@@ -18,7 +19,12 @@ describe('chunk handlers return derived data', () => {
           performanceRisk: 10,
           securityRisk: 5,
           styleComplianceScore: 80,
-          technicalDebt: { estimatedFixTime: 1, severity: 'low', categories: [], issues: [] },
+          technicalDebt: {
+            estimatedFixTime: 1,
+            severity: 'low',
+            categories: [],
+            issues: [],
+          },
         },
         enhancedMetadata: {
           dependencies: ['node:fs'],
@@ -46,7 +52,9 @@ describe('chunk handlers return derived data', () => {
     ];
     const connector = Object.create(CliConnectorService.prototype) as any;
     connector.terminalApiService = {
-      getSnapshotFileContent: jest.fn().mockResolvedValue('export function parse() {}'),
+      getSnapshotFileContent: jest
+        .fn()
+        .mockResolvedValue('export function parse() {}'),
     };
     connector.enhancedCodeChunker = {
       chunkFileEnhanced: jest.fn().mockResolvedValue(chunks),

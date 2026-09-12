@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { EmbeddingService } from '../embeddingService';
 
 describe('embedding throttle', () => {
@@ -38,8 +39,6 @@ describe('embedding throttle', () => {
     await service.embedSearchQuery('find the parser');
 
     expect(embedContent).toHaveBeenCalledTimes(2);
-    expect(delay).toHaveBeenCalledWith(
-      (service as any).RETRY_BACKOFF_BASE_MS,
-    );
+    expect(delay).toHaveBeenCalledWith((service as any).RETRY_BACKOFF_BASE_MS);
   });
 });
