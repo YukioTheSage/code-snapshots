@@ -19,3 +19,6 @@ scripts
 GEMINI.md
 .kiro
 .claude
+# CLI black-box test sandbox: its own git repository and snapshot store. The
+# report it produced now lives at docs/superpowers/plans/2026-09-11-cli-test-report.md.
+cli-test-sandbox/
