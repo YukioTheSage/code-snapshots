@@ -9,6 +9,10 @@ import {
   SnapshotComparison,
 } from '../types/snapshot';
 import { SnapshotStorage } from './snapshotStorage';
+import {
+  selectSizePruneCandidates,
+  type SnapshotSizePruneResult,
+} from './snapshotStoreSize';
 import { GitignoreParser } from '../utils/gitignoreParser';
 import { GitIntegration } from '../git/gitIntegration';
 import { createDiff } from '../utils/diffUtils';
@@ -55,7 +59,13 @@ export class SnapshotManager {
       return this.initPromise;
     }
 
-    this.initPromise = this.loadSnapshots();
+    this.initPromise = (async () => {
+      await this.loadSnapshots();
+      // A store can already be over the configured size when a session opens,
+      // and nothing else revisits it until the next take. The lock is free
+      // here: initialize is the outermost call.
+      await this.withWriteLock(() => this.enforceSnapshotSizeLimitInternal());
+    })();
     await this.initPromise;
     this.initialized = true;
   }
@@ -435,6 +445,10 @@ export class SnapshotManager {
       }
     }
 
+    // Then the byte limit: a store can be inside its snapshot count and still
+    // hold more bytes than the user allowed.
+    await this.enforceSnapshotSizeLimitInternal(snapshot.id);
+
     return snapshot;
   }
 
@@ -707,6 +721,126 @@ export class SnapshotManager {
     }
 
     await this.saveSnapshotIndex();
+  }
+
+  /**
+   * Remove the oldest snapshots until the store fits maxSnapshotStoreBytes.
+   *
+   * Called with the write lock already held: from `takeSnapshotInternal` and
+   * from `initialize`. The snapshot the store is positioned at is never a
+   * candidate, and a candidate is only deleted after `materializeDependents`
+   * has rewritten every surviving reference to it -- when that cannot be done
+   * nothing is deleted and the excess is kept.
+   *
+   * `justCreatedSnapshotId` is the snapshot the caller has this moment written.
+   * Its own trim must never delete it: it is dropped from the candidates by id
+   * rather than by its position among them.
+   */
+  private async enforceSnapshotSizeLimitInternal(
+    justCreatedSnapshotId?: string,
+  ): Promise<SnapshotSizePruneResult> {
+    const limitBytes = this.config.get('maxSnapshotStoreBytes');
+    if (!(limitBytes > 0)) {
+      return {
+        bytesBefore: 0,
+        bytesAfter: 0,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
+    const sizes = this.storage.measureSnapshotStore();
+    if (sizes.totalBytes <= limitBytes) {
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
+    // The array is already in store order -- index order on load, append on
+    // take, an order-preserving filter on delete -- and the selector consumes
+    // the order it is handed, so it is passed straight through and never
+    // re-sorted. Only the snapshot this take has just written leaves early,
+    // and by id, not by position.
+    const pruneable = this.snapshots.filter(
+      (snapshot) => snapshot.id !== justCreatedSnapshotId,
+    );
+
+    const candidates = selectSizePruneCandidates(
+      pruneable,
+      sizes,
+      limitBytes,
+      this.getCurrentSnapshot()?.id ?? null,
+    );
+
+    if (candidates.length === 0) {
+      console.warn(
+        'Retention: the store holds ' +
+          sizes.totalBytes +
+          ' bytes against a ' +
+          limitBytes +
+          ' byte limit and no snapshot is removable; the snapshot the store is positioned at is never pruned.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: true,
+      };
+    }
+
+    const removable = new Set(candidates);
+    const materialization = await this.materializeDependents(removable);
+    if (!materialization.ok) {
+      console.warn(
+        'Retention: keeping ' +
+          this.snapshots.length +
+          ' snapshots. The store exceeds its ' +
+          limitBytes +
+          ' byte limit but a survivor of the ' +
+          candidates.length +
+          ' oldest cannot be rebuilt; nothing was deleted.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: true,
+      };
+    }
+
+    // Persist the rewrites before anything is deleted: a survivor whose base is
+    // gone cannot be rebuilt afterwards.
+    for (const survivor of materialization.touched) {
+      await this.storage.saveSnapshot(survivor);
+    }
+    // Candidates reference each other down the chain, so one candidate whose
+    // base is another candidate is not an orphan: it leaves in this batch too.
+    // Only a dependent outside the batch could be left behind, and the
+    // materialization above already rebuilt those.
+    for (const id of candidates) {
+      await this.deleteSnapshotInternal(id, { alsoDeleting: removable });
+    }
+
+    const after = this.storage.measureSnapshotStore();
+    console.log(
+      'Retention: trimmed ' +
+        candidates.length +
+        ' snapshot(s); the store now holds ' +
+        after.totalBytes +
+        ' bytes against a ' +
+        limitBytes +
+        ' byte limit.',
+    );
+
+    return {
+      bytesBefore: sizes.totalBytes,
+      bytesAfter: after.totalBytes,
+      trimmed: candidates,
+      stillOverLimit: after.totalBytes > limitBytes,
+    };
   }
 
   /**
