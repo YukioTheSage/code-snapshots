@@ -34,6 +34,7 @@ import { RelationshipAnalyzer } from './relationshipAnalyzer';
 import { QueryProcessor, QueryContext } from './queryProcessor';
 import { ResultManager } from './resultManager';
 import { throwIfCancelled } from '../utils/cancellation';
+import { getWorkspaceId } from './workspaceIdentity';
 
 export interface SemanticSearchOptions {
   query: string;
@@ -129,7 +130,12 @@ export class SemanticSearchService implements vscode.Disposable {
     this.context = context;
     this.codeChunker = new CodeChunker();
     this.embeddingService = new EmbeddingService(credentialsManager);
-    this.vectorDatabaseService = new VectorDatabaseService(credentialsManager);
+    const workspaceRoot =
+      this.snapshotManager.getWorkspaceRoot?.() ?? null;
+    this.vectorDatabaseService = new VectorDatabaseService(
+      credentialsManager,
+      getWorkspaceId(workspaceRoot),
+    );
 
     // Initialize enhanced services for AI agent optimization
     this.enhancedCodeChunker = new EnhancedCodeChunker();

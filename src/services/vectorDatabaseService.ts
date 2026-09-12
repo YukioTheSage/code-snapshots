@@ -17,6 +17,13 @@ interface CodeChunkMetadata extends RecordMetadata {
   startLine: number;
   endLine: number;
   timestamp: number;
+  /**
+   * The workspace these vectors belong to. One Pinecone index serves every
+   * workspace that shares an API key, so without this a query returned chunks
+   * from unrelated repositories that happened to be indexed under the same
+   * account.
+   */
+  workspaceId: string;
   // Note: symbols are now handled separately during vector creation
 }
 
@@ -36,11 +43,23 @@ export class VectorDatabaseService {
   private readonly INDEX_READY_POLL_INTERVAL_MS = 5000;
 
   private credentialsManager: CredentialsManager;
+  private workspaceId = '';
   private pineconeClient: Pinecone | null = null;
   private index: Index | null = null;
 
-  constructor(credentialsManager: CredentialsManager) {
-    this.credentialsManager = credentialsManager;
+  constructor(
+    credentialsManagerOrWorkspaceId: CredentialsManager | string,
+    workspaceId = '',
+  ) {
+    if (typeof credentialsManagerOrWorkspaceId === 'string') {
+      // Direct workspace-scope construction (unit tests and callers that do
+      // not need the deferred credentials path).
+      this.credentialsManager = {} as CredentialsManager;
+      this.workspaceId = credentialsManagerOrWorkspaceId;
+    } else {
+      this.credentialsManager = credentialsManagerOrWorkspaceId;
+      this.workspaceId = workspaceId;
+    }
     // Note: Initialization is deferred until first use via ensureInitialized()
   }
 
@@ -181,6 +200,7 @@ export class VectorDatabaseService {
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         timestamp,
+        workspaceId: this.workspaceId,
       };
 
       // Only add symbols if they exist
@@ -233,8 +253,11 @@ export class VectorDatabaseService {
       languages,
     } = options;
 
-    // Build Pinecone filter
-    const filter: Record<string, any> = {};
+    // Applied first and never widened by options: the workspace boundary is not
+    // one of the criteria being searched.
+    const filter: Record<string, any> = {
+      workspaceId: { $eq: this.workspaceId },
+    };
     if (languages?.length) filter.language = { $in: languages };
     if (snapshotIds?.length) filter.snapshotId = { $in: snapshotIds };
 

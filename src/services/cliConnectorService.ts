@@ -20,6 +20,7 @@ import {
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunk } from '../types/enhancedChunking';
 import { log, subscribeToLogEntries } from '../logger';
+import { getWorkspaceId } from './workspaceIdentity';
 import type { Snapshot } from '../snapshotManager';
 import type {
   API as GitAPI,
@@ -1571,21 +1572,7 @@ export class CliConnectorService implements vscode.Disposable {
    * Get unique workspace identifier
    */
   private getWorkspaceId(): string {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (workspaceRoot) {
-      // 128 bits, not the first 32: the pipe name is the only thing keeping two
-      // workspaces' servers apart, and 32 bits collides around 2^16 paths.
-      // The client learns the path from the connection file, so widening it
-      // breaks nothing.
-      return crypto
-        .createHash('sha256')
-        .update(workspaceRoot)
-        .digest('hex')
-        .substring(0, 32);
-    }
-
-    // Fallback to random identifier
-    return Math.random().toString(36).substring(2, 10);
+    return getWorkspaceId(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
   }
 
   /**
