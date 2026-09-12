@@ -14,6 +14,10 @@ import {
   validateSnapshot,
   validateSnapshotIndex,
 } from '../validation/snapshotValidation';
+import {
+  measureSnapshotStore,
+  type SnapshotStoreSizes,
+} from './snapshotStoreSize';
 
 /**
  * Standalone snapshot storage (no VS Code dependencies)
@@ -43,6 +47,16 @@ export class SnapshotStorage {
    */
   public getSnapshotDirectory(): string {
     return this.snapshotDirectory;
+  }
+
+  /**
+   * Byte accounting for this store.
+   *
+   * The retention paths read it only when `maxSnapshotStoreBytes` is
+   * non-zero, so a store that never sets a limit never walks the directory.
+   */
+  public measureSnapshotStore(): SnapshotStoreSizes {
+    return measureSnapshotStore(this.snapshotDirectory);
   }
 
   /**

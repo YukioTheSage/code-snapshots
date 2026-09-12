@@ -9,6 +9,7 @@ export * from './types/config';
 // Storage
 export { SnapshotStorage } from './storage/snapshotStorage';
 export { SnapshotManager } from './storage/snapshotManager';
+export * from './storage/snapshotStoreSize';
 
 // Configuration
 export { ConfigManager } from './config/configManager';
