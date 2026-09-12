@@ -2041,6 +2041,25 @@ export class SnapshotManager {
   }
 
   /**
+   * Put the pre-rewrite file maps of `originals` back.
+   *
+   * Memory has to match disk whenever a materialization was not persisted: the
+   * next enforcement pass reads the dependents out of these maps, and a
+   * materialized copy still in memory would hide the base the store still needs
+   * -- that pass would find no dependent, skip the save and purge the base.
+   */
+  private restoreOriginalFiles(
+    originals: Map<string, Snapshot['files']>,
+  ): void {
+    for (const [id, files] of originals) {
+      const target = this.snapshots.find((snapshot) => snapshot.id === id);
+      if (target) {
+        target.files = files;
+      }
+    }
+  }
+
+  /**
    * Rewrites the delta entries of survivors that point into `pruned` into full
    * content, resolving while the chain is still intact, so deleting those bases
    * loses nothing. Cancels on the first unresolvable entry: a partially
@@ -2049,10 +2068,17 @@ export class SnapshotManager {
    * Only entries carrying a `baseSnapshotId` are deltas. A `{ deleted: true }`
    * marker records that the file was gone at that point and has no base to
    * repair, so it keeps its marker.
+   *
+   * `originals` maps every touched snapshot id to its pre-rewrite file map, so
+   * a caller that cannot persist the rewrites can put memory back with
+   * `restoreOriginalFiles`. On `ok: false` they have already been restored
+   * here and there is nothing to persist.
    */
-  private async materializeDependents(
-    pruned: Set<string>,
-  ): Promise<{ ok: boolean; touched: Snapshot[] }> {
+  private async materializeDependents(pruned: Set<string>): Promise<{
+    ok: boolean;
+    touched: Snapshot[];
+    originals: Map<string, Snapshot['files']>;
+  }> {
     const originals = new Map<string, Snapshot['files']>();
     const touched: Snapshot[] = [];
     for (const snapshot of this.snapshots) {
@@ -2087,13 +2113,8 @@ export class SnapshotManager {
           log(
             `Prune: cannot materialize ${relativePath} of ${snapshot.id}: base ${fileData.baseSnapshotId} is unreadable or does not record it; persisting no rewrite of the survivors.`,
           );
-          for (const [id, files] of originals) {
-            const target = this.snapshots.find((s) => s.id === id);
-            if (target) {
-              target.files = files;
-            }
-          }
-          return { ok: false, touched: [] };
+          this.restoreOriginalFiles(originals);
+          return { ok: false, touched: [], originals };
         }
         if (!originals.has(snapshot.id)) {
           // Shallow copy is enough: only the rewritten keys are replaced below.
@@ -2106,7 +2127,7 @@ export class SnapshotManager {
         touched.push(snapshot);
       }
     }
-    return { ok: true, touched };
+    return { ok: true, touched, originals };
   }
 
   /**
@@ -2273,23 +2294,64 @@ export class SnapshotManager {
     }
 
     // Persist the rewrites before anything is deleted: a survivor whose base is
-    // gone cannot be rebuilt afterwards.
-    for (const survivor of materialization.touched) {
-      await this.storage.saveSnapshotData(survivor);
+    // gone cannot be rebuilt afterwards. Persisting can fail part-way -- the
+    // saves that landed stay on disk, and every touched survivor is rolled back
+    // in memory below, so memory may lag disk, never lead it, and the next trim
+    // redoes them. Nothing is purged until all of them are written.
+    let persisted = 0;
+    try {
+      for (const survivor of materialization.touched) {
+        await this.storage.saveSnapshotData(survivor);
+        persisted += 1;
+      }
+    } catch (error) {
+      this.restoreOriginalFiles(materialization.originals);
+      const after = this.storage.measureSnapshotStore();
+      log(
+        'Size retention: the trim stopped. ' +
+          persisted +
+          ' of ' +
+          materialization.touched.length +
+          ' rebuilt survivor(s) were persisted before the failure: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. The rewrites were rolled back in memory, so the next trim redoes them; nothing was deleted.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: after.totalBytes,
+        trimmed: [],
+        stillOverLimit: after.totalBytes > limitBytes,
+      };
     }
 
-    const removedSnapshots = this.snapshots.filter((snapshot) =>
-      removable.has(snapshot.id),
-    );
-    this.snapshots = this.snapshots.filter(
-      (snapshot) => !removable.has(snapshot.id),
-    );
-
+    // Purge newest first and stop at the first failure: a candidate's base is
+    // its predecessor, so removing the newest first means a failure leaves the
+    // base of every surviving candidate in place, while deleting oldest-first --
+    // or continuing past the failure -- would remove the base of a candidate
+    // that has to stay. A snapshot leaves `this.snapshots` only after its
+    // directory is gone, so the index written below lists exactly what survives.
+    //
     // No detachIfActiveSnapshotRemoved() here: the candidate selection excludes
     // the active snapshot by construction, so the workspace cannot be left
     // pointing at something that was just deleted.
-    for (const snapshot of removedSnapshots) {
-      await this.purgeSnapshot(snapshot.id);
+    const trimmed: string[] = [];
+    for (const id of [...candidates].reverse()) {
+      try {
+        await this.purgeSnapshot(id);
+      } catch (error) {
+        log(
+          'Size retention: could not delete ' +
+            id +
+            ' while trimming the store to ' +
+            limitBytes +
+            ' bytes: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The trim stops here; no older candidate is removed.',
+        );
+        break;
+      }
+      this.snapshots = this.snapshots.filter((snapshot) => snapshot.id !== id);
+      trimmed.push(id);
     }
 
     await this.saveSnapshotIndex();
@@ -2298,7 +2360,7 @@ export class SnapshotManager {
     const after = this.storage.measureSnapshotStore();
     log(
       'Size retention: trimmed ' +
-        removedSnapshots.length +
+        trimmed.length +
         ' snapshot(s); the store now holds ' +
         after.totalBytes +
         ' bytes against a ' +
@@ -2310,7 +2372,7 @@ export class SnapshotManager {
     return {
       bytesBefore: sizes.totalBytes,
       bytesAfter: after.totalBytes,
-      trimmed: candidates,
+      trimmed,
       stillOverLimit: after.totalBytes > limitBytes,
     };
   }

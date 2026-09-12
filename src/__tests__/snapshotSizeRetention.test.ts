@@ -41,6 +41,20 @@ function snapshot(
   return { id, timestamp, description: id, files };
 }
 
+/** Base ids the listed snapshots reference but that are not among them. */
+function danglingBaseIds(snapshots: Snapshot[]): string[] {
+  const live = new Set(snapshots.map((snapshot) => snapshot.id));
+  const dangling: string[] = [];
+  for (const snapshot of snapshots) {
+    for (const entry of Object.values(snapshot.files)) {
+      if (entry.baseSnapshotId && !live.has(entry.baseSnapshotId)) {
+        dangling.push(entry.baseSnapshotId);
+      }
+    }
+  }
+  return dangling;
+}
+
 describe('size-based retention in the extension', () => {
   afterEach(() => {
     limitMock.mockReturnValue(0);
@@ -308,5 +322,81 @@ describe('size-based retention in the extension', () => {
     expect(source).toMatch(
       /await snapshotManager\.enforceSnapshotSizeLimitOnActivation\(\)/,
     );
+  });
+
+  it('leaves no orphan when a purge fails, stopping newest first', async () => {
+    const fixtures = [
+      snapshot('a', { 'f.ts': { content: 'A' } }, 1),
+      snapshot('b', { 'f.ts': { baseSnapshotId: 'a' } }, 2),
+      snapshot('c', { 'f.ts': { baseSnapshotId: 'b' } }, 3),
+      snapshot('d', { 'f.ts': { baseSnapshotId: 'c' } }, 4),
+    ];
+    const { manager, storage } = await managerWithStore(fixtures, 'd', [
+      storeSizes({ a: 600, b: 300, c: 300, d: 300 }),
+      storeSizes({ a: 600, b: 300 }),
+    ]);
+    limitMock.mockReturnValue(100);
+    storage.getSnapshotFileContent.mockResolvedValue('A');
+    storage.deleteSnapshotData.mockImplementation((id: string) =>
+      id === 'b'
+        ? Promise.reject(new Error('EPERM: operation not permitted'))
+        : Promise.resolve(),
+    );
+
+    const result = await manager.enforceSnapshotSizeLimitOnActivation();
+
+    // Newest first: 'c' went, then 'b' refused and stopped the batch, so 'a' --
+    // the base 'b' stores its delta against -- was never touched.
+    expect(result.trimmed).toEqual(['c']);
+    expect(manager.getSnapshots().map((s) => s.id)).toEqual(['a', 'b', 'd']);
+    expect(
+      storage.deleteSnapshotData.mock.calls.map((call) => call[0]),
+    ).toEqual(['c', 'b']);
+
+    // What a fresh manager would load: the index written after the stop. Every
+    // base a survivor names is in it, and 'd' -- whose base 'c' was purged --
+    // was materialized before the purge.
+    const indexCalls = storage.saveSnapshotIndex.mock.calls;
+    const savedIndex = indexCalls[indexCalls.length - 1]?.[0] as Snapshot[];
+    expect(savedIndex.map((s) => s.id)).toEqual(['a', 'b', 'd']);
+    expect(danglingBaseIds(savedIndex)).toEqual([]);
+    expect(savedIndex.find((s) => s.id === 'd')?.files['f.ts']).toEqual({
+      content: 'A',
+    });
+  });
+
+  it('rolls the rewrite back when a survivor save fails, so a later pass does not purge the base', async () => {
+    const fixtures = [
+      snapshot('a', { 'f.ts': { content: 'A' } }, 1),
+      snapshot('b', { 'f.ts': { baseSnapshotId: 'a' } }, 2),
+      snapshot('c', { 'f.ts': { baseSnapshotId: 'b' } }, 3),
+    ];
+    const { manager, storage } = await managerWithStore(fixtures, 'c', [
+      storeSizes({ a: 600, b: 300, c: 300 }),
+      storeSizes({ a: 600, b: 300, c: 300 }),
+      storeSizes({ a: 600, b: 300, c: 300 }),
+      storeSizes({ a: 600, b: 300, c: 300 }),
+    ]);
+    limitMock.mockReturnValue(900);
+    storage.getSnapshotFileContent.mockResolvedValue('A');
+    storage.saveSnapshotData.mockRejectedValue(
+      new Error('ENOSPC: no space left on device'),
+    );
+
+    const firstPass = await manager.enforceSnapshotSizeLimitOnActivation();
+    const secondPass = await manager.enforceSnapshotSizeLimitOnActivation();
+
+    // 'b' is the survivor of the candidate 'a'. Its rewrite never reached disk,
+    // so the second pass has to see the dependency again through the rolled
+    // back memory, retry the rewrite and refuse to purge 'a'.
+    expect(firstPass.trimmed).toEqual([]);
+    expect(secondPass.trimmed).toEqual([]);
+    expect(
+      storage.saveSnapshotData.mock.calls.map(
+        (call) => (call[0] as Snapshot).id,
+      ),
+    ).toEqual(['b', 'b']);
+    expect(storage.deleteSnapshotData).not.toHaveBeenCalled();
+    expect(manager.getSnapshots().map((s) => s.id)).toEqual(['a', 'b', 'c']);
   });
 });
