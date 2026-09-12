@@ -47,6 +47,13 @@ export const STANDALONE_METHODS: ReadonlySet<string> = new Set([
   'removeAutoSnapshotRule',
   'toggleAutoSnapshotRule',
   'testAutoSnapshotRule',
+  'runDiagnostics',
+  'healthCheck',
+  'getSystemInfo',
+  'getPerformanceMetrics',
+  'getLogs',
+  'clearLogs',
+  'streamLogs',
   'getSnapshotFileContent',
   'getConfig',
   'setConfig',
@@ -703,6 +710,49 @@ export class UnifiedClient {
             return await this.standaloneHandler.testAutoSnapshotRule(
               payload as any,
             );
+          }
+          throw new Error('Handler not initialized');
+
+        case 'runDiagnostics':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.runDiagnostics();
+          }
+          throw new Error('Handler not initialized');
+
+        case 'healthCheck':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.healthCheck();
+          }
+          throw new Error('Handler not initialized');
+
+        case 'getSystemInfo':
+          if (this.standaloneHandler) {
+            return { systemInfo: await this.standaloneHandler.getSystemInfo() };
+          }
+          throw new Error('Handler not initialized');
+
+        case 'getPerformanceMetrics':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.getPerformanceMetrics();
+          }
+          throw new Error('Handler not initialized');
+
+        case 'getLogs':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.getLogs(payload as any);
+          }
+          throw new Error('Handler not initialized');
+
+        case 'clearLogs':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.clearLogs(payload as any);
+          }
+          throw new Error('Handler not initialized');
+
+        case 'streamLogs':
+          if (this.standaloneHandler) {
+            await this.standaloneHandler.streamLogs();
+            return { streaming: true };
           }
           throw new Error('Handler not initialized');
 

@@ -19,7 +19,7 @@ import {
   AIAgentResponse,
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunk } from '../types/enhancedChunking';
-import { log } from '../logger';
+import { log, subscribeToLogEntries } from '../logger';
 import type { Snapshot } from '../snapshotManager';
 import type {
   API as GitAPI,
@@ -171,6 +171,8 @@ export class CliConnectorService implements vscode.Disposable {
   private connections: Set<net.Socket> = new Set();
   private authenticatedSockets: Set<net.Socket> = new Set();
   private authToken: string;
+  private logUnsubscribe?: () => void;
+  private logStreaming = false;
   private terminalApiService: TerminalApiService;
   private context: vscode.ExtensionContext;
   private socketPath: string;
@@ -199,6 +201,15 @@ export class CliConnectorService implements vscode.Disposable {
 
     // Generate authentication token for IPC security
     this.authToken = crypto.randomBytes(32).toString('hex');
+
+    // `diagnostics logs --follow` asks for streamed entries; the buffer in the
+    // logger is the only source, so register once and forward only while a
+    // client has requested the stream.
+    this.logUnsubscribe = subscribeToLogEntries((entry) => {
+      if (this.logStreaming) {
+        this.broadcastEvent({ type: 'log', data: entry });
+      }
+    });
 
     // Initialize enhanced services
     this.enhancedCodeChunker = new EnhancedCodeChunker();
@@ -384,6 +395,30 @@ export class CliConnectorService implements vscode.Disposable {
           break;
         case 'testAutoSnapshotRule':
           result = await this.terminalApiService.testAutoSnapshotRule(data);
+          break;
+        case 'runDiagnostics':
+          result = await this.terminalApiService.runDiagnostics();
+          break;
+        case 'healthCheck':
+          result = await this.terminalApiService.healthCheck();
+          break;
+        case 'getSystemInfo':
+          result = {
+            systemInfo: await this.terminalApiService.getSystemInfo(),
+          };
+          break;
+        case 'getPerformanceMetrics':
+          result = await this.terminalApiService.getPerformanceMetrics();
+          break;
+        case 'getLogs':
+          result = this.terminalApiService.getLogs(data);
+          break;
+        case 'clearLogs':
+          result = this.terminalApiService.clearLogs(data);
+          break;
+        case 'streamLogs':
+          this.logStreaming = true;
+          result = { streaming: true };
           break;
         case 'takeSnapshot':
           result = await this.terminalApiService.takeSnapshot(data);
@@ -3299,6 +3334,10 @@ export class CliConnectorService implements vscode.Disposable {
    */
   dispose(): void {
     log('Disposing CLI connector service...');
+
+    this.logUnsubscribe?.();
+    this.logUnsubscribe = undefined;
+    this.logStreaming = false;
 
     // Close all connections
     this.connections.forEach((socket) => {

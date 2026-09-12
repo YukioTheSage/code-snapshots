@@ -209,6 +209,9 @@ export class DiagnosticsCommands {
 
           if (logs.length === 0) {
             console.log(chalk.yellow('No logs found'));
+            if (result.message) {
+              console.log(chalk.gray(result.message));
+            }
             return;
           }
 

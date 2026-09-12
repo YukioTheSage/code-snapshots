@@ -34,7 +34,7 @@ describe('per-method IPC fallback', () => {
     expect(STANDALONE_METHODS.has('getConfig')).toBe(true);
     expect(STANDALONE_METHODS.has('filterSnapshots')).toBe(true);
     expect(STANDALONE_METHODS.has('searchSnapshots')).toBe(false);
-    expect(STANDALONE_METHODS.has('runDiagnostics')).toBe(false);
+    expect(STANDALONE_METHODS.has('runDiagnostics')).toBe(true);
   });
 
   it('routes an unsupported method over IPC instead of failing', async () => {

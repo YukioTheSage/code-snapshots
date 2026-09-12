@@ -862,6 +862,283 @@ export class StandaloneHandler {
     );
     return { matched, matches: matched };
   }
+  private async buildStandaloneDiagnosticsReport(): Promise<{
+    generatedAt: string;
+    healthy: boolean;
+    checks: Array<{ name: string; ok: boolean; detail: string }>;
+    integrity: {
+      brokenSnapshotIds: string[];
+      missingBaseSnapshotIds: string[];
+      unrecoverableFileCount: number;
+      perSnapshot: Record<string, string[]>;
+    };
+    store: { snapshotCount: number; totalBytes: number };
+    config: { valid: boolean; errors: string[] };
+    git: { available: boolean; branch?: string };
+    version: string;
+  }> {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+
+    const snapshots = await this.snapshotManager.getSnapshots();
+    const stats = await this.snapshotManager.getStorageStats();
+    const ids = new Set(snapshots.map((snapshot) => snapshot.id));
+    const brokenSnapshotIds = new Set<string>();
+    const missingBaseSnapshotIds = new Set<string>();
+    const perSnapshot: Record<string, string[]> = {};
+    let unrecoverableFileCount = 0;
+
+    for (const snapshot of snapshots) {
+      for (const [relativePath, fileData] of Object.entries(snapshot.files)) {
+        if (fileData.deleted || fileData.isBinary) {
+          continue;
+        }
+        if (typeof fileData.content === 'string') {
+          continue;
+        }
+        const hasMissingBase =
+          fileData.baseSnapshotId !== undefined &&
+          !ids.has(fileData.baseSnapshotId);
+        if (!fileData.baseSnapshotId || hasMissingBase) {
+          unrecoverableFileCount++;
+          brokenSnapshotIds.add(snapshot.id);
+          perSnapshot[snapshot.id] = [
+            ...(perSnapshot[snapshot.id] ?? []),
+            relativePath,
+          ];
+          if (fileData.baseSnapshotId) {
+            missingBaseSnapshotIds.add(fileData.baseSnapshotId);
+          }
+        }
+      }
+    }
+
+    const integrity = {
+      brokenSnapshotIds: [...brokenSnapshotIds].sort(),
+      missingBaseSnapshotIds: [...missingBaseSnapshotIds].sort(),
+      unrecoverableFileCount,
+      perSnapshot,
+    };
+    const config = this.configManager
+      ? this.configManager.validate()
+      : { valid: true, errors: [] as string[] };
+    const git = this.getStandaloneGitInfo();
+    const workspaceOpen = Boolean(this.workspaceRoot);
+
+    const checks = [
+      {
+        name: 'snapshot-integrity',
+        ok: unrecoverableFileCount === 0,
+        detail:
+          unrecoverableFileCount === 0
+            ? 'all snapshot content is reconstructable'
+            : `${unrecoverableFileCount} file(s) across ${
+                integrity.brokenSnapshotIds.length
+              } snapshot(s) cannot be reconstructed; missing base(s): ${
+                integrity.missingBaseSnapshotIds.join(', ') || 'none'
+              }`,
+      },
+      {
+        name: 'snapshot-store',
+        ok: true,
+        detail: `${stats.snapshotCount} snapshot(s), ${stats.totalSize} bytes`,
+      },
+      {
+        name: 'config',
+        ok: config.valid,
+        detail: config.valid ? 'configuration is valid' : config.errors.join('; '),
+      },
+      {
+        name: 'git',
+        ok: true,
+        detail: git.available
+          ? `repository on branch ${git.branch ?? '(detached)'}`
+          : 'not a git repository (informational)',
+      },
+      {
+        name: 'workspace',
+        ok: workspaceOpen,
+        detail: workspaceOpen ? this.workspaceRoot! : 'no workspace folder open',
+      },
+    ];
+
+    return {
+      generatedAt: new Date().toISOString(),
+      healthy: checks.every((check) => check.ok),
+      checks,
+      integrity,
+      store: {
+        snapshotCount: stats.snapshotCount,
+        totalBytes: stats.totalSize,
+      },
+      config,
+      git,
+      version: process.env.npm_package_version || '0.0.0',
+    };
+  }
+
+  private getStandaloneGitInfo(): { available: boolean; branch?: string } {
+    try {
+      if (!this.gitIntegration?.isGitRepository()) {
+        return { available: false };
+      }
+      const branch = this.gitIntegration.getCurrentBranch();
+      return { available: true, ...(branch ? { branch } : {}) };
+    } catch {
+      return { available: false };
+    }
+  }
+
+  public async getSystemInfo(): Promise<{
+    version: string;
+    workspace: string | null;
+    snapshotLocation: string;
+    totalSnapshots: number;
+    diskUsage: string;
+    gitRepository: boolean;
+    gitBranch?: string;
+    extensionVersion: string;
+    nodeVersion: string;
+    platform: string;
+    architecture: string;
+  }> {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+    const stats = await this.snapshotManager.getStorageStats();
+    const git = this.getStandaloneGitInfo();
+    const formatBytes = (bytes: number): string => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+    const version = process.env.npm_package_version || '0.0.0';
+
+    return {
+      version,
+      extensionVersion: version,
+      workspace: this.workspaceRoot ?? null,
+      snapshotLocation:
+        this.configManager?.get('snapshotLocation') ?? '.snapshots',
+      totalSnapshots: stats.snapshotCount,
+      diskUsage: formatBytes(stats.totalSize),
+      gitRepository: git.available,
+      ...(git.branch ? { gitBranch: git.branch } : {}),
+      nodeVersion: process.version,
+      platform: process.platform,
+      architecture: process.arch,
+    };
+  }
+
+  public async runDiagnostics(): Promise<Record<string, unknown>> {
+    const report = await this.buildStandaloneDiagnosticsReport();
+    const diagnostics = report.checks.map((check) => ({
+      category: check.name,
+      level: check.ok ? 'info' : 'error',
+      message: check.detail,
+      details: { ok: check.ok },
+      timestamp: report.generatedAt,
+    }));
+
+    return {
+      ...report,
+      diagnostics,
+      systemInfo: await this.getSystemInfo(),
+      summary: {
+        info: report.checks.filter((check) => check.ok).length,
+        warnings: 0,
+        errors: report.checks.filter((check) => !check.ok).length,
+      },
+    };
+  }
+
+  public async healthCheck(): Promise<Record<string, unknown>> {
+    const report = await this.buildStandaloneDiagnosticsReport();
+    const errors = report.checks.filter((check) => !check.ok);
+    const health: Record<
+      string,
+      { healthy: boolean; message: string }
+    > = {};
+    for (const check of report.checks) {
+      health[check.name] = { healthy: check.ok, message: check.detail };
+    }
+
+    return {
+      healthy: report.healthy,
+      checks: report.checks,
+      score: Math.max(0, 100 - errors.length * 25),
+      issues: errors.map((check) => ({ message: check.detail })),
+      health,
+    };
+  }
+
+  public async getPerformanceMetrics(): Promise<{
+    metrics: {
+      avgSnapshotTime: number;
+      avgSearchTime: number;
+      memoryUsage: number;
+      cpuUsage: number;
+      activeOperations: number;
+    };
+    history: Array<{
+      timestamp: string;
+      snapshotTime: number;
+      searchTime: number;
+    }>;
+  }> {
+    return {
+      metrics: {
+        avgSnapshotTime: 0,
+        avgSearchTime: 0,
+        memoryUsage: Math.round(
+          process.memoryUsage().heapUsed / (1024 * 1024),
+        ),
+        cpuUsage: 0,
+        activeOperations: 0,
+      },
+      history: [],
+    };
+  }
+
+  public async getLogs(_options?: {
+    lines?: number;
+    level?: string;
+    since?: string;
+  }): Promise<{
+    logs: Array<{
+      timestamp: string;
+      level: string;
+      message: string;
+      data?: Record<string, unknown>;
+    }>;
+    totalEntries: number;
+    message: string;
+  }> {
+    return {
+      logs: [],
+      totalEntries: 0,
+      message:
+        'Standalone mode has no extension log buffer; run diagnostics through the extension over IPC to read logs.',
+    };
+  }
+
+  public async clearLogs(_options?: {
+    olderThan?: string;
+    level?: string;
+  }): Promise<{ clearedEntries: number; message: string }> {
+    return {
+      clearedEntries: 0,
+      message:
+        'Standalone mode has no extension log buffer; there are no logs to clear.',
+    };
+  }
+
+  public async streamLogs(): Promise<void> {
+    throw new Error(
+      'Streaming logs requires the CodeLapse extension over IPC; standalone mode has no log source.',
+    );
+  }
   /**
    * Export configuration
    */

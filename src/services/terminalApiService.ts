@@ -3,6 +3,7 @@ import { AutoSnapshotRule, ConfigManager } from 'codelapse-core';
 import { minimatch } from 'minimatch';
 import { SnapshotManager, Snapshot } from '../snapshotManager';
 import { resolveSetting } from '../configSource';
+import { DiagnosticsService } from './diagnosticsService';
 import { SemanticSearchService } from './semanticSearchService';
 import { log } from '../logger';
 import {
@@ -424,6 +425,55 @@ export class TerminalApiService implements TerminalApiInterface {
       minimatch(candidate, options.pattern, { dot: true }),
     );
     return { matched, matches: matched };
+  }
+  private createDiagnosticsService(): DiagnosticsService {
+    let extensionVersion = process.env.npm_package_version || '0.0.0';
+    try {
+      extensionVersion =
+        vscode.extensions?.getExtension('YukioTheSage.vscode-snapshots')
+          ?.packageJSON?.version ?? extensionVersion;
+    } catch {
+      // The package version is only display metadata; diagnostics still work.
+    }
+
+    return new DiagnosticsService(
+      this.snapshotManager,
+      this.snapshotManager.getWorkspaceRoot() ?? '',
+      extensionVersion,
+    );
+  }
+
+  async runDiagnostics(): Promise<ReturnType<DiagnosticsService['runDiagnostics']>> {
+    return await this.createDiagnosticsService().runDiagnostics();
+  }
+
+  async healthCheck(): Promise<ReturnType<DiagnosticsService['healthCheck']>> {
+    return await this.createDiagnosticsService().healthCheck();
+  }
+
+  async getSystemInfo(): Promise<ReturnType<DiagnosticsService['getSystemInfo']>> {
+    return this.createDiagnosticsService().getSystemInfo();
+  }
+
+  async getPerformanceMetrics(): Promise<
+    ReturnType<DiagnosticsService['getPerformanceMetrics']>
+  > {
+    return await this.createDiagnosticsService().getPerformanceMetrics();
+  }
+
+  getLogs(options?: {
+    lines?: number;
+    level?: string;
+    since?: string;
+  }): ReturnType<DiagnosticsService['getLogs']> {
+    return this.createDiagnosticsService().getLogs(options);
+  }
+
+  clearLogs(options?: {
+    olderThan?: string;
+    level?: string;
+  }): ReturnType<DiagnosticsService['clearLogs']> {
+    return this.createDiagnosticsService().clearLogs(options);
   }
   /**
    * Get a specific snapshot by ID
