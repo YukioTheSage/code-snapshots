@@ -246,8 +246,15 @@ export class SnapshotTreeDataProvider
    * @param snapshot The snapshot to check.
    * @returns True if it's an auto snapshot, false otherwise.
    */
+  /**
+   * Whether a snapshot was made by the extension rather than by hand.
+   *
+   * Tags only. A description substring used to decide this as well, which meant
+   * `"Fix auto-snapshot rule bug"` moved a hand-made snapshot out of the Manual
+   * view. Every machine-made snapshot already carries a tag naming its trigger,
+   * so the fallback only ever misfiled.
+   */
   private isAutoSnapshot(snapshot: Snapshot): boolean {
-    // Check for specific tags used by auto-snapshot features
     const autoTags = [
       'auto',
       'timed',
@@ -256,14 +263,7 @@ export class SnapshotTreeDataProvider
       'time-triggered',
       'save-triggered',
     ];
-    if (snapshot.tags?.some((tag) => autoTags.includes(tag))) {
-      return true;
-    }
-    // Fallback check on description (less reliable)
-    if (snapshot.description?.toLowerCase().includes('auto-snapshot')) {
-      return true;
-    }
-    return false;
+    return snapshot.tags?.some((tag) => autoTags.includes(tag)) ?? false;
   }
 
   /**
