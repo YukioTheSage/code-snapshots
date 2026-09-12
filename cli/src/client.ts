@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import * as net from 'net';
+import { MAX_JSON_PAYLOAD_BYTES } from 'codelapse-core';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -268,28 +269,7 @@ export class CodeLapseClient extends EventEmitter {
       });
 
       this.socket.on('data', (data) => {
-        // Accumulate incoming data into buffer and process complete lines
-        this.messageBuffer += data.toString();
-
-        let newlineIndex: number;
-        while ((newlineIndex = this.messageBuffer.indexOf('\n')) !== -1) {
-          const rawLine = this.messageBuffer.slice(0, newlineIndex).trim();
-          this.messageBuffer = this.messageBuffer.slice(newlineIndex + 1);
-
-          if (!rawLine) continue;
-
-          try {
-            const message = JSON.parse(rawLine);
-            this.handleMessage(message);
-          } catch (error) {
-            console.error(
-              'Failed to parse message from extension:',
-              error,
-              '\nRaw line:',
-              rawLine,
-            );
-          }
-        }
+        this.readResponseData(data.toString());
       });
     });
 
@@ -344,6 +324,44 @@ export class CodeLapseClient extends EventEmitter {
       );
     }
     this.authenticated = true;
+  }
+
+  /**
+   * Accumulate and parse complete response lines. Extracted so the buffer cap
+   * is testable without a real socket.
+   */
+  private readResponseData(chunk: string): void {
+    this.messageBuffer += chunk;
+
+    // The peer controls how much arrives before a newline. Without a ceiling a
+    // peer that never sends one grows this process's heap until it dies, and
+    // the repository already defines the limit for every other payload.
+    if (this.messageBuffer.length > MAX_JSON_PAYLOAD_BYTES) {
+      this.messageBuffer = '';
+      this.rejectAllPending('Response exceeded the maximum message size');
+      this.socket?.destroy();
+      return;
+    }
+
+    let newlineIndex: number;
+    while ((newlineIndex = this.messageBuffer.indexOf('\n')) !== -1) {
+      const rawLine = this.messageBuffer.slice(0, newlineIndex).trim();
+      this.messageBuffer = this.messageBuffer.slice(newlineIndex + 1);
+
+      if (!rawLine) continue;
+
+      try {
+        const message = JSON.parse(rawLine);
+        this.handleMessage(message);
+      } catch (error) {
+        console.error(
+          'Failed to parse message from extension:',
+          error,
+          '\nRaw line:',
+          rawLine,
+        );
+      }
+    }
   }
 
   /**

@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as diff from 'diff';
-import { ConfigManager } from 'codelapse-core';
+import { ConfigManager, MAX_JSON_PAYLOAD_BYTES } from 'codelapse-core';
 import { resolveSetting } from '../configSource';
 import { TerminalApiService } from './terminalApiService';
 import { SemanticSearchService } from './semanticSearchService';
@@ -170,6 +170,7 @@ export class CliConnectorService implements vscode.Disposable {
   private server?: net.Server;
   private connections: Set<net.Socket> = new Set();
   private authenticatedSockets: Set<net.Socket> = new Set();
+  private socketBuffers: Map<net.Socket, string> = new Map();
   private authToken: string;
   private logUnsubscribe?: () => void;
   private logStreaming = false;
@@ -230,6 +231,83 @@ export class CliConnectorService implements vscode.Disposable {
     this.startServer();
   }
 
+  private async handleSocketData(
+    socket: net.Socket,
+    data: Buffer,
+  ): Promise<void> {
+    let buffer = (this.socketBuffers.get(socket) ?? '') + data.toString();
+    this.socketBuffers.set(socket, buffer);
+
+    // The peer controls how much arrives before a newline. Without a ceiling a
+    // peer that never sends one grows this process's heap until it dies.
+    if (buffer.length > MAX_JSON_PAYLOAD_BYTES) {
+      log(
+        `CLI client message buffer exceeded ${MAX_JSON_PAYLOAD_BYTES} bytes; destroying connection.`,
+      );
+      this.socketBuffers.delete(socket);
+      socket.destroy();
+      return;
+    }
+
+    let newlineIndex: number;
+    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+      const rawLine = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      this.socketBuffers.set(socket, buffer);
+
+      if (!rawLine) continue;
+
+      try {
+        const message = JSON.parse(rawLine);
+
+        // Handle authentication
+        if (message.method === 'authenticate') {
+          if (message.data?.token === this.authToken) {
+            this.authenticatedSockets.add(socket);
+            socket.write(
+              JSON.stringify({
+                success: true,
+                id: message.id,
+                result: { authenticated: true },
+              }) + '\n',
+            );
+          } else {
+            socket.write(
+              JSON.stringify({
+                success: false,
+                id: message.id,
+                error: 'Authentication failed: invalid token',
+              }) + '\n',
+            );
+            socket.destroy();
+          }
+          continue;
+        }
+
+        // Reject unauthenticated requests
+        if (!this.authenticatedSockets.has(socket)) {
+          socket.write(
+            JSON.stringify({
+              success: false,
+              id: message.id,
+              error: 'Not authenticated. Send authenticate message first.',
+            }) + '\n',
+          );
+          socket.destroy();
+          continue;
+        }
+
+        const response = await this.handleCliRequest(message);
+        socket.write(JSON.stringify(response) + '\n');
+      } catch (error) {
+        const errorResponse = {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        socket.write(JSON.stringify(errorResponse) + '\n');
+      }
+    }
+  }
   /**
    * Start the IPC server for CLI communication
    */
@@ -245,81 +323,24 @@ export class CliConnectorService implements vscode.Disposable {
         this.connections.add(socket);
 
         // Buffer to accumulate partial data chunks from this socket
-        let buffer = '';
+        this.socketBuffers.set(socket, '');
 
-        socket.on('data', async (data) => {
-          buffer += data.toString();
-
-          let newlineIndex: number;
-          while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-            const rawLine = buffer.slice(0, newlineIndex).trim();
-            buffer = buffer.slice(newlineIndex + 1);
-
-            if (!rawLine) continue;
-
-            try {
-              const message = JSON.parse(rawLine);
-
-              // Handle authentication
-              if (message.method === 'authenticate') {
-                if (message.data?.token === this.authToken) {
-                  this.authenticatedSockets.add(socket);
-                  socket.write(
-                    JSON.stringify({
-                      success: true,
-                      id: message.id,
-                      result: { authenticated: true },
-                    }) + '\n',
-                  );
-                } else {
-                  socket.write(
-                    JSON.stringify({
-                      success: false,
-                      id: message.id,
-                      error: 'Authentication failed: invalid token',
-                    }) + '\n',
-                  );
-                  socket.destroy();
-                }
-                continue;
-              }
-
-              // Reject unauthenticated requests
-              if (!this.authenticatedSockets.has(socket)) {
-                socket.write(
-                  JSON.stringify({
-                    success: false,
-                    id: message.id,
-                    error:
-                      'Not authenticated. Send authenticate message first.',
-                  }) + '\n',
-                );
-                socket.destroy();
-                continue;
-              }
-
-              const response = await this.handleCliRequest(message);
-              socket.write(JSON.stringify(response) + '\n');
-            } catch (error) {
-              const errorResponse = {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-              };
-              socket.write(JSON.stringify(errorResponse) + '\n');
-            }
-          }
+        socket.on('data', (data) => {
+          void this.handleSocketData(socket, data);
         });
 
         socket.on('close', () => {
           log(`CLI client disconnected`);
           this.connections.delete(socket);
           this.authenticatedSockets.delete(socket);
+          this.socketBuffers.delete(socket);
         });
 
         socket.on('error', (error) => {
           log(`CLI client error: ${error.message}`);
           this.connections.delete(socket);
           this.authenticatedSockets.delete(socket);
+          this.socketBuffers.delete(socket);
         });
       });
 
