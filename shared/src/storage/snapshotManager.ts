@@ -445,17 +445,65 @@ export class SnapshotManager {
         );
       } else {
         // Persist the rewrites before anything is deleted: a survivor whose
-        // base is gone cannot be rebuilt afterwards.
-        for (const survivor of materialization.touched) {
-          await this.storage.saveSnapshot(survivor);
+        // base is gone cannot be rebuilt afterwards. Persisting can fail
+        // part-way -- the saves that landed stay on disk, and every touched
+        // survivor is rolled back in memory below, so memory may lag disk, never
+        // lead it, and the next trim redoes the ones it must.
+        let persisted = 0;
+        let writeFailed = false;
+        try {
+          for (const survivor of materialization.touched) {
+            await this.storage.saveSnapshot(survivor);
+            persisted += 1;
+          }
+        } catch (error) {
+          writeFailed = true;
+          this.restoreOriginalFiles(materialization.originals);
+          console.warn(
+            'Retention: keeping the excess. ' +
+              persisted +
+              ' of ' +
+              materialization.touched.length +
+              ' rebuilt survivor(s) were persisted before the failure: ' +
+              (error instanceof Error ? error.message : String(error)) +
+              '. The rewrites were rolled back in memory, so the next trim redoes them; nothing was deleted.',
+          );
         }
-        // Candidates reference each other down the chain, so one candidate
-        // whose base is another candidate still looks like a dependent here.
-        // They all leave in this batch: only a dependent outside it could be
-        // orphaned, and the materialization above already rebuilt those.
-        const alsoDeleting = new Set(candidates.map((snapshot) => snapshot.id));
-        for (const candidate of candidates) {
-          await this.deleteSnapshotInternal(candidate.id, { alsoDeleting });
+
+        if (!writeFailed) {
+          // Candidates reference each other down the chain, so one candidate
+          // whose base is another candidate still looks like a dependent here.
+          // They all leave in this batch: only a dependent outside it could be
+          // orphaned, and the materialization above already rebuilt those.
+          //
+          // Newest first, and stop at the first failure: a candidate's base is
+          // its predecessor, so removing the newest first means a failure leaves
+          // the base of every surviving candidate in place, while deleting
+          // oldest-first -- or continuing past the failure -- would remove the
+          // base of a candidate that has to stay. A failed delete is reported,
+          // never rethrown: the snapshot above was taken and indexed, and the
+          // excess is simply kept.
+          const alsoDeleting = new Set(
+            candidates.map((snapshot) => snapshot.id),
+          );
+          for (const candidate of [...candidates].reverse()) {
+            try {
+              await this.deleteSnapshotInternal(candidate.id, {
+                alsoDeleting,
+              });
+            } catch (error) {
+              console.warn(
+                'Retention: could not delete ' +
+                  candidate.id +
+                  ' while trimming to ' +
+                  maxSnapshots +
+                  ' snapshot(s): ' +
+                  (error instanceof Error ? error.message : String(error)) +
+                  '. The trim stops here; no older candidate is removed.',
+              );
+              break;
+            }
+          }
         }
       }
     }
@@ -872,25 +920,27 @@ export class SnapshotManager {
     // gone cannot be rebuilt afterwards. If they cannot be written the trim
     // stops here -- deleting a base whose survivors were never persisted is the
     // orphaning this guard exists to prevent -- and the excess is kept.
+    let persisted = 0;
     try {
       for (const survivor of materialization.touched) {
         await this.storage.saveSnapshot(survivor);
+        persisted += 1;
       }
     } catch (error) {
-      // Nothing was written, so the in-memory materialization is rolled back:
-      // a later pass reads the dependents from memory, and a materialized copy
-      // left behind would hide the base that is still needed -- that pass would
-      // skip the save and delete it.
+      // Persisting can fail part-way. The saves that landed stay on disk; every
+      // touched survivor is rolled back in memory here, so memory may lag disk,
+      // never lead it, and the next trim re-materializes and re-saves them.
+      // Nothing is deleted until all of them are written.
       this.restoreOriginalFiles(materialization.originals);
       const after = this.storage.measureSnapshotStore();
       console.warn(
         'Retention: the trim stopped. ' +
+          persisted +
+          ' of ' +
           materialization.touched.length +
-          ' rebuilt survivor(s) of the ' +
-          candidates.length +
-          ' selected could not be persisted: ' +
+          ' rebuilt survivor(s) were persisted before the failure: ' +
           (error instanceof Error ? error.message : String(error)) +
-          '. Nothing was deleted.',
+          '. The rewrites were rolled back in memory, so the next trim redoes them; nothing was deleted.',
       );
       return {
         bytesBefore: sizes.totalBytes,

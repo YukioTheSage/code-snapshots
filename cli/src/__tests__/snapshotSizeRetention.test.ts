@@ -507,4 +507,65 @@ describe('shared size retention', () => {
     ).toBe('y'.repeat(4000));
     expect(fs.existsSync(path.join(storeDir, first.id))).toBe(true);
   });
+
+  it('reports how many rebuilt survivors were persisted when a save fails part-way', async () => {
+    const manager = new SnapshotManager(root);
+    await manager.initialize();
+    const first = await manager.takeSnapshot({ description: 'first' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'y'.repeat(4000), 'utf8');
+    const second = await manager.takeSnapshot({ description: 'second' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'z'.repeat(4000), 'utf8');
+    const third = await manager.takeSnapshot({ description: 'third' });
+
+    // Two survivors of one candidate: 'second' references 'first' naturally,
+    // and 'third' is made to reference it too -- a base shared by two snapshots
+    // is a store shape a foreign or legacy index can hold, and it is the only
+    // way the save loop can fail after an earlier survivor was written.
+    const thirdPath = path.join(storeDir, third.id, 'snapshot.json');
+    const stored = JSON.parse(fs.readFileSync(thirdPath, 'utf8')) as {
+      files: Record<string, unknown>;
+    };
+    stored.files['tracked.txt'] = { baseSnapshotId: first.id };
+    fs.writeFileSync(thirdPath, JSON.stringify(stored, null, 2), 'utf8');
+
+    const reopened = new SnapshotManager(root);
+    await reopened.initialize();
+
+    const before = measureSnapshotStore(storeDir);
+    writeConfig({
+      maxSnapshots: 50,
+      maxSnapshotStoreBytes: before.totalBytes - 1,
+    });
+    (
+      reopened as unknown as { config: { clearCache: () => void } }
+    ).config.clearCache();
+
+    // 'second' is persisted, then 'third' is refused: the partial-save shape.
+    const storage = storageOf(reopened);
+    const realSave = storage.saveSnapshot.bind(storage);
+    storage.saveSnapshot = jest.fn((snapshot: { id: string }) =>
+      snapshot.id === third.id
+        ? Promise.reject(new Error('ENOSPC: no space left on device'))
+        : realSave(snapshot),
+    );
+
+    const result = await (
+      reopened as unknown as {
+        enforceSnapshotSizeLimitInternal: () => Promise<{ trimmed: string[] }>;
+      }
+    ).enforceSnapshotSizeLimitInternal();
+
+    expect(result.trimmed).toEqual([]);
+    expect((await reopened.getSnapshots()).map((s) => s.id)).toEqual([
+      first.id,
+      second.id,
+      third.id,
+    ]);
+    expect(fs.existsSync(path.join(storeDir, first.id))).toBe(true);
+    // One of the two rewrites reached disk before the failure, and the report
+    // says exactly that instead of counting both as failed.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('1 of 2 rebuilt survivor(s) were persisted'),
+    );
+  });
 });
