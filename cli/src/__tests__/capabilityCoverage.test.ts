@@ -47,7 +47,9 @@ describe('CLI capability coverage', () => {
 
   it('serves every allowlisted method in at least one mode', () => {
     const unserved = [...ALLOWED_API_METHODS]
-      .filter((m) => !standalone.has(m) && !ipc.has(m) && !KNOWN_UNSERVED.has(m))
+      .filter(
+        (m) => !standalone.has(m) && !ipc.has(m) && !KNOWN_UNSERVED.has(m),
+      )
       .sort();
 
     expect(unserved).toEqual([]);

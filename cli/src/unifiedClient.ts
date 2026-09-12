@@ -564,7 +564,9 @@ export class UnifiedClient {
           return fallback.value;
         }
         throw new Error(
-          `Method ${method} is not available in standalone mode and no CodeLapse extension answered over IPC (${fallback.error}). Start VS Code with the CodeLapse extension enabled, or use one of: ${[
+          `Method ${method} is not available in standalone mode and no CodeLapse extension answered over IPC (${
+            fallback.error
+          }). Start VS Code with the CodeLapse extension enabled, or use one of: ${[
             ...STANDALONE_METHODS,
           ]
             .sort()

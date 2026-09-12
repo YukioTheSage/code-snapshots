@@ -489,7 +489,9 @@ export class StandaloneHandler {
       (snapshot) => snapshot.id === snapshotId,
     );
     const nextValue =
-      typeof isFavorite === 'boolean' ? isFavorite : !(current?.isFavorite ?? false);
+      typeof isFavorite === 'boolean'
+        ? isFavorite
+        : !(current?.isFavorite ?? false);
     await this.updateSnapshotMetadata(snapshotId, { isFavorite: nextValue });
     return { snapshotId, isFavorite: nextValue };
   }
@@ -843,10 +845,10 @@ export class StandaloneHandler {
       typeof minimatchImport === 'function'
         ? minimatchImport
         : typeof minimatchModule.minimatch === 'function'
-          ? minimatchModule.minimatch
-          : typeof minimatchModule.default === 'function'
-            ? minimatchModule.default
-            : null
+        ? minimatchModule.minimatch
+        : typeof minimatchModule.default === 'function'
+        ? minimatchModule.default
+        : null
     ) as
       | ((
           candidate: string,
@@ -855,7 +857,9 @@ export class StandaloneHandler {
         ) => boolean)
       | null;
     if (!matchesPattern) {
-      throw new Error('minimatch is unavailable; cannot test the rule pattern.');
+      throw new Error(
+        'minimatch is unavailable; cannot test the rule pattern.',
+      );
     }
     const matched = candidates.filter((candidate) =>
       matchesPattern(candidate, options.pattern, { dot: true }),
@@ -947,7 +951,9 @@ export class StandaloneHandler {
       {
         name: 'config',
         ok: config.valid,
-        detail: config.valid ? 'configuration is valid' : config.errors.join('; '),
+        detail: config.valid
+          ? 'configuration is valid'
+          : config.errors.join('; '),
       },
       {
         name: 'git',
@@ -959,7 +965,9 @@ export class StandaloneHandler {
       {
         name: 'workspace',
         ok: workspaceOpen,
-        detail: workspaceOpen ? this.workspaceRoot! : 'no workspace folder open',
+        detail: workspaceOpen
+          ? this.workspaceRoot!
+          : 'no workspace folder open',
       },
     ];
 
@@ -1056,10 +1064,7 @@ export class StandaloneHandler {
   public async healthCheck(): Promise<Record<string, unknown>> {
     const report = await this.buildStandaloneDiagnosticsReport();
     const errors = report.checks.filter((check) => !check.ok);
-    const health: Record<
-      string,
-      { healthy: boolean; message: string }
-    > = {};
+    const health: Record<string, { healthy: boolean; message: string }> = {};
     for (const check of report.checks) {
       health[check.name] = { healthy: check.ok, message: check.detail };
     }
@@ -1091,9 +1096,7 @@ export class StandaloneHandler {
       metrics: {
         avgSnapshotTime: 0,
         avgSearchTime: 0,
-        memoryUsage: Math.round(
-          process.memoryUsage().heapUsed / (1024 * 1024),
-        ),
+        memoryUsage: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
         cpuUsage: 0,
         activeOperations: 0,
       },
@@ -1387,7 +1390,9 @@ export class StandaloneHandler {
     // unless the caller asked for them, matching the extension's
     // `resolveSnapshotPaths`.
     const untracked =
-      options.includeUntracked === true ? null : new Set(git.getUntrackedFiles());
+      options.includeUntracked === true
+        ? null
+        : new Set(git.getUntrackedFiles());
     const pathsToStage = [...written, ...removed].filter(
       (relativePath) => untracked === null || !untracked.has(relativePath),
     );
