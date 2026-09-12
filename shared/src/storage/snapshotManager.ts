@@ -420,8 +420,13 @@ export class SnapshotManager {
         for (const survivor of materialization.touched) {
           await this.storage.saveSnapshot(survivor);
         }
+        // Candidates reference each other down the chain, so one candidate
+        // whose base is another candidate still looks like a dependent here.
+        // They all leave in this batch: only a dependent outside it could be
+        // orphaned, and the materialization above already rebuilt those.
+        const alsoDeleting = new Set(candidates.map((snapshot) => snapshot.id));
         for (const candidate of candidates) {
-          await this.deleteSnapshotInternal(candidate.id);
+          await this.deleteSnapshotInternal(candidate.id, { alsoDeleting });
         }
       }
     }
@@ -625,10 +630,15 @@ export class SnapshotManager {
    * `withWriteLock` is not re-entrant, so the guarded body has to be
    * reachable from there. Every caller that does not already hold the lock goes
    * through `deleteSnapshot`.
+   *
+   * `alsoDeleting` names the snapshots the caller removes in the same batch. A
+   * dependent among them is not an orphan -- it disappears too -- so it must
+   * not make this delete refuse. Only a dependent outside the batch can be
+   * left behind, and the batch materializes those before it gets here.
    */
   private async deleteSnapshotInternal(
     snapshotId: string,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; alsoDeleting?: ReadonlySet<string> } = {},
   ): Promise<void> {
     const removedIndex = this.snapshots.findIndex((s) => s.id === snapshotId);
     if (removedIndex === -1) {
@@ -638,7 +648,9 @@ export class SnapshotManager {
     }
 
     const removed = new Set([snapshotId]);
-    const dependents = this.findDependents(removed);
+    const dependents = this.findDependents(removed).filter(
+      (snapshot) => !options.alsoDeleting?.has(snapshot.id),
+    );
     if (dependents.length > 0) {
       const materialization = await this.materializeDependents(removed);
       if (!materialization.ok) {
