@@ -201,6 +201,12 @@
           "default": 50,
           "description": "Maximum number of snapshots to keep"
         },
+        "vscode-snapshots.maxSnapshotStoreBytes": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum bytes the snapshot store may occupy. 0 disables the limit; the oldest snapshots are removed when it is exceeded. A snapshot a survivor still references is rebuilt from full content before its base is removed, so the store can stay above the limit rather than lose data."
+        },
         "vscode-snapshots.autoSnapshotInterval": {
           "type": "number",
           "default": 0,

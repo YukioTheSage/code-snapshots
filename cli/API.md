@@ -501,6 +501,7 @@ Set a configuration value.
 
 ```bash
 codelapse config set maxSnapshots 100
+codelapse config set maxSnapshotStoreBytes 104857600
 codelapse config set snapshotLocation ".my-snapshots"
 ```
 

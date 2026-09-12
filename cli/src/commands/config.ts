@@ -7,6 +7,8 @@ import { setFailure } from '../exitState';
 export interface ConfigSettings {
   snapshotLocation: string;
   maxSnapshots: number;
+  /** Maximum bytes the snapshot store may occupy (0 = no limit) */
+  maxSnapshotStoreBytes: number;
   autoSnapshotInterval: number;
   loggingEnabled: boolean;
   verboseLogging: boolean;

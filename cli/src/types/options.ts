@@ -644,6 +644,8 @@ export interface ConfigSettings {
   snapshotLocation: string;
   /** Maximum number of snapshots to keep */
   maxSnapshots: number;
+  /** Maximum bytes the snapshot store may occupy (0 = no limit) */
+  maxSnapshotStoreBytes: number;
   /** Auto-snapshot interval in minutes */
   autoSnapshotInterval: number;
   /** Enable logging */

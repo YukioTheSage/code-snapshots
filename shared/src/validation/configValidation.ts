@@ -96,6 +96,19 @@ export function validatePartialCodelapseConfig(
     }
   }
 
+  if (
+    'maxSnapshotStoreBytes' in value &&
+    value.maxSnapshotStoreBytes !== undefined
+  ) {
+    assertNumber(
+      value.maxSnapshotStoreBytes,
+      context + '.maxSnapshotStoreBytes',
+    );
+    if (value.maxSnapshotStoreBytes < 0) {
+      throw new Error(context + '.maxSnapshotStoreBytes must not be negative');
+    }
+  }
+
   if ('git' in value && value.git !== undefined) {
     if (!isObjectRecord(value.git)) {
       throw new Error(`${context}.git must be an object`);

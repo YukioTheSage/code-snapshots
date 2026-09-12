@@ -35,6 +35,17 @@ describe('codelapse.json round trip', () => {
     expect(JSON.parse(raw).maxSnapshots).toBe(7);
   });
 
+  it('round-trips the size limit through the shared store', async () => {
+    await handler.setConfig('maxSnapshotStoreBytes', 1048576);
+
+    expect(await handler.getConfig('maxSnapshotStoreBytes')).toBe(1048576);
+    const raw = fs.readFileSync(
+      path.join(root, '.vscode', 'codelapse.json'),
+      'utf8',
+    );
+    expect(JSON.parse(raw).maxSnapshotStoreBytes).toBe(1048576);
+  });
+
   it('rejects a key the schema does not declare', async () => {
     await expect(handler.setConfig('not.a.key', 1)).rejects.toThrow(
       /invalid configuration key path/i,

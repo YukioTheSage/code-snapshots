@@ -626,6 +626,7 @@ Configure via VS Code Settings (`Ctrl+,`) or through the Settings view in the Sn
 | :------------------------------------------------- | :--------------------------------------------------------------- | :----------- |
 | `vscode-snapshots.snapshotLocation`                | Storage path relative to workspace root                          | `.snapshots` |
 | `vscode-snapshots.maxSnapshots`                    | Max number of snapshots to keep (oldest are deleted)             | 50           |
+| `vscode-snapshots.maxSnapshotStoreBytes`           | Maximum bytes the snapshot store may occupy (0 = no limit)       | 0            |
 | `vscode-snapshots.autoSnapshotInterval`            | Minutes between time-based auto-snapshots (0=disable)            | 0            |
 | `vscode-snapshots.autoSnapshot.rules`              | Array of rules for rule-based auto-snapshots                     | `[]`         |
 | `vscode-snapshots.loggingEnabled`                  | Enable Output channel logging                                    | `true`       |
@@ -832,6 +833,7 @@ For detailed installation and usage instructions, see the [CLI Guide](../cli/REA
 **Storage and Performance**:
 - `vscode-snapshots.snapshotLocation`: Where snapshots are stored (default: `.snapshots`)
 - `vscode-snapshots.maxSnapshots`: Maximum snapshots to keep (default: 50)
+- `vscode-snapshots.maxSnapshotStoreBytes`: Maximum bytes the snapshot store may occupy (default: 0, no limit)
 - `vscode-snapshots.showOnlyChangedFiles`: Show only modified files in snapshot view (default: true)
 
 **Automation Settings**:

@@ -223,6 +223,9 @@ codelapse config get
 # Set maximum snapshots
 codelapse config set maxSnapshots 100
 
+# Limit the snapshot store to 100 MB
+codelapse config set maxSnapshotStoreBytes 104857600
+
 # Enable verbose logging
 codelapse config set verboseLogging true
 

@@ -11,6 +11,32 @@ export function getMaxSnapshots(): number {
   return resolveSetting('maxSnapshots', 50).value;
 }
 
+/**
+ * Reads a byte count, ignoring a stored value of the wrong type.
+ *
+ * settings.json can be hand-edited, and "1GB" or -1 would otherwise reach the
+ * arithmetic in the retention path. A negative limit reads as "disabled".
+ */
+function asByteLimit(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback;
+}
+
+/**
+ * Maximum bytes the snapshot store may occupy; 0 means no limit.
+ *
+ * Read at call time rather than cached, so changing the setting takes effect on
+ * the next snapshot instead of requiring a window reload. The literal key is
+ * what the manifest-consistency guard matches against the declared setting.
+ */
+export function getMaxSnapshotStoreBytes(): number {
+  return asByteLimit(
+    resolveSetting<unknown>('maxSnapshotStoreBytes', 0).value,
+    0,
+  );
+}
+
 // Note: Logging config is handled directly in logger.ts for simplicity
 // as it needs to react to changes immediately. If more complex config
 // interactions are needed later, this could be centralized here.

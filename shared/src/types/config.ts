@@ -14,6 +14,11 @@ export interface AutoSnapshotConfig {
 export interface CodelapseConfig {
   snapshotLocation: string;
   maxSnapshots: number;
+  /**
+   * Maximum bytes the snapshot store may occupy. 0 disables the limit, which is
+   * the default, so turning it on can never surprise an existing store.
+   */
+  maxSnapshotStoreBytes: number;
   autoSnapshot: AutoSnapshotConfig;
   git: {
     addCommitInfo: boolean;
@@ -34,6 +39,7 @@ export interface CodelapseConfig {
 export const DEFAULT_CONFIG: CodelapseConfig = {
   snapshotLocation: '.snapshots',
   maxSnapshots: 50,
+  maxSnapshotStoreBytes: 0,
   autoSnapshot: {
     rules: [],
   },

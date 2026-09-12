@@ -294,10 +294,17 @@ export class ConfigManager {
       config.snapshotLocation = process.env[ENV_VARS.SNAPSHOT_LOCATION]!;
     }
 
-    // Max snapshots
+    // Max snapshots. Below 1 the retention trim's excess is at least the store
+    // length, so the snapshot just taken would itself be a prune candidate;
+    // reject it through the same validator the config file uses rather than
+    // letting a stray `0` delete every snapshot.
     if (process.env[ENV_VARS.MAX_SNAPSHOTS]) {
       const maxSnapshots = parseInt(process.env[ENV_VARS.MAX_SNAPSHOTS]!, 10);
       if (!isNaN(maxSnapshots)) {
+        validatePartialCodelapseConfig(
+          { maxSnapshots },
+          ENV_VARS.MAX_SNAPSHOTS,
+        );
         config.maxSnapshots = maxSnapshots;
       }
     }
@@ -410,6 +417,15 @@ export class ConfigManager {
         { autoSnapshot: { rules: value } },
         'setNested',
       );
+      return;
+    }
+
+    // `maxSnapshots` has a floor as well as a type, and that floor is declared
+    // once in the shared validator so this route cannot set a value the
+    // config-file path would reject. Non-numbers fall through to the type check
+    // below and keep their existing message.
+    if (keyPath === 'maxSnapshots' && typeof value === 'number') {
+      validatePartialCodelapseConfig({ maxSnapshots: value }, 'setNested');
       return;
     }
 

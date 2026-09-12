@@ -62,5 +62,7 @@ describe('extension manifest', () => {
     expect(keys).toContain('vscode-snapshots.ux.showKeyboardShortcutHints');
     // Read by `getMaxSnapshots()`; the pruning guard depends on it.
     expect(keys).toContain('vscode-snapshots.maxSnapshots');
+    // Read by getMaxSnapshotStoreBytes(); size-based retention depends on it.
+    expect(keys).toContain('vscode-snapshots.maxSnapshotStoreBytes');
   });
 });
