@@ -1552,11 +1552,15 @@ export class CliConnectorService implements vscode.Disposable {
   private getWorkspaceId(): string {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (workspaceRoot) {
+      // 128 bits, not the first 32: the pipe name is the only thing keeping two
+      // workspaces' servers apart, and 32 bits collides around 2^16 paths.
+      // The client learns the path from the connection file, so widening it
+      // breaks nothing.
       return crypto
-        .createHash('md5')
+        .createHash('sha256')
         .update(workspaceRoot)
         .digest('hex')
-        .substring(0, 8);
+        .substring(0, 32);
     }
 
     // Fallback to random identifier
