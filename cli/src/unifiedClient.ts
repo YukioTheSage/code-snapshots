@@ -649,6 +649,21 @@ export class UnifiedClient {
           );
         }
 
+        case 'toggleFavoriteStatus': {
+          if (!this.standaloneHandler) {
+            throw new Error('Handler not initialized');
+          }
+          const id = String(payload.id ?? payload.snapshotId);
+          const requested =
+            typeof payload.isFavorite === 'boolean'
+              ? payload.isFavorite
+              : undefined;
+          return await this.standaloneHandler.toggleFavoriteStatus(
+            id,
+            requested,
+          );
+        }
+
         case 'getAutoSnapshotRules': {
           if (!this.standaloneHandler) {
             throw new Error('Handler not initialized');
