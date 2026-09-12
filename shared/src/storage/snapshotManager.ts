@@ -386,26 +386,44 @@ export class SnapshotManager {
     this.currentSnapshotIndex = this.snapshots.length - 1;
     await this.saveSnapshotIndex();
 
-    // Cleanup old snapshots if needed
+    // Cleanup old snapshots if needed.
+    //
+    // Every snapshot stores unchanged files as a reference to its immediate
+    // predecessor, so removing the oldest entry of a chain orphans the next
+    // one. This block used to call `this.storage.deleteSnapshot` directly,
+    // which deleted the directory and left those references dangling --
+    // `getSnapshotFileContent` then answered null for a file the store still
+    // indexes. It now runs the guard the explicit delete runs
+    // (`materializeDependents`) through the lock-free entry point, and keeps
+    // the excess when a survivor cannot be rebuilt.
     const maxSnapshots = this.config.get('maxSnapshots');
-    if (this.snapshots.length > maxSnapshots) {
-      const toDelete = this.snapshots.length - maxSnapshots;
-      for (let i = 0; i < toDelete; i++) {
-        const oldSnapshot = this.snapshots.shift()!;
-        try {
-          await this.storage.deleteSnapshot(oldSnapshot.id);
-        } catch (error) {
-          // Pruning is best-effort: a stale index entry whose directory is
-          // already gone must not fail the snapshot that was just created.
-          // The entry is dropped from the index either way. Real failures
-          // (permissions, symlink refusals) still surface.
-          if (!/not found/i.test(String(error))) {
-            throw error;
-          }
+    const excess = this.snapshots.length - maxSnapshots;
+    if (excess > 0) {
+      const candidates = [...this.snapshots]
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(0, excess);
+      const materialization = await this.materializeDependents(
+        new Set(candidates.map((snapshot) => snapshot.id)),
+      );
+
+      if (!materialization.ok) {
+        console.error(
+          'Retention: keeping ' +
+            this.snapshots.length +
+            ' snapshots. The ' +
+            excess +
+            ' oldest cannot be removed without orphaning a survivor; nothing was deleted.',
+        );
+      } else {
+        // Persist the rewrites before anything is deleted: a survivor whose
+        // base is gone cannot be rebuilt afterwards.
+        for (const survivor of materialization.touched) {
+          await this.storage.saveSnapshot(survivor);
+        }
+        for (const candidate of candidates) {
+          await this.deleteSnapshotInternal(candidate.id);
         }
       }
-      this.currentSnapshotIndex -= toDelete;
-      await this.saveSnapshotIndex();
     }
 
     return snapshot;
@@ -595,50 +613,84 @@ export class SnapshotManager {
     options: { force?: boolean } = {},
   ): Promise<void> {
     await this.ensureInitialized();
-    await this.withWriteLock(async () => {
-      const removedIndex = this.snapshots.findIndex((s) => s.id === snapshotId);
-      if (removedIndex === -1) {
-        // Same message the storage layer raises, so callers that branch on it
-        // keep working; raised here so an unknown id never touches disk.
-        throw new Error(`Snapshot ${snapshotId} not found`);
-      }
+    await this.withWriteLock(() =>
+      this.deleteSnapshotInternal(snapshotId, options),
+    );
+  }
 
-      const removed = new Set([snapshotId]);
-      const dependents = this.findDependents(removed);
-      if (dependents.length > 0) {
-        const materialization = await this.materializeDependents(removed);
-        if (!materialization.ok) {
-          if (!options.force) {
-            throw new Error(
-              `Snapshot ${snapshotId} cannot be deleted: ${dependents.length} later snapshot(s) store a delta against it and cannot be rebuilt. Nothing was deleted. Re-run with --force to delete it anyway and lose those files.`,
-            );
-          }
-          console.warn(
-            `Delete: forcing removal of ${snapshotId}; ${dependents.length} snapshot(s) keep an unresolvable base.`,
+  /**
+   * `deleteSnapshot` without acquiring the write lock.
+   *
+   * The retention trim inside `takeSnapshotInternal` already holds it and
+   * `withWriteLock` is not re-entrant, so the guarded body has to be
+   * reachable from there. Every caller that does not already hold the lock goes
+   * through `deleteSnapshot`.
+   */
+  private async deleteSnapshotInternal(
+    snapshotId: string,
+    options: { force?: boolean } = {},
+  ): Promise<void> {
+    const removedIndex = this.snapshots.findIndex((s) => s.id === snapshotId);
+    if (removedIndex === -1) {
+      // Same message the storage layer raises, so callers that branch on it
+      // keep working; raised here so an unknown id never touches disk.
+      throw new Error('Snapshot ' + snapshotId + ' not found');
+    }
+
+    const removed = new Set([snapshotId]);
+    const dependents = this.findDependents(removed);
+    if (dependents.length > 0) {
+      const materialization = await this.materializeDependents(removed);
+      if (!materialization.ok) {
+        if (!options.force) {
+          throw new Error(
+            'Snapshot ' +
+              snapshotId +
+              ' cannot be deleted: ' +
+              dependents.length +
+              ' later snapshot(s) store a delta against it and cannot be rebuilt. Nothing was deleted. Re-run with --force to delete it anyway and lose those files.',
           );
-        } else {
-          for (const survivor of materialization.touched) {
-            await this.storage.saveSnapshot(survivor);
-          }
+        }
+        console.warn(
+          'Delete: forcing removal of ' +
+            snapshotId +
+            '; ' +
+            dependents.length +
+            ' snapshot(s) keep an unresolvable base.',
+        );
+      } else {
+        for (const survivor of materialization.touched) {
+          await this.storage.saveSnapshot(survivor);
         }
       }
+    }
 
+    try {
       await this.storage.deleteSnapshot(snapshotId);
-      this.snapshots = this.snapshots.filter((s) => s.id !== snapshotId);
-
-      // The pointer is a POSITION in `this.snapshots`, so removing an entry
-      // shifts every index after it. Deleting the pointed-at snapshot detaches
-      // the store instead of promoting a neighbour: the workspace reflected
-      // that snapshot, and the next one is a different state, not a substitute
-      // for it. Re-pointing is an explicit act -- see `setCurrentSnapshot`.
-      if (removedIndex < this.currentSnapshotIndex) {
-        this.currentSnapshotIndex -= 1;
-      } else if (removedIndex === this.currentSnapshotIndex) {
-        this.currentSnapshotIndex = -1;
+    } catch (error) {
+      // The index entry is what `deleteSnapshot` treats as "this snapshot
+      // exists"; a directory that is already gone is the state the delete was
+      // asked for, not a reason to keep the entry forever. Real failures
+      // (permissions, symlink refusals) still surface.
+      if (!/not found/i.test(String(error))) {
+        throw error;
       }
+    }
 
-      await this.saveSnapshotIndex();
-    });
+    this.snapshots = this.snapshots.filter((s) => s.id !== snapshotId);
+
+    // The pointer is a POSITION in `this.snapshots`, so removing an entry
+    // shifts every index after it. Deleting the pointed-at snapshot detaches
+    // the store instead of promoting a neighbour: the workspace reflected
+    // that snapshot, and the next one is a different state, not a substitute
+    // for it. Re-pointing is an explicit act -- see `setCurrentSnapshot`.
+    if (removedIndex < this.currentSnapshotIndex) {
+      this.currentSnapshotIndex -= 1;
+    } else if (removedIndex === this.currentSnapshotIndex) {
+      this.currentSnapshotIndex = -1;
+    }
+
+    await this.saveSnapshotIndex();
   }
 
   /**
