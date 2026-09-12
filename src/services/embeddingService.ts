@@ -24,7 +24,6 @@ export class EmbeddingService {
   private readonly MAX_RETRY_ATTEMPTS = 3;
   private readonly MAX_INIT_ATTEMPTS = 3;
   private readonly RETRY_BACKOFF_BASE_MS = 10000;
-  private readonly THROTTLE_DELAY_MS = 5000;
   private readonly EMBEDDING_CACHE_LIMIT = 1000;
   private credentialsManager: CredentialsManager;
   private aiClient: GoogleGenAI | null = null;
@@ -155,9 +154,10 @@ export class EmbeddingService {
 
         const embedding = response.embeddings?.[0]?.values ?? [];
 
-        // Cache and throttle
+        // No fixed post-success delay: a five-second sleep after every response
+        // was the dominant cost of indexing and did nothing for a quota that
+        // was not being approached. The 429 branch below is the rate limiter.
         this.setCachedEmbedding(cacheKey, embedding);
-        await this.delay(this.THROTTLE_DELAY_MS);
         return embedding;
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
@@ -243,8 +243,9 @@ export class EmbeddingService {
 
         const embedding = response.embeddings?.[0]?.values ?? [];
 
-        // Throttle
-        await this.delay(this.THROTTLE_DELAY_MS);
+        // No fixed post-success delay: a five-second sleep after every response
+        // was the dominant cost of a search and did nothing for a quota that
+        // was not being approached. The 429 branch below is the rate limiter.
         return embedding;
       } catch (error: unknown) {
         // Error handling as in original
