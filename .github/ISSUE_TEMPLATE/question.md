@@ -34,7 +34,7 @@ Describe what you've already tried to solve this problem.
 Describe your goal or use case.
 
 **Environment:**
-- CodeLapse Version: [e.g. 0.9.2]
+- CodeLapse Version: [e.g. 0.9.6]
 - VS Code Version: [e.g. 1.75.0]
 - Operating System: [e.g. Windows 11, macOS 13.0, Ubuntu 22.04]
 

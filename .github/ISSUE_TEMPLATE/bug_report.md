@@ -32,7 +32,7 @@ If applicable, add screenshots to help explain your problem.
 ## 🖥️ Environment
 
 **Extension Information:**
-- CodeLapse Version: [e.g. 0.9.2]
+- CodeLapse Version: [e.g. 0.9.6]
 - Installation Source: [VS Code Marketplace / Manual Install]
 
 **VS Code Information:**

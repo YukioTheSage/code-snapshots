@@ -10,7 +10,7 @@ This document outlines the future plans for the CodeLapse extension, emphasizing
 - **Immediate Value**: Features provide instant benefit to your coding.
 - **Fast Performance**: Quick operations that don't slow you down.
 
-## Current Status (v0.9.4 Features) - Feature Checklist
+## Current Status (v0.9.6) - Feature Checklist
 
 CodeLapse has evolved into a comprehensive snapshot management system with the following capabilities:
 
