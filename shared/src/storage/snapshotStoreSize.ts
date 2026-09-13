@@ -123,12 +123,17 @@ function sizeOfRegularFile(filePath: string): number {
  *
  * `activeSnapshotId` is never a candidate: the workspace reflects that
  * snapshot, and removing it detaches the store rather than freeing history.
+ *
+ * All or nothing: when the removable snapshots together hold fewer bytes than
+ * the excess, nothing is selected at all. Pruning them would not bring the
+ * store under the limit -- the active snapshot, a `quarantine/` artifact or an
+ * unindexed `snapshot-*` directory can hold the rest -- so the history would be
+ * gone with the store still over its limit. The caller reports
+ * `stillOverLimit: true` instead, which is the same "keep the excess rather
+ * than lose data" discipline the survivor materialization follows.
+ *
  * Selection stops as soon as the bytes selected cover the excess, so a store
- * that is only slightly over the limit loses only the snapshots it must. When
- * the removable snapshots cannot cover the excess, every removable snapshot is
- * returned -- the caller reports that the store is still over the limit, which
- * is the same "prune what is safe and say the rest was kept" contract the
- * count-based selector keeps.
+ * that is only slightly over the limit loses only the snapshots it must.
  *
  * A snapshot whose directory is already gone contributes zero bytes and does
  * not move the tally; it stays selectable, because an index entry with no
@@ -148,6 +153,19 @@ export function selectSizePruneCandidates(
   const removable = snapshots.filter(
     (snapshot) => snapshot.id !== activeSnapshotId,
   );
+
+  // Refuse the whole trim when the removable snapshots cannot cover the excess:
+  // deleting them would not bring the store under the limit and the history
+  // would be gone for nothing. Nothing here can remove the rest of the bytes --
+  // the active snapshot is never a candidate, and quarantine artifacts and
+  // unindexed directories are not snapshots at all.
+  const removableBytes = removable.reduce(
+    (total, snapshot) => total + (sizes.perSnapshotBytes[snapshot.id] ?? 0),
+    0,
+  );
+  if (removableBytes < excess) {
+    return [];
+  }
 
   const selected: string[] = [];
   let selectedBytes = 0;

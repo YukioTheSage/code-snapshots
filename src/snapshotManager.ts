@@ -796,13 +796,35 @@ export class SnapshotManager {
 
     this.refreshIntegrityReport();
 
-    // Enforce max snapshots limit
-    await this.enforceSnapshotLimit(); // This now uses storage for deletion
+    // Enforce max snapshots limit. Best effort at the call site: the snapshot
+    // above is already saved and indexed, so a retention failure must not turn
+    // a successful take into a failed one. Each trim ends with an index write
+    // that Plan 02 deliberately lets surface, and a purge can reject; both are
+    // reported here rather than propagated, and neither is silenced inside the
+    // trim itself.
+    try {
+      await this.enforceSnapshotLimit(); // This now uses storage for deletion
+    } catch (error) {
+      log(
+        'Snapshot limit: could not be enforced after this snapshot: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. The snapshot was taken; only the prune stopped.',
+      );
+    }
 
     // Then the byte limit: a store can be inside its snapshot count and still
     // hold more bytes than the user allows. The snapshot just written is passed
-    // so its own trim can never delete it.
-    await this.enforceSnapshotSizeLimitInternal(snapshot.id);
+    // so its own trim can never delete it. Guarded for the same reason: the
+    // index write at the end of the size trim can reject.
+    try {
+      await this.enforceSnapshotSizeLimitInternal(snapshot.id);
+    } catch (error) {
+      log(
+        'Size retention: could not be enforced after this snapshot: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. The snapshot was taken; only the trim stopped.',
+      );
+    }
 
     // Log summary of what was done
     const filesProcessed = Object.keys(snapshot.files).length;
@@ -2198,6 +2220,13 @@ export class SnapshotManager {
     // that has to stay. The refusal is reported, never rethrown: the snapshot
     // this take wrote is already indexed and saved, and the excess is kept.
     //
+    // Qualified: "newest" here is newest by timestamp, because this manager's
+    // load path sorts by it. After a backwards clock step a candidate's base can
+    // be newer by timestamp than the candidate itself, so the guarantee above is
+    // exact only in the shared core, which never reorders. Here it is
+    // best-effort, and the store's own order would be the fix if it is ever
+    // needed.
+    //
     // A snapshot leaves `this.snapshots` only after its purge succeeded, so the
     // index written below lists exactly what survives.
     const purged: string[] = [];
@@ -2371,6 +2400,11 @@ export class SnapshotManager {
     // or continuing past the failure -- would remove the base of a candidate
     // that has to stay. A snapshot leaves `this.snapshots` only after its
     // directory is gone, so the index written below lists exactly what survives.
+    //
+    // Qualified as in the count trim: "newest" is newest by timestamp here,
+    // because the load path sorts by it, so a backwards clock step can leave a
+    // candidate's base newer by timestamp than the candidate. The shared core,
+    // which never reorders, is exact; this manager is best-effort.
     //
     // No detachIfActiveSnapshotRemoved() here: the candidate selection excludes
     // the active snapshot by construction, so the workspace cannot be left

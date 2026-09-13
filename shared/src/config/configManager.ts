@@ -432,10 +432,7 @@ export class ConfigManager {
     // The schema knows this path is an array; the sharing surfaces also require
     // each entry to be a usable rule, not any arbitrary array.
     if (keyPath === 'autoSnapshot.rules') {
-      validatePartialCodelapseConfig(
-        { autoSnapshot: { rules: value } },
-        'setNested',
-      );
+      validatePartialCodelapseConfig({ autoSnapshot: { rules: value } }, context);
       return;
     }
 
@@ -445,6 +442,17 @@ export class ConfigManager {
     // below and keep their existing message.
     if (keyPath === 'maxSnapshots' && typeof value === 'number') {
       validatePartialCodelapseConfig({ maxSnapshots: value }, context);
+      return;
+    }
+
+
+    // Same shape for the byte limit: a negative value is a type-valid number
+    // that the config-file validator rejects, so without this branch the direct
+    // API routes wrote it and the next load quarantined the whole file --
+    // reverting every setting to its default. Non-numbers fall through to the
+    // type check below and keep their existing message.
+    if (keyPath === 'maxSnapshotStoreBytes' && typeof value === 'number') {
+      validatePartialCodelapseConfig({ maxSnapshotStoreBytes: value }, context);
       return;
     }
 

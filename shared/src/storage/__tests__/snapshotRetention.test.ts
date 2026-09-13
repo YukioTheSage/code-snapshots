@@ -90,6 +90,12 @@ describe('shared retention', () => {
     const errorSpy = jest
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
+    // The storage layer reports the missing payload through warn while the
+    // materialization resolves it; the suite has to swallow and assert it, or
+    // the run's output is not pristine and the report goes untested.
+    const warnSpy = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
 
     try {
       const fourth = await manager.takeSnapshot({ description: 'fourth' });
@@ -107,7 +113,13 @@ describe('shared retention', () => {
       expect(errorSpy).toHaveBeenCalledWith(
         'Retention: keeping 4 snapshots. The 2 oldest cannot be removed without orphaning a survivor; nothing was deleted.',
       );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          path.join(storeDir, second.id, 'snapshot.json'),
+        ),
+      );
     } finally {
+      warnSpy.mockRestore();
       errorSpy.mockRestore();
     }
   });
@@ -139,19 +151,39 @@ describe('shared retention', () => {
       manager as unknown as { storage: { clearCache: () => void } }
     ).storage.clearCache();
 
-    const third = await manager.takeSnapshot({ description: 'third' });
+    const warnSpy = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
 
-    // 'second' disappears in the same batch as 'first', so its dangling
-    // reference must not refuse the trim: the take resolves and the store keeps
-    // only the snapshot that was just taken.
-    const reopened = new SnapshotManager(root);
-    await reopened.initialize();
-    expect((await reopened.getSnapshots()).map((s) => s.id)).toEqual([third.id]);
-    expect(fs.existsSync(path.join(storeDir, first.id))).toBe(false);
-    expect(fs.existsSync(path.join(storeDir, second.id))).toBe(false);
-    expect(
-      await reopened.getSnapshotFileContent(third.id, 'tracked.txt'),
-    ).toBe('v1');
+    try {
+      const third = await manager.takeSnapshot({ description: 'third' });
+
+      // 'second' disappears in the same batch as 'first', so its dangling
+      // reference must not refuse the trim: the take resolves and the store
+      // keeps only the snapshot that was just taken.
+      const reopened = new SnapshotManager(root);
+      await reopened.initialize();
+      expect((await reopened.getSnapshots()).map((s) => s.id)).toEqual([
+        third.id,
+      ]);
+      expect(fs.existsSync(path.join(storeDir, first.id))).toBe(false);
+      expect(fs.existsSync(path.join(storeDir, second.id))).toBe(false);
+      expect(
+        await reopened.getSnapshotFileContent(third.id, 'tracked.txt'),
+      ).toBe('v1');
+
+      // The capture's base lookup hit the directory that was already gone, and
+      // the storage layer said so; the fallback to full content is what the
+      // resolution above proves, and the report is asserted rather than left in
+      // the run's output.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          path.join(storeDir, first.id, 'snapshot.json'),
+        ),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('trims by store order when the clock steps backwards', async () => {

@@ -116,6 +116,65 @@ describe('selectSizePruneCandidates', () => {
     ).toEqual(['oldest', 'middle']);
   });
 
+  it('selects nothing when the active snapshot alone exceeds the limit', () => {
+    // The store is 9200 bytes against a 1000 limit, and 9000 of them are the
+    // active snapshot. Removing the 100-byte 'oldest' would still leave the
+    // store over its limit, so the history would be gone for nothing.
+    expect(
+      selectSizePruneCandidates(
+        store,
+        sizes({ oldest: 100, middle: 100, active: 9000 }),
+        1000,
+        'active',
+      ),
+    ).toEqual([]);
+  });
+
+  it('selects nothing when an unindexed snapshot directory holds the excess', () => {
+    // An orphan 'snapshot-*' directory the index does not list: the walk counts
+    // its bytes, the selector cannot select it, and no snapshot can be removed
+    // to cover it.
+    const sizesWithOrphan: SnapshotStoreSizes = {
+      ...sizes({ oldest: 100, middle: 100, active: 100 }),
+      perSnapshotBytes: {
+        oldest: 100,
+        middle: 100,
+        active: 100,
+        'snapshot-orphan': 5000,
+      },
+      snapshotBytes: 5300,
+      totalBytes: 5400,
+    };
+
+    expect(
+      selectSizePruneCandidates(store, sizesWithOrphan, 1000, 'active'),
+    ).toEqual([]);
+  });
+
+  it('selects nothing when no snapshot is active and the removable bytes fall short', () => {
+    // An activation with no current pointer protects nothing, so every snapshot
+    // is removable -- and still the store bytes (index, quarantine) hold the
+    // excess. Emptying the store would not fit it.
+    const storeBytesHoldTheExcess: SnapshotStoreSizes = {
+      snapshotBytes: 200,
+      storeBytes: 5000,
+      totalBytes: 5200,
+      perSnapshotBytes: { oldest: 100, middle: 100 },
+    };
+
+    expect(
+      selectSizePruneCandidates(
+        [
+          { id: 'oldest', timestamp: 1 },
+          { id: 'middle', timestamp: 2 },
+        ],
+        storeBytesHoldTheExcess,
+        1000,
+        null,
+      ),
+    ).toEqual([]);
+  });
+
   it('returns nothing when the store is within the limit', () => {
     expect(
       selectSizePruneCandidates(store, sizes({ oldest: 1, middle: 1, active: 1 }), 1000, null),

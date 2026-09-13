@@ -94,16 +94,20 @@ describe('shared size retention', () => {
     await manager.initialize();
     const first = await manager.takeSnapshot({ description: 'first' });
 
-    const firstBytes =
-      measureSnapshotStore(storeDir).perSnapshotBytes[first.id];
-    // A limit the first snapshot alone exceeds. The snapshot taken next is the
-    // one the store is positioned at, so the enforcement may not remove it.
-    writeConfig({ maxSnapshots: 50, maxSnapshotStoreBytes: firstBytes });
+    const before = measureSnapshotStore(storeDir);
+    // One byte under the store, so the excess stays inside 'first's own bytes
+    // and the trim can cover it. The snapshot taken next is the one the store
+    // is positioned at, so the enforcement may not remove it.
+    writeConfig({
+      maxSnapshots: 50,
+      maxSnapshotStoreBytes: before.totalBytes - 1,
+    });
     (
       manager as unknown as { config: { clearCache: () => void } }
     ).config.clearCache();
 
-    fs.writeFileSync(path.join(root, 'tracked.txt'), 'z'.repeat(4000), 'utf8');
+    // The file does not change, so 'second' stores a reference to 'first' and
+    // the bytes the take adds stay far below what 'first' holds.
     const second = await manager.takeSnapshot({ description: 'second' });
 
     expect((await manager.getSnapshots()).map((s) => s.id)).toEqual([
@@ -111,7 +115,7 @@ describe('shared size retention', () => {
     ]);
     expect(fs.existsSync(path.join(storeDir, first.id))).toBe(false);
     expect(await manager.getSnapshotFileContent(second.id, 'tracked.txt')).toBe(
-      'z'.repeat(4000),
+      'x'.repeat(4000),
     );
   });
 
@@ -121,10 +125,12 @@ describe('shared size retention', () => {
     const first = await manager.takeSnapshot({ description: 'first' });
 
     const before = measureSnapshotStore(storeDir);
+    // One byte under the store: at the load below the excess has no removable
+    // snapshot to cover it, and the take that follows adds little enough for
+    // 'first' to cover it.
     writeConfig({
       maxSnapshots: 50,
-      maxSnapshotStoreBytes:
-        before.totalBytes - before.perSnapshotBytes[first.id],
+      maxSnapshotStoreBytes: before.totalBytes - 1,
     });
 
     const handler = new StandaloneHandler();
@@ -153,11 +159,13 @@ describe('shared size retention', () => {
     const manager = new SnapshotManager(root);
     await manager.initialize();
     const first = await manager.takeSnapshot({ description: 'first' });
-    const firstBytes =
-      measureSnapshotStore(storeDir).perSnapshotBytes[first.id];
-    // A limit the first snapshot alone exceeds, so the take that follows has an
-    // excess to trim and 'first' is the only candidate it can reach.
-    writeConfig({ maxSnapshots: 50, maxSnapshotStoreBytes: firstBytes });
+    const before = measureSnapshotStore(storeDir);
+    // One byte under the store, so the excess stays inside 'first's own bytes
+    // and the trim reaches it; the bytes the take adds stay below that.
+    writeConfig({
+      maxSnapshots: 50,
+      maxSnapshotStoreBytes: before.totalBytes - 1,
+    });
     (
       manager as unknown as { config: { clearCache: () => void } }
     ).config.clearCache();
@@ -177,7 +185,8 @@ describe('shared size retention', () => {
       return Promise.reject(new Error('ENOSPC: no space left on device'));
     });
 
-    fs.writeFileSync(path.join(root, 'tracked.txt'), 'y'.repeat(4000), 'utf8');
+    // The file does not change: 'second' stores a reference, so the survivor's
+    // rewrite is the only save the trim needs.
     const second = await manager.takeSnapshot({ description: 'second' });
 
     expect(second.id).toBeTruthy();
@@ -191,7 +200,7 @@ describe('shared size retention', () => {
     );
     // The base the survivor references is intact, so the store still resolves.
     expect(await manager.getSnapshotFileContent(second.id, 'tracked.txt')).toBe(
-      'y'.repeat(4000),
+      'x'.repeat(4000),
     );
   });
 
@@ -282,7 +291,13 @@ describe('shared size retention', () => {
     fs.writeFileSync(path.join(root, 'tracked.txt'), 'y'.repeat(4000), 'utf8');
     const second = await manager.takeSnapshot({ description: 'second' });
 
-    writeConfig({ maxSnapshots: 50, maxSnapshotStoreBytes: 1 });
+    const before = measureSnapshotStore(storeDir);
+    // One byte under the store: 'first' is the only removable snapshot and it
+    // covers the excess, so the trim proceeds and reaches the injected failure.
+    writeConfig({
+      maxSnapshots: 50,
+      maxSnapshotStoreBytes: before.totalBytes - 1,
+    });
 
     const reopened = new SnapshotManager(root);
     injectTrimThrow(reopened);
@@ -306,18 +321,24 @@ describe('shared size retention', () => {
     const second = await manager.takeSnapshot({ description: 'second' });
     fs.writeFileSync(path.join(root, 'tracked.txt'), 'z'.repeat(4000), 'utf8');
     const third = await manager.takeSnapshot({ description: 'third' });
+    fs.writeFileSync(path.join(root, 'tracked.txt'), 'w'.repeat(4000), 'utf8');
+    const fourth = await manager.takeSnapshot({ description: 'fourth' });
 
-    // The store is positioned at 'third', so 'second' is only protected if the
+    // The store is positioned at 'fourth', so 'third' is only protected if the
     // just-created id is honoured by id rather than by its place in the array.
-    expect(manager.getCurrentSnapshot()?.id).toBe(third.id);
+    expect(manager.getCurrentSnapshot()?.id).toBe(fourth.id);
 
     const before = measureSnapshotStore(storeDir);
-    // One byte more than removing 'first' alone frees: a selector that still
-    // saw 'second' among the removable would take it too.
+    // An excess the genuinely removable 'first' and 'second' cannot cover, but
+    // which the just-created 'third' would: a selector that still saw it among
+    // the removable would delete it.
     writeConfig({
       maxSnapshots: 50,
       maxSnapshotStoreBytes:
-        before.totalBytes - before.perSnapshotBytes[first.id] - 1,
+        before.totalBytes -
+        before.perSnapshotBytes[first.id] -
+        before.perSnapshotBytes[second.id] -
+        1,
     });
     (
       manager as unknown as { config: { clearCache: () => void } }
@@ -329,15 +350,19 @@ describe('shared size retention', () => {
           justCreatedSnapshotId?: string,
         ) => Promise<{ trimmed: string[]; stillOverLimit: boolean }>;
       }
-    ).enforceSnapshotSizeLimitInternal(second.id);
+    ).enforceSnapshotSizeLimitInternal(third.id);
 
-    expect(result.trimmed).toEqual([first.id]);
+    // Refused rather than pruned: including 'third' would be the only way to
+    // cover the excess, and the snapshot this trim belongs to may not go.
+    expect(result.trimmed).toEqual([]);
+    expect(result.stillOverLimit).toBe(true);
     expect((await manager.getSnapshots()).map((s) => s.id)).toEqual([
+      first.id,
       second.id,
       third.id,
+      fourth.id,
     ]);
-    expect(fs.existsSync(path.join(storeDir, second.id))).toBe(true);
-    expect(fs.existsSync(path.join(storeDir, first.id))).toBe(false);
+    expect(fs.existsSync(path.join(storeDir, third.id))).toBe(true);
   });
 
   it('does not measure or warn while the limit is disabled', async () => {

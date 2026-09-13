@@ -143,6 +143,53 @@ describe('size-based retention in the extension', () => {
     expect(manager.getSnapshots().map((s) => s.id)).toEqual(['only']);
   });
 
+  it('keeps the whole store when the removable bytes cannot cover the excess', async () => {
+    // 'only' is the active snapshot and holds 9000 of the 9200 bytes: removing
+    // the 100-byte 'old' would leave the store over its limit with the history
+    // gone for nothing, so nothing is selected at all.
+    const fixtures = [
+      snapshot('old', { 'f.ts': { content: 'OLD' } }, 1),
+      snapshot('only', { 'f.ts': { content: 'A' } }, 2),
+    ];
+    const { manager, storage } = await managerWithStore(fixtures, 'only', [
+      storeSizes({ old: 100, only: 9000 }),
+    ]);
+    limitMock.mockReturnValue(1000);
+
+    const result = await manager.enforceSnapshotSizeLimitOnActivation();
+
+    expect(result.trimmed).toEqual([]);
+    expect(result.stillOverLimit).toBe(true);
+    expect(storage.deleteSnapshotData).not.toHaveBeenCalled();
+    expect(manager.getSnapshots().map((s) => s.id)).toEqual(['old', 'only']);
+  });
+
+  it('keeps the store when no snapshot is active and the removable bytes fall short', async () => {
+    // Activation with no current pointer protects nothing, so every snapshot is
+    // removable -- and still the store's own bytes hold the excess. Emptying the
+    // store would not fit it.
+    const fixtures = [
+      snapshot('old', { 'f.ts': { content: 'OLD' } }, 1),
+      snapshot('middle', { 'f.ts': { content: 'MID' } }, 2),
+    ];
+    const { manager, storage } = await managerWithStore(fixtures, null, [
+      {
+        snapshotBytes: 200,
+        storeBytes: 5000,
+        totalBytes: 5200,
+        perSnapshotBytes: { old: 100, middle: 100 },
+      },
+    ]);
+    limitMock.mockReturnValue(1000);
+
+    const result = await manager.enforceSnapshotSizeLimitOnActivation();
+
+    expect(result.trimmed).toEqual([]);
+    expect(result.stillOverLimit).toBe(true);
+    expect(storage.deleteSnapshotData).not.toHaveBeenCalled();
+    expect(manager.getSnapshots().map((s) => s.id)).toEqual(['old', 'middle']);
+  });
+
   it('never trims the snapshot it was just asked to create', async () => {
     // The list the load path hands the manager is sorted by timestamp, not by
     // store order, so the snapshot a take just wrote is excluded by id rather
@@ -150,22 +197,28 @@ describe('size-based retention in the extension', () => {
     const fixtures = [
       snapshot('old', { 'f.ts': { content: 'OLD' } }, 1),
       snapshot('fresh', { 'f.ts': { content: 'FRESH' } }, 2),
+      snapshot('newest', { 'f.ts': { content: 'NEWEST' } }, 3),
     ];
     const { manager, storage } = await managerWithStore(fixtures, null, [
-      storeSizes({ old: 100, fresh: 900 }),
-      storeSizes({ fresh: 900 }),
+      storeSizes({ old: 100, fresh: 900, newest: 300 }),
     ]);
-    limitMock.mockReturnValue(500);
+    // The excess is 500: 'old' alone cannot cover it, but 'old' plus the
+    // just-created 'fresh' would. The exclusion is what makes the trim refuse,
+    // which is why a selector that still saw 'fresh' would delete it.
+    limitMock.mockReturnValue(900);
 
     const result = await (manager as any).enforceSnapshotSizeLimitInternal(
       'fresh',
     );
 
-    expect(result.trimmed).toEqual(['old']);
+    expect(result.trimmed).toEqual([]);
     expect(result.stillOverLimit).toBe(true);
-    expect(storage.deleteSnapshotData).toHaveBeenCalledWith('old');
-    expect(storage.deleteSnapshotData).not.toHaveBeenCalledWith('fresh');
-    expect(manager.getSnapshots().map((s) => s.id)).toEqual(['fresh']);
+    expect(storage.deleteSnapshotData).not.toHaveBeenCalled();
+    expect(manager.getSnapshots().map((s) => s.id)).toEqual([
+      'old',
+      'fresh',
+      'newest',
+    ]);
   });
 
   it('orders candidates by age, not by array position', async () => {
@@ -337,7 +390,8 @@ describe('size-based retention in the extension', () => {
       storeSizes({ a: 600, b: 300, c: 300, d: 300 }),
       storeSizes({ a: 600, b: 300 }),
     ]);
-    limitMock.mockReturnValue(100);
+    // The excess is 1100 and the three candidates hold 1200, so the trim runs.
+    limitMock.mockReturnValue(500);
     storage.getSnapshotFileContent.mockResolvedValue('A');
     storage.deleteSnapshotData.mockImplementation((id: string) =>
       id === 'b'
@@ -521,6 +575,32 @@ describe('count-based retention in the extension', () => {
     for (const id of ['a', 'b', 'd']) {
       expect(await fresh.getSnapshotFileContentPublic(id, 'f.ts')).toBe('A');
     }
+  });
+
+  it('does not fail a take when a trim rejects', async () => {
+    const fixtures = [snapshot('a', { 'f.ts': { content: 'A' } }, 1)];
+    const { manager, storage } = await managerForCountPrune(fixtures, 'a');
+
+    // Both trims can reject -- a purge, or the index write each of them ends
+    // with, which Plan 02 deliberately lets surface. Neither may turn a saved
+    // and indexed snapshot into a failed take.
+    jest
+      .spyOn(manager as any, 'enforceSnapshotLimit')
+      .mockRejectedValue(new Error('EACCES: permission denied'));
+    jest
+      .spyOn(manager as any, 'enforceSnapshotSizeLimitInternal')
+      .mockRejectedValue(new Error('ENOSPC: no space left on device'));
+
+    const outcome = await (manager as any).takeSnapshotInternal('manual', {
+      tags: ['manual'],
+    });
+
+    expect(outcome.created).toBe(true);
+    expect((await manager.getSnapshots()).map((s) => s.id)).toEqual([
+      'a',
+      (outcome as { snapshot: Snapshot }).snapshot.id,
+    ]);
+    expect(storage.deleteSnapshotData).not.toHaveBeenCalled();
   });
 
   it('rolls the count prune back when a survivor save fails, so a later prune retries', async () => {

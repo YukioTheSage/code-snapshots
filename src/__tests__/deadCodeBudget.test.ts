@@ -11,6 +11,7 @@
 import * as path from 'path';
 
 interface LintResult {
+  errorCount: number;
   warningCount: number;
 }
 
@@ -33,7 +34,16 @@ describe('lint budget', () => {
       (total: number, result: LintResult) => total + result.warningCount,
       0,
     );
+    const errors = results.reduce(
+      (total: number, result: LintResult) => total + result.errorCount,
+      0,
+    );
 
+    // The ceiling alone is blind to errors: this programme twice saw the budget
+    // pass while an error sat in the tree, the last one a prettier violation on
+    // new code. An error fails here as well as in the explicit sum and in
+    // `format:check`.
+    expect(errors).toBe(0);
     expect(warnings).toBeLessThanOrEqual(LINT_WARNING_CEILING);
   }, 120_000);
 });
