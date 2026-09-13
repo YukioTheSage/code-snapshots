@@ -923,7 +923,12 @@ export class SemanticSearchService implements vscode.Disposable {
         }
 
         const total = targets.length;
+        // `attempted` counts every snapshot the run tried, including requested
+        // ids that do not exist; `processed` counts only the snapshots the loop
+        // is actually working on, so the progress text cannot claim to be on
+        // snapshot 2 of 1 when a missing id is seeded into `attempted`.
         let attempted = failed.length;
+        let processed = 0;
         let succeeded = 0;
 
         // Process snapshots sequentially, checking cancellation at each
@@ -934,11 +939,16 @@ export class SemanticSearchService implements vscode.Disposable {
           throwIfCancelled(token);
 
           progress.report({
-            message: 'Processing snapshot ' + (attempted + 1) + ' of ' + total,
+            message: 'Processing snapshot ' + (processed + 1) + ' of ' + total,
             increment: 100 / total,
           });
+          processed++;
           attempted++;
 
+          // Set only once the delete has actually resolved. A purge that failed
+          // leaves the old vectors in the store, so that snapshot is still
+          // indexed and its mark must survive.
+          let purged = false;
           try {
             if (options.purgeFirst === true) {
               // A re-index without this mixes the old and the new chunk id sets
@@ -947,6 +957,7 @@ export class SemanticSearchService implements vscode.Disposable {
               await this.vectorDatabaseService.deleteSnapshotVectors(
                 snapshotId,
               );
+              purged = true;
             }
             await this.indexSnapshot(snapshotId);
             this.indexedSnapshots.add(snapshotId);
@@ -960,6 +971,19 @@ export class SemanticSearchService implements vscode.Disposable {
             const message =
               error instanceof Error ? error.message : String(error);
             failed.push({ snapshotId, error: message });
+            if (purged) {
+              // The vectors are gone but the snapshot was not re-indexed, so a
+              // persisted mark would make every later selection skip it and
+              // report it as already indexed over an empty store. Forget it so
+              // the next run retries. Guarded on the delete having happened, not
+              // on purgeFirst: if the delete itself failed, the old vectors are
+              // intact and the snapshot really is still indexed.
+              this.indexedSnapshots.delete(snapshotId);
+              await this.context.workspaceState.update(
+                'semanticSearch.indexedSnapshots',
+                Array.from(this.indexedSnapshots),
+              );
+            }
             log(`Error indexing snapshot ${snapshotId}: ${message}`);
           }
         }

@@ -215,6 +215,115 @@ describe('indexAllSnapshots reporting', () => {
     expect(order).toEqual(['purge', 'index']);
     expect(deleteSnapshotVectors).toHaveBeenCalledWith('a');
   });
+
+  it('forgets a purge-first snapshot whose re-index failed, so a later run retries it', async () => {
+    const { service, workspaceState } = buildService([{ id: 'a' }], []);
+    (
+      service as unknown as { indexedSnapshots: Set<string> }
+    ).indexedSnapshots.add('a');
+    const deleteSnapshotVectors = jest.fn(async () => undefined);
+    (
+      service as unknown as { vectorDatabaseService: unknown }
+    ).vectorDatabaseService = { deleteSnapshotVectors };
+    (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot =
+      jest.fn(async () => {
+        throw new Error('boom a');
+      });
+
+    const first = await service.indexAllSnapshots({
+      force: true,
+      purgeFirst: true,
+    });
+
+    // The purge removed the vectors while the persisted set still claimed the
+    // snapshot was indexed: every later selection would skip it and report
+    // 'already indexed' over an empty store.
+    expect(deleteSnapshotVectors).toHaveBeenCalledWith('a');
+    expect(first.failed).toEqual([
+      { snapshotId: 'a', error: expect.stringContaining('boom a') },
+    ]);
+    expect(workspaceState.update).toHaveBeenCalledWith(
+      'semanticSearch.indexedSnapshots',
+      [],
+    );
+
+    (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot =
+      jest.fn(async () => undefined);
+    const retried = await service.indexAllSnapshots();
+
+    expect(retried.succeeded).toBe(1);
+    expect(
+      (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot,
+    ).toHaveBeenCalledWith('a');
+  });
+
+  it('keeps the indexed mark when the purge itself failed', async () => {
+    const { service } = buildService([{ id: 'a' }], []);
+    (
+      service as unknown as { indexedSnapshots: Set<string> }
+    ).indexedSnapshots.add('a');
+    (
+      service as unknown as { vectorDatabaseService: unknown }
+    ).vectorDatabaseService = {
+      deleteSnapshotVectors: jest.fn(async () => {
+        throw new Error('purge failed');
+      }),
+    };
+    const indexSnapshot = jest.fn(async () => undefined);
+    (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot =
+      indexSnapshot;
+
+    const outcome = await service.indexAllSnapshots({
+      force: true,
+      purgeFirst: true,
+    });
+
+    // The delete never completed, so the old vectors are still in the store:
+    // the snapshot really is still indexed and the mark must survive.
+    expect(outcome.failed).toEqual([
+      { snapshotId: 'a', error: expect.stringContaining('purge failed') },
+    ]);
+    expect(
+      (
+        service as unknown as { indexedSnapshots: Set<string> }
+      ).indexedSnapshots.has('a'),
+    ).toBe(true);
+    expect(indexSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('numbers progress by processed snapshots, not by attempts including missing ids', async () => {
+    const { service } = buildService([{ id: 'a' }], []);
+    const messages: string[] = [];
+    (vscode.window as unknown as { withProgress: jest.Mock }).withProgress =
+      jest.fn(
+        async (_options: unknown, task: (p: unknown, t: unknown) => unknown) =>
+          task(
+            {
+              report: (value: { message?: string }) => {
+                if (value?.message) {
+                  messages.push(value.message);
+                }
+              },
+            },
+            {
+              isCancellationRequested: false,
+              onCancellationRequested: jest.fn(() => ({ dispose: jest.fn() })),
+            },
+          ),
+      );
+
+    const outcome = await service.indexAllSnapshots({
+      snapshotIds: ['a', 'missing'],
+    });
+
+    // The missing id counts as attempted, but the toast must never claim to be
+    // processing snapshot 2 of 1.
+    expect(outcome.attempted).toBe(2);
+    expect(outcome.failed).toEqual([
+      { snapshotId: 'missing', error: expect.stringMatching(/not found/i) },
+    ]);
+    expect(messages).toEqual(['Processing snapshot 1 of 1']);
+  });
 });
 
 describe('TerminalApiService.indexSnapshots reporting', () => {
@@ -310,5 +419,51 @@ describe('TerminalApiService.indexSnapshots reporting', () => {
       force: true,
       purgeFirst: true,
     });
+  });
+
+  it.each([
+    ['a string', 'a'],
+    ['an object', { ids: ['a'] }],
+    ['null', null],
+    ['a non-string element', ['a', 5]],
+  ])(
+    'refuses %s as snapshotIds with a clean error',
+    async (_label, snapshotIds) => {
+      const api = new TerminalApiService({} as never);
+      const indexAllSnapshots = jest.fn();
+      (
+        api as unknown as { semanticSearchService: unknown }
+      ).semanticSearchService = { indexAllSnapshots };
+
+      const result = await api.indexSnapshots({
+        snapshotIds: snapshotIds as unknown as string[],
+      });
+
+      // An untyped payload from 'codelapse api' must not surface an internal
+      // expression, and must not degrade to 'every snapshot' either.
+      expect(indexAllSnapshots).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('snapshotIds must be an array of strings');
+    },
+  );
+
+  it('reports the real elapsed time when the run throws', async () => {
+    const api = new TerminalApiService({} as never);
+    (
+      api as unknown as { semanticSearchService: unknown }
+    ).semanticSearchService = {
+      indexAllSnapshots: jest
+        .fn()
+        .mockRejectedValue(new Error('no credentials')),
+    };
+    const now = jest.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1000).mockReturnValueOnce(1420);
+
+    const result = await api.indexSnapshots();
+
+    now.mockRestore();
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('no credentials');
+    expect(result.timeElapsed).toBe(420);
   });
 });

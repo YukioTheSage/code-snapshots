@@ -860,8 +860,23 @@ export class TerminalApiService implements TerminalApiInterface {
         throw new Error('Semantic search service not available');
       }
 
+      // The CLI connector hands this method whatever JSON the caller sent, so
+      // validate the one field whose wrong type would otherwise throw deep in
+      // the service (`options.snapshotIds.filter is not a function`) or, worse,
+      // be filtered away there and silently index the whole workspace. Only an
+      // absent key means 'every snapshot': JSON null is a value that failed to
+      // carry ids, not an omission, and is rejected like any other non-array.
+      const snapshotIds = options.snapshotIds;
+      if (
+        snapshotIds !== undefined &&
+        (!Array.isArray(snapshotIds) ||
+          snapshotIds.some((id) => typeof id !== 'string'))
+      ) {
+        throw new Error('snapshotIds must be an array of strings');
+      }
+
       const outcome = await this.semanticSearchService.indexAllSnapshots({
-        snapshotIds: options.snapshotIds,
+        snapshotIds,
         force: options.force === true,
         purgeFirst: options.purgeFirst === true,
       });
@@ -901,7 +916,7 @@ export class TerminalApiService implements TerminalApiInterface {
         snapshotsIndexed: 0,
         filesIndexed: 0,
         error: errorMessage,
-        timeElapsed: 0,
+        timeElapsed: Date.now() - startTime,
       };
     }
   }
