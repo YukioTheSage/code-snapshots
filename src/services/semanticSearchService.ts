@@ -156,6 +156,12 @@ export class SemanticSearchService implements vscode.Disposable {
    * opening every snapshot file at once.
    */
   private readonly MAX_CONTENT_READ_CONCURRENCY = 4;
+  /**
+   * How many query measurements are kept. The map is keyed by the query text,
+   * so without a cap every distinct search ever run stayed in memory until
+   * `dispose()` - and nothing but `dispose()` ever removed an entry.
+   */
+  private readonly PERFORMANCE_METRICS_LIMIT = 100;
   /** Set by `dispose()`. Checked before any further work or state write. */
   private disposed = false;
   /** The snapshot-change subscription, released by `dispose()`. */
@@ -498,8 +504,7 @@ export class SemanticSearchService implements vscode.Disposable {
       vectorOperations: baseResults.length,
     };
 
-    // Store performance metrics for analysis
-    this.performanceMetrics.set(options.query, performanceMetrics);
+    this.recordPerformanceMetrics(options.query, performanceMetrics);
 
     log(
       `Enhanced search completed in ${totalTime}ms, returned ${enhancedResults.length} results`,
@@ -1639,6 +1644,25 @@ export class SemanticSearchService implements vscode.Disposable {
     this.isProcessing = false;
     this.performanceMetrics.clear();
     log('Disposed semantic search service');
+  }
+
+  private recordPerformanceMetrics(
+    query: string,
+    metrics: PerformanceMetrics,
+  ): void {
+    // Delete before set so a repeated query moves to the newest position and
+    // the eviction below really is least-recently-written.
+    if (this.performanceMetrics.has(query)) {
+      this.performanceMetrics.delete(query);
+    }
+    this.performanceMetrics.set(query, metrics);
+
+    if (this.performanceMetrics.size > this.PERFORMANCE_METRICS_LIMIT) {
+      const oldestQuery = this.performanceMetrics.keys().next().value;
+      if (oldestQuery !== undefined) {
+        this.performanceMetrics.delete(oldestQuery);
+      }
+    }
   }
 
   /**
