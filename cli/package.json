@@ -1,7 +1,7 @@
 {
   "name": "codelapse-cli",
   "version": "2.0.0",
-  "description": "Comprehensive command-line interface for CodeLapse VSCode extension with full feature parity",
+  "description": "Command-line interface for CodeLapse snapshots: snapshot CRUD, files, filter, rules, diagnostics, config, git and workspace info run standalone; search, analyze, chunk and watch need VS Code",
   "main": "dist/cli.js",
   "bin": {
     "codelapse": "dist/cli.js",

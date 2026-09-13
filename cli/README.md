@@ -5,7 +5,14 @@
 [![Issues](https://img.shields.io/github/issues/YukioTheSage/code-snapshots)](https://github.com/YukioTheSage/code-snapshots/issues)
 [![License](https://img.shields.io/github/license/YukioTheSage/code-snapshots)](https://github.com/YukioTheSage/code-snapshots/blob/main/LICENSE)
 
-A comprehensive command-line interface for the CodeLapse VSCode extension with **FULL FEATURE PARITY** - bringing all extension capabilities to your terminal for automation, AI integration, and advanced workflows.
+A comprehensive command-line interface for CodeLapse snapshots - bringing
+snapshot-driven development to your terminal for automation, AI integration
+and advanced workflows. Snapshot CRUD, file operations, `filter`, `rules`,
+`diagnostics`, config, the `git` family and `workspace info` run
+**standalone**, with no VS Code; semantic search, `analyze`, `chunk`,
+`watch`, `workspace state` / `workspace files` and `utility` need the
+extension running, and the extension UI has no CLI surface in either mode.
+The full matrix is in [API.md](API.md#mode-availability).
 
 > ⚠️ **EXPERIMENTAL FEATURE - SECURITY WARNING**: Semantic search is currently experimental with significant security and privacy risks:
 > - **Data Privacy**: Your code content is transmitted to external AI services (Pinecone, Gemini)
@@ -126,49 +133,57 @@ npx codelapse-cli --help
 
 ### Verify Installation
 
-After installing the CLI, verify it can connect to the VS Code extension:
+After installing the CLI, verify it can see your workspace. No VS Code is
+needed for this - the CLI runs standalone by default:
 
 ```bash
 # Check CLI version
 codelapse --version
 
-# Test connection to VS Code extension (REQUIRED)
-codelapse status --json --silent
+# Check the workspace and which mode was selected
+codelapse status --json
 
-# Expected successful output:
+# Expected output (`mode` is `standalone` when no extension answered). A
+# brand-new workspace prints the store-absent notice first:
+# Snapshot index file not found. Starting with empty state.
 # {
 #   "success": true,
 #   "connected": true,
+#   "mode": "standalone",
 #   "workspace": "/path/to/your/project",
-#   "totalSnapshots": 0
+#   "totalSnapshots": 0,
+#   "currentSnapshot": null
 # }
 ```
 
-If the connection test fails, refer to the [Prerequisites](#prerequisites) section above for detailed setup instructions and troubleshooting steps.
+If the check fails, refer to the [Prerequisites](#prerequisites) section above
+for setup instructions and troubleshooting steps. Which commands do need the
+extension is set out in [API.md](API.md#mode-availability).
 
 > 💡 **Tip**: The CLI works great on its own! Use it in CI/CD pipelines, on servers, or for quick terminal operations. Connect to VS Code when you need visual tools.
 
 ## Quick Start
 
 ### Basic Workflow
-1. **Check connection to VSCode extension:**
+1. **Check the workspace:**
    ```bash
-   codelapse status --json --silent
+   codelapse status --json
    ```
 
 2. **Create a snapshot:**
    ```bash
-   codelapse snapshot create "My changes" --tags "feature,wip" --json --silent
+   codelapse snapshot create "My changes" --tags "feature,wip" --json
    ```
 
 3. **List snapshots:**
    ```bash
-   codelapse snapshot list --json --silent
+   codelapse snapshot list --json
    ```
 
 4. **Search snapshots:** ⚠️ **(Experimental - use at your own risk)**
    ```bash
-   codelapse search query "authentication code" --json --silent
+   # needs the CodeLapse extension running
+   codelapse search query "authentication code" --json
    ```
 
 ## User Guides
@@ -197,10 +212,10 @@ codelapse snapshot navigate previous
 
 #### Code Review and Collaboration
 ```bash
-# Export snapshot for sharing
+# Export snapshot for sharing (needs the CodeLapse extension running)
 codelapse utility export snapshot-123 --format zip --output ./auth-feature.zip
 
-# Validate snapshot integrity
+# Validate snapshot integrity (needs the CodeLapse extension running)
 codelapse utility validate snapshot-123
 
 # Show detailed snapshot information
@@ -211,10 +226,10 @@ codelapse snapshot show snapshot-123 --files --content src/auth.ts
 
 `codelapse` is built to be driven by an agent, and the contract is short:
 
-1. `--json` and **not** `--silent`: `--silent` suppresses the JSON envelope for
-   every command routed through the shared result printer (`status`,
-   `snapshot show` and `api` are the exceptions - they write their JSON
-   directly).
+1. `--json` and **not** `--silent`. What the flag suppresses, and which
+   commands print anyway, are stated once in
+   [HELP.md's Global Options](HELP.md#global-options) instead of being repeated
+   here.
 2. Branch on the exit code: 0 when the payload's `success` is `true`, 1 when it
    is `false` - for every command, `api` and `batch` included.
 3. After a fan-out call, check `failedQueries` / `failedOperations` (and a
@@ -234,8 +249,8 @@ Perfect for automated testing and deployment pipelines:
 # Pre-deployment snapshot
 codelapse snapshot create "Pre-deployment: $(git rev-parse --short HEAD)" --tags "deployment,$(git branch --show-current)" --json --silent
 
-# Validate workspace state
-codelapse workspace state --json --silent
+# Validate the workspace the CLI sees
+codelapse workspace info --json
 
 # Create release snapshot
 codelapse snapshot create "Release v$(cat package.json | jq -r .version)" --tags "release,production" --favorite --json --silent
@@ -277,7 +292,11 @@ Verified against the built `dist/cli.js` for `status`, `snapshot list`,
 `utility validate`, `analyze chunk/file/quality`, `search query`,
 `search index` and `api`: every one wrote a single JSON object to stdout and
 exit code 0 or 1 agreeing with its own `success` field. Human-readable progress
-and warnings go to **stderr**, so stdout stays parseable.
+and warnings go to **stderr**, so stdout stays parseable - with one exception:
+until a snapshot-writing command creates the store, standalone mode prints
+`Snapshot index file not found. Starting with empty state.` on **stdout** ahead
+of the payload. Select the JSON line (`codelapse snapshot list --json | tail -n 1`)
+rather than assuming line 1.
 
 ```bash
 # Success response
@@ -295,10 +314,22 @@ and warnings go to **stderr**, so stdout stays parseable.
 ```
 
 ### Silent Mode
-Use `--silent` to suppress user prompts and status messages, ensuring clean output for automation.
+Use `--json`; add `--silent` only when you want no output at all. `--silent`
+suppresses banners, spinners and progress messages *and the JSON envelope with
+them*, so a command routed through the shared result printer prints no payload
+when both flags are set - the exit code is then the whole result. The
+store-absent notice described under [JSON Output Mode](#json-output-mode) can
+still reach stdout. `--silent` is
+**not** a way to skip a confirmation prompt: only the flag a command's own
+`--help` documents as skipping it does that, and not every command has one. The
+full contract is in [HELP.md's Global Options](HELP.md#global-options).
 
 ```bash
-codelapse snapshot create "Auto snapshot" --silent --json
+# No payload is printed; branch on the exit code
+codelapse snapshot create "Auto snapshot" --json --silent
+
+# The payload is printed, for a script that reads it
+codelapse snapshot create "Auto snapshot" --json
 ```
 
 ### Batch Operations
@@ -322,6 +353,7 @@ failing command is reported per entry without stopping the batch.
 Use `codelapse watch` to monitor for snapshot and workspace changes in real-time, enabling reactive AI workflows.
 
 ```bash
+# needs the CodeLapse extension running
 codelapse watch --events snapshots,workspace --json
 # Outputs: {"type": "event", "event": {"type": "snapshot_created", "data": {...}}}
 ```
@@ -339,9 +371,19 @@ codelapse api takeSnapshot --data '''{"description": "Test", "tags": ["auto"]}''
 
 ## Command Reference
 
+> **Which families need the extension.** Semantic search (`search`,
+> `search-enhanced`), analysis (`analyze`), chunking (`chunk`), live events
+> (`watch`), `workspace state` / `workspace files` and `utility` are served
+> over IPC only - they need VS Code running with CodeLapse enabled and fail
+> standalone. Everything else below also runs without it; the full matrix is
+> in [API.md's mode availability](API.md#mode-availability).
+
 ### Global Options
 - `--json`: Output in JSON format.
-- `--silent`: Suppress spinners and user-facing messages.
+- `--silent`: Output suppression - no spinners, banners or progress messages,
+  and no JSON envelope either. It does not skip a confirmation prompt. The
+  contract, including the commands that print anyway, is in
+  [HELP.md's Global Options](HELP.md#global-options).
 - `--verbose`: Enable verbose output for debugging.
 - `--timeout <ms>`: Connection timeout in milliseconds (default: 5000).
 
@@ -355,7 +397,8 @@ codelapse api takeSnapshot --data '''{"description": "Test", "tags": ["auto"]}''
 ### Connection & Status
 
 #### `codelapse status`
-Check connection to the CodeLapse VSCode extension.
+Report the active mode, the workspace and the snapshot count. No VS Code
+is required: standalone mode answers with `"mode": "standalone"`.
 
 **Returns**
 ```json
@@ -1020,7 +1063,7 @@ if ! codelapse snapshot create "My changes" --json --silent; then
 fi
 
 # Parse JSON responses properly
-RESULT=$(codelapse snapshot list --json --silent)
+RESULT=$(codelapse snapshot list --json | tail -n 1)
 if echo "$RESULT" | jq -e '.success' > /dev/null; then
   echo "Command succeeded"
 else
@@ -1038,9 +1081,11 @@ fi
 # Fail-safe CI integration
 set -euo pipefail
 
-# Create backup before operations
-BACKUP_ID=$(codelapse snapshot create "CI: Pre-operation backup" \
-  --tags "ci,backup" --json --silent | jq -r '.snapshot.id')
+# Create backup before operations. Capture first: the selector must not sit
+# between the command and the abort that depends on its status.
+BACKUP_JSON=$(codelapse snapshot create "CI: Pre-operation backup" \
+  --tags "ci,backup" --json)
+BACKUP_ID=$(printf '%s\n' "$BACKUP_JSON" | tail -n 1 | jq -r '.snapshot.id')
 
 # Execute operations with error handling
 if ! npm test; then
@@ -1062,11 +1107,18 @@ fi
 #### Problem: "Failed to connect to CodeLapse extension"
 **Symptoms**: Commands fail with connection errors like "Connection refused", "Connection timeout", or "Extension not found"
 
-**Root Cause**: The CodeLapse CLI is a companion tool that requires the VS Code extension to function. Without the extension installed and running, the CLI cannot operate.
+**Root Cause**: The method you called is one that standalone mode does not
+implement - the CLI itself does not need the extension. Snapshot CRUD, file
+operations, `filter`, `rules`, `diagnostics`, config, the `git` family and
+`workspace info` all run without it; only the commands marked *Extension* in
+[API.md's mode matrix](API.md#mode-availability) need VS Code running. Those
+fail with `Method <name> is not available in standalone mode and no CodeLapse
+extension answered over IPC (<connection error>)` rather than returning
+invented data.
 
 **Solutions**:
 
-**Step 1: Install the VS Code Extension (REQUIRED)**
+**Step 1: Install the VS Code Extension (only for the commands in the matrix)**
 If you haven't installed the extension yet:
 1. **Direct Installation**: [Install CodeLapse Extension](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
 2. **Via VS Code**:
@@ -1095,12 +1147,16 @@ code --list-extensions | grep YukioTheSage.vscode-snapshots
 
 **Step 4: Test Connection**
 ```bash
-# Basic connection test
-codelapse status --json --silent
+# Basic status check - the "mode" field says how the command was served
+codelapse status --json
 
 # Expected successful response:
-# {"success": true, "connected": true, "workspace": "/path/to/project"}
+# {"success": true, "connected": true, "mode": "standalone", "workspace": "/path/to/project"}
 ```
+
+`"mode": "standalone"` means the CLI is working. Only the IPC-only commands are
+unavailable without the extension, so a connection error from one of them is
+expected rather than a sign that the install is broken.
 
 **Step 5: Advanced Troubleshooting**
 If connection still fails:
@@ -1111,7 +1167,11 @@ If connection still fails:
 5. **Check for extension conflicts** - disable other extensions temporarily
 
 **For Users New to CodeLapse**:
-> ⚠️ **Important**: The CLI cannot function without the VS Code extension. This is by design - the CLI communicates with VS Code to manage your snapshots and workspace. If you're getting connection errors, the most common cause is not having the extension installed.
+> ⚠️ **Important**: The CLI does not need VS Code. Standalone mode manages the
+> snapshots in the workspace's `.snapshots/` store directly, which is what makes
+> CI/CD and headless use possible. Only the commands marked *Extension* in
+> [API.md's mode matrix](API.md#mode-availability) need VS Code running with
+> CodeLapse enabled - if you get a connection error, check that matrix first.
 
 **Diagnostic Commands**:
 ```bash
@@ -1119,10 +1179,10 @@ If connection still fails:
 codelapse status --verbose
 
 # Test with extended timeout
-codelapse status --timeout 15000 --json --silent
+codelapse status --timeout 15000 --json
 
-# Verify extension is responding to workspace queries
-codelapse workspace info --json --silent
+# Check workspace information
+codelapse workspace info --json
 
 # Check if VS Code is running (Windows)
 tasklist | findstr "Code.exe"
@@ -1146,13 +1206,13 @@ ps aux | grep "Visual Studio Code"
 **Solutions**:
 ```bash
 # List all available snapshots
-codelapse snapshot list --json --silent
+codelapse snapshot list --json
 
 # Search for snapshots by description
-codelapse snapshot list --json --silent | jq '.snapshots[] | select(.description | contains("search-term"))'
+codelapse snapshot list --json | tail -n 1 | jq '.snapshots[] | select(.description | contains("search-term"))'
 
 # Check if snapshot was deleted
-codelapse snapshot list --json --silent | jq '.total'
+codelapse snapshot list --json | tail -n 1 | jq '.total'
 ```
 
 #### Problem: "No changes to snapshot"
@@ -1163,7 +1223,7 @@ codelapse snapshot list --json --silent | jq '.total'
 3. Verify workspace has files (not empty folder)
 4. Use selective snapshots for specific files:
    ```bash
-   codelapse snapshot create "Selective changes" --files "src/main.ts,package.json" --json --silent
+   codelapse snapshot create "Selective changes" --files "src/main.ts,package.json" --json
    ```
 
 #### Problem: "Snapshot restore failed"
@@ -1171,13 +1231,13 @@ codelapse snapshot list --json --silent | jq '.total'
 **Solutions**:
 ```bash
 # Create backup before restore
-codelapse snapshot restore snapshot-123 --backup --json --silent
+codelapse snapshot restore snapshot-123 --backup --json
 
 # Restore specific files only
-codelapse snapshot restore snapshot-123 --files "src/" --json --silent
+codelapse snapshot restore snapshot-123 --files "src/" --json
 
-# Validate snapshot before restore
-codelapse utility validate snapshot-123 --json --silent
+# Validate snapshot before restore (needs the CodeLapse extension running)
+codelapse utility validate snapshot-123 --json
 ```
 
 ### Workspace Issues
@@ -1193,13 +1253,13 @@ codelapse utility validate snapshot-123 --json --silent
 **Diagnostic Commands**:
 ```bash
 # Check workspace status
-codelapse workspace info --json --silent
+codelapse workspace info --json
 
-# List workspace files
-codelapse workspace files --json --silent
+# List workspace files (needs the CodeLapse extension running)
+codelapse workspace files --json
 
-# Check current state
-codelapse workspace state --json --silent
+# Check current state (needs the CodeLapse extension running)
+codelapse workspace state --json
 ```
 
 #### Problem: "Permission denied accessing file"
@@ -1224,11 +1284,11 @@ codelapse workspace state --json --silent
 **Symptoms**: Search queries return no results or index errors
 **Solutions**:
 ```bash
-# Build search index
-codelapse search index --json --silent
+# Build search index (needs the CodeLapse extension running)
+codelapse search index --json
 
-# Rebuild index for specific snapshots
-codelapse search index --snapshots "snapshot-123,snapshot-124" --json --silent
+# Rebuild index for specific snapshots (needs the CodeLapse extension running)
+codelapse search index --snapshots "snapshot-123,snapshot-124" --json
 ```
 
 ### Performance Issues
@@ -1242,10 +1302,10 @@ codelapse search index --snapshots "snapshot-123,snapshot-124" --json --silent
 4. Clean up old snapshots:
    ```bash
    # List old snapshots
-   codelapse snapshot list --since "30d" --json --silent
+   codelapse snapshot list --since "30d" --json
    
    # Delete old snapshots (be careful!)
-   codelapse snapshot delete old-snapshot-id --yes --json --silent
+   codelapse snapshot delete old-snapshot-id --yes --json
    ```
 
 #### Problem: Large workspace performance
@@ -1253,13 +1313,13 @@ codelapse search index --snapshots "snapshot-123,snapshot-124" --json --silent
 **Solutions**:
 ```bash
 # Use selective snapshots
-codelapse snapshot create "Important changes" --files "src/,tests/" --json --silent
+codelapse snapshot create "Important changes" --files "src/,tests/" --json
 
-# Filter file listings
-codelapse workspace files --changed --json --silent
+# Filter file listings (needs the CodeLapse extension running)
+codelapse workspace files --changed --json
 
 # Limit snapshot listings
-codelapse snapshot list --limit 10 --json --silent
+codelapse snapshot list --limit 10 --json
 ```
 
 ### JSON Parsing Issues
@@ -1268,19 +1328,21 @@ codelapse snapshot list --limit 10 --json --silent
 **Symptoms**: JSON parsing fails in scripts
 **Solutions**:
 ```bash
-# Always use --json --silent for automation
-codelapse snapshot list --json --silent
+# Use --json; add --silent only when you want no output at all
+codelapse snapshot list --json
 
 # Validate JSON before parsing
-RESULT=$(codelapse status --json --silent)
+RESULT=$(codelapse status --json | tail -n 1)
 if echo "$RESULT" | jq empty 2>/dev/null; then
   echo "Valid JSON"
 else
   echo "Invalid JSON: $RESULT"
 fi
 
-# Handle mixed output
-RESULT=$(codelapse status --json --silent 2>/dev/null || echo '{"success":false,"error":"Command failed"}')
+# Handle mixed output - keep the command's own payload, failed or not
+RESULT=$(codelapse status --json 2>/dev/null)
+# select the JSON line: a fresh store prints a notice first
+RESULT=$(printf '%s\n' "$RESULT" | tail -n 1)
 ```
 
 ### Common Integration Issues
@@ -1298,10 +1360,10 @@ for i in {1..3}; do
 done
 
 # Use longer timeouts in CI
-codelapse status --timeout 30000 --json --silent
+codelapse status --timeout 30000 --json
 
 # Validate environment
-codelapse status --verbose --json --silent
+codelapse status --verbose --json
 ```
 
 #### Problem: Batch operations fail partially
@@ -1309,7 +1371,7 @@ codelapse status --verbose --json --silent
 **Solutions**:
 ```bash
 # Process batch results individually
-codelapse batch operations.json --json --silent | jq -r '.results[] | select(.success == false)'
+codelapse batch operations.json --json | tail -n 1 | jq -r '.results[] | select(.success == false)'
 
 # Add error handling to batch files
 cat > safe-batch.json << EOF
@@ -1325,7 +1387,7 @@ EOF
 #### Enable Verbose Logging
 ```bash
 # Enable detailed logging for any command
-codelapse --verbose snapshot create "Debug test" --json --silent
+codelapse --verbose snapshot create "Debug test" --json
 
 # Check connection with full details
 codelapse --verbose status
@@ -1339,13 +1401,13 @@ node --version
 npm --version
 
 # Extension status
-codelapse status --verbose --json --silent
+codelapse status --verbose --json
 
 # Workspace information
-codelapse workspace info --json --silent
+codelapse workspace info --json
 
 # Recent snapshots
-codelapse snapshot list --limit 5 --json --silent
+codelapse snapshot list --limit 5 --json
 ```
 
 #### Report Issues
@@ -1384,7 +1446,9 @@ codelapse status --verbose
 
 ## API Reference
 
-The CLI communicates with the VSCode extension via a local socket. All API methods are available through the `codelapse api` command.
+All API methods are reachable through the `codelapse api` command. Standalone
+mode serves the ones it implements and the extension serves the rest - see the
+[mode availability matrix](API.md#mode-availability).
 
 ### Core API Methods
 - `takeSnapshot(options)`
@@ -1460,7 +1524,9 @@ jobs:
       - name: Export snapshots
         if: failure()
         run: |
-          codelapse snapshot list --tags "ci" --json --silent > snapshots.json
+          SNAPSHOTS_JSON=$(codelapse snapshot list --tags "ci" --json)
+          printf '%s\n' "$SNAPSHOTS_JSON" | tail -n 1 > snapshots.json
+          # needs the CodeLapse extension running
           codelapse utility export $(jq -r '.snapshots[0].id' snapshots.json) \
             --format zip --output failure-snapshot.zip
       
@@ -1491,10 +1557,11 @@ pipeline {
                 script {
                     def snapshotResult = sh(
                         script: """
-                            codelapse snapshot create "Jenkins: Pre-deploy ${env.BUILD_NUMBER}" \
+                            SNAPSHOT_JSON=\$(codelapse snapshot create "Jenkins: Pre-deploy ${env.BUILD_NUMBER}" \
                                 --tags "jenkins,pre-deploy,${env.BRANCH_NAME}" \
                                 --task-ref "${env.BUILD_NUMBER}" \
-                                --json --silent
+                                --json)
+                            echo "\$SNAPSHOT_JSON" | tail -n 1
                         """,
                         returnStdout: true
                     ).trim()
@@ -1576,8 +1643,9 @@ ROLLBACK_ON_FAILURE="${2:-true}"
 
 # Create pre-test snapshot
 echo "Creating pre-test snapshot..."
-PRE_TEST_SNAPSHOT=$(codelapse snapshot create "Test: Before $TEST_SUITE_NAME" \
-  --tags "test,pre-test,$TEST_SUITE_NAME" --json --silent | jq -r '.snapshot.id')
+PRE_TEST_JSON=$(codelapse snapshot create "Test: Before $TEST_SUITE_NAME" \
+  --tags "test,pre-test,$TEST_SUITE_NAME" --json)
+PRE_TEST_SNAPSHOT=$(printf '%s\n' "$PRE_TEST_JSON" | tail -n 1 | jq -r '.snapshot.id')
 
 echo "Pre-test snapshot created: $PRE_TEST_SNAPSHOT"
 
@@ -1592,8 +1660,9 @@ else
   echo "Tests failed!"
   
   # Create failure snapshot
-  FAILURE_SNAPSHOT=$(codelapse snapshot create "Test: $TEST_SUITE_NAME failed" \
-    --tags "test,failure,$TEST_SUITE_NAME" --json --silent | jq -r '.snapshot.id')
+  FAILURE_JSON=$(codelapse snapshot create "Test: $TEST_SUITE_NAME failed" \
+    --tags "test,failure,$TEST_SUITE_NAME" --json)
+  FAILURE_SNAPSHOT=$(printf '%s\n' "$FAILURE_JSON" | tail -n 1 | jq -r '.snapshot.id')
   
   echo "Failure snapshot created: $FAILURE_SNAPSHOT"
   
@@ -1615,6 +1684,7 @@ fi
 # snapshot-monitor.sh
 
 # Monitor CodeLapse events and send alerts
+# needs the CodeLapse extension running
 codelapse watch --events snapshots,workspace --json | while read -r event; do
   EVENT_TYPE=$(echo "$event" | jq -r '.event.type')
   
@@ -1661,7 +1731,7 @@ Found a bug or have a feature request? [Open an issue](https://github.com/YukioT
 
 **For better support, run this diagnostic command:**
 ```bash
-codelapse status --verbose --json --silent
+codelapse status --verbose --json
 ```
 
 ### 🔧 Contribute Code
