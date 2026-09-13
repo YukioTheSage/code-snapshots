@@ -142,6 +142,10 @@ export class SemanticSearchService implements vscode.Disposable {
   // Background processing
   private processingQueue: string[] = []; // Queue of snapshot IDs to process
   private isProcessing = false;
+  /** Set by `dispose()`. Checked before any further work or state write. */
+  private disposed = false;
+  /** The snapshot-change subscription, released by `dispose()`. */
+  private snapshotChangeSubscription: vscode.Disposable | undefined;
 
   // Cache of which snapshots have been indexed
   private indexedSnapshots: Set<string> = new Set();
@@ -172,10 +176,14 @@ export class SemanticSearchService implements vscode.Disposable {
 
     this.initialize();
 
-    // Listen for snapshot changes
-    this.snapshotManager.onDidChangeSnapshots(() => {
-      this.handleSnapshotChanges();
-    });
+    // Listen for snapshot changes. The subscription is kept: without it
+    // `dispose()` could not release the listener, and the manager kept calling
+    // into a disposed service for the life of the host.
+    this.snapshotChangeSubscription = this.snapshotManager.onDidChangeSnapshots(
+      () => {
+        this.handleSnapshotChanges();
+      },
+    );
   }
 
   private async initialize(): Promise<void> {
@@ -654,12 +662,21 @@ export class SemanticSearchService implements vscode.Disposable {
     if (pendingSnapshots.length > 0) {
       log(`Found ${pendingSnapshots.length} snapshots that need indexing`);
 
-      // Add to processing queue
-      this.processingQueue.push(...pendingSnapshots);
+      // Deduplicate: every change event re-lists the snapshots that are not
+      // indexed yet, so an undeduplicated push queued the same id once per
+      // saved file and indexed it that many times.
+      const alreadyQueued = new Set(this.processingQueue);
+      for (const snapshotId of pendingSnapshots) {
+        if (alreadyQueued.has(snapshotId)) {
+          continue;
+        }
+        this.processingQueue.push(snapshotId);
+        alreadyQueued.add(snapshotId);
+      }
 
       // Start processing if not already processing
       if (!this.isProcessing) {
-        this.processNextSnapshot();
+        void this.processNextSnapshot();
       }
     }
   }
@@ -731,6 +748,11 @@ export class SemanticSearchService implements vscode.Disposable {
    * Process the next snapshot in the queue
    */
   private async processNextSnapshot(): Promise<void> {
+    if (this.disposed) {
+      this.isProcessing = false;
+      return;
+    }
+
     if (this.processingQueue.length === 0) {
       this.isProcessing = false;
       return;
@@ -751,7 +773,14 @@ export class SemanticSearchService implements vscode.Disposable {
       // Check if credentials exist
       const hasCredentials = await this.credentialsManager.hasCredentials();
       if (!hasCredentials) {
-        log('Semantic search credentials not found. Deferring indexing.');
+        // Put the id back and stop the chain: credentials may be configured
+        // later, and every id behind this one would hit the same missing key.
+        // The previous code returned without re-queueing, so this snapshot was
+        // never indexed in the session and nothing said so.
+        this.processingQueue.unshift(snapshotId);
+        log(
+          `Semantic search credentials not found. Snapshot ${snapshotId} stays queued for a later attempt.`,
+        );
         this.isProcessing = false;
         return;
       }
@@ -759,21 +788,38 @@ export class SemanticSearchService implements vscode.Disposable {
       // Process the snapshot
       await this.indexSnapshot(snapshotId);
 
-      // Mark as indexed
+      // Mark as indexed only after `indexSnapshot` resolved: a failed upsert
+      // must leave the snapshot eligible for a retry.
       this.indexedSnapshots.add(snapshotId);
-      // Persist updated indexed snapshots
-      await this.context.workspaceState.update(
-        'semanticSearch.indexedSnapshots',
-        Array.from(this.indexedSnapshots),
-      );
+      await this.persistIndexedSnapshots();
 
       log(`Completed indexing snapshot ${snapshotId}`);
     } catch (error) {
       log(`Error processing snapshot ${snapshotId}: ${error}`);
     }
 
+    if (this.disposed) {
+      this.isProcessing = false;
+      return;
+    }
+
     // Process next
-    this.processNextSnapshot();
+    void this.processNextSnapshot();
+  }
+
+  /**
+   * Persist the indexed-snapshot set, unless the service is disposed. The
+   * writes are the part of an in-flight chain that changes state after
+   * `dispose()`, which an unloading extension must not be doing.
+   */
+  private async persistIndexedSnapshots(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    await this.context.workspaceState.update(
+      'semanticSearch.indexedSnapshots',
+      Array.from(this.indexedSnapshots),
+    );
   }
 
   /**
@@ -879,10 +925,7 @@ export class SemanticSearchService implements vscode.Disposable {
 
     this.indexedSnapshots.delete(snapshotId);
     // Persist removal
-    await this.context.workspaceState.update(
-      'semanticSearch.indexedSnapshots',
-      Array.from(this.indexedSnapshots),
-    );
+    await this.persistIndexedSnapshots();
 
     // Remove from queue if present
     const queueIndex = this.processingQueue.indexOf(snapshotId);
@@ -1008,10 +1051,7 @@ export class SemanticSearchService implements vscode.Disposable {
             await this.indexSnapshot(snapshotId);
             this.indexedSnapshots.add(snapshotId);
             // Persist updated indexed snapshots
-            await this.context.workspaceState.update(
-              'semanticSearch.indexedSnapshots',
-              Array.from(this.indexedSnapshots),
-            );
+            await this.persistIndexedSnapshots();
             succeeded++;
           } catch (error) {
             const message =
@@ -1030,10 +1070,7 @@ export class SemanticSearchService implements vscode.Disposable {
               // remaining snapshot and lose this run's failure report. The
               // in-memory set is corrected either way.
               try {
-                await this.context.workspaceState.update(
-                  'semanticSearch.indexedSnapshots',
-                  Array.from(this.indexedSnapshots),
-                );
+                await this.persistIndexedSnapshots();
               } catch (persistError) {
                 log(
                   `Error persisting the corrected indexed set: ${
@@ -1526,7 +1563,11 @@ export class SemanticSearchService implements vscode.Disposable {
    * Dispose resources
    */
   dispose(): void {
-    // Any cleanup needed
+    // Set the flag first: anything already in flight checks it before its next
+    // write, and the queue is cleared so nothing new starts.
+    this.disposed = true;
+    this.snapshotChangeSubscription?.dispose();
+    this.snapshotChangeSubscription = undefined;
     this.processingQueue = [];
     this.isProcessing = false;
     this.performanceMetrics.clear();
