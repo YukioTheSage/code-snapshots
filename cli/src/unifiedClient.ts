@@ -73,6 +73,8 @@ export const STANDALONE_METHODS: ReadonlySet<string> = new Set([
   'restoreSnapshotFile',
   'exportSnapshotFile',
   'createGitCommitFromSnapshot',
+  'autoSnapshotBeforeGitOperation',
+  'compareSnapshotWithGitCommit',
   'getGitBranchInfo',
   'createBranch',
   'switchBranch',
@@ -970,6 +972,22 @@ export class UnifiedClient {
         case 'createGitCommitFromSnapshot':
           if (this.standaloneHandler) {
             return await this.standaloneHandler.createGitCommitFromSnapshot(
+              payload as any,
+            );
+          }
+          throw new Error('Handler not initialized');
+
+        case 'autoSnapshotBeforeGitOperation':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.autoSnapshotBeforeGitOperation(
+              payload as any,
+            );
+          }
+          throw new Error('Handler not initialized');
+
+        case 'compareSnapshotWithGitCommit':
+          if (this.standaloneHandler) {
+            return await this.standaloneHandler.compareSnapshotWithGitCommit(
               payload as any,
             );
           }

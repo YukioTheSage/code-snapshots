@@ -66,4 +66,17 @@ describe('CLI capability coverage', () => {
       'restoreSnapshotFile',
     ]);
   });
+
+  it('serves the two git methods in standalone as well as over IPC', () => {
+    // Both were allowlisted, documented and served by the extension, but absent
+    // from STANDALONE_METHODS, so with no extension running 'git auto-commit'
+    // and 'git compare' died in the per-method IPC fallback.
+    for (const method of [
+      'autoSnapshotBeforeGitOperation',
+      'compareSnapshotWithGitCommit',
+    ]) {
+      expect(standalone.has(method)).toBe(true);
+      expect(ipc.has(method)).toBe(true);
+    }
+  });
 });

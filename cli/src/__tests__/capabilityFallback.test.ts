@@ -35,6 +35,8 @@ describe('per-method IPC fallback', () => {
     expect(STANDALONE_METHODS.has('filterSnapshots')).toBe(true);
     expect(STANDALONE_METHODS.has('searchSnapshots')).toBe(false);
     expect(STANDALONE_METHODS.has('runDiagnostics')).toBe(true);
+    expect(STANDALONE_METHODS.has('autoSnapshotBeforeGitOperation')).toBe(true);
+    expect(STANDALONE_METHODS.has('compareSnapshotWithGitCommit')).toBe(true);
   });
 
   it('routes an unsupported method over IPC instead of failing', async () => {
@@ -71,5 +73,37 @@ describe('per-method IPC fallback', () => {
     await expect(
       client.watchEvents(['snapshotCreated'], jest.fn()),
     ).rejects.toThrow(/requires the CodeLapse extension over IPC/i);
+  });
+
+  it('dispatches the two git methods locally instead of over IPC', async () => {
+    const autoSnapshotBeforeGitOperation = jest
+      .fn()
+      .mockResolvedValue({ snapshot: { id: 'snapshot-1', description: 'd' } });
+    const compareSnapshotWithGitCommit = jest
+      .fn()
+      .mockResolvedValue({ differences: [] });
+    (client as any).standaloneHandler = {
+      autoSnapshotBeforeGitOperation,
+      compareSnapshotWithGitCommit,
+    };
+
+    await expect(
+      client.callApi('autoSnapshotBeforeGitOperation', { operation: 'pull' }),
+    ).resolves.toEqual({ snapshot: { id: 'snapshot-1', description: 'd' } });
+    await expect(
+      client.callApi('compareSnapshotWithGitCommit', {
+        snapshotId: 'snapshot-1',
+        commitHash: 'abc1234',
+      }),
+    ).resolves.toEqual({ differences: [] });
+
+    expect(autoSnapshotBeforeGitOperation).toHaveBeenCalledWith({
+      operation: 'pull',
+    });
+    expect(compareSnapshotWithGitCommit).toHaveBeenCalledWith({
+      snapshotId: 'snapshot-1',
+      commitHash: 'abc1234',
+    });
+    expect(ipcCallApi).not.toHaveBeenCalled();
   });
 });
