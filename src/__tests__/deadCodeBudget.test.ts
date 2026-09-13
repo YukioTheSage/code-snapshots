@@ -23,7 +23,7 @@ const { ESLint } = require('eslint') as {
   ESLint: new (options: { cwd: string }) => EslintApi;
 };
 
-const LINT_WARNING_CEILING = 455;
+const LINT_WARNING_CEILING = 450;
 const repoRoot = path.join(__dirname, '..', '..');
 
 describe('lint budget', () => {
