@@ -51,7 +51,7 @@ codelapse --version
    - Try running "Snapshots: Getting Started"
 
 4. **Compatibility Check**:
-   - Verify VS Code version ≥ 1.60.0
+   - Verify VS Code version ≥ 1.85.0 (the floor declared in `engines.vscode`)
    - Check system requirements (Windows/macOS/Linux)
 
 #### Problem: Extension installed but not working
@@ -720,9 +720,9 @@ setting that makes it do so.
    ```yaml
    # GitHub Actions example
    - name: Setup Node.js
-     uses: actions/setup-node@v3
+     uses: actions/setup-node@v4
      with:
-       node-version: '18'
+       node-version: '20'
    
    - name: Install CodeLapse CLI
      run: npm install -g codelapse-cli

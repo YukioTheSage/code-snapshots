@@ -4,8 +4,7 @@
   "snapshotLocation": ".snapshots",
   "maxSnapshots": 50,
   "git": {
-    "addCommitInfo": true,
-    "autoSnapshotBeforeOperation": false
+    "addCommitInfo": true
   },
   "semanticSearch": {
     "enabled": false,

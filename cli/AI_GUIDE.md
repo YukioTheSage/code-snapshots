@@ -1,6 +1,14 @@
 # CodeLapse CLI Instructions for AI Agents
 
-You are an AI agent working with the `codelapse-cli` to safely modify code in a developer's workspace. This guide provides mandatory safety protocols, comprehensive error handling patterns, and workflow templates for safe automation.
+You drive `codelapse-cli` to snapshot a workspace before and after code changes:
+snapshot first, change second, snapshot again when the work is finished, and
+restore the backup rather than improvising when something fails. Every command
+answers with the same JSON envelope and the same exit status, so the same two
+checks - the exit code and the payload's `success` - carry you through every step
+below. Run the CLI from the workspace you are editing; it locates the workspace
+itself. The bash examples need `jq`; the PowerShell examples do not.
+
+> Verified against codelapse-cli 2.0.0 (Node >= 18.15.0). Command surface: [HELP.md](HELP.md). Per-command payloads: [API.md](API.md). Mode matrix: [API.md#mode-availability](API.md#mode-availability).
 
 > ⚠️ **CRITICAL SECURITY WARNING - SEMANTIC SEARCH**:
 >
@@ -14,674 +22,424 @@ You are an AI agent working with the `codelapse-cli` to safely modify code in a 
 > - **ALWAYS** verify with users before enabling or using semantic search features
 > - **RECOMMEND** disabling semantic search for any sensitive work environments
 
-## ⚠️ MANDATORY SAFETY PROTOCOLS
+## The contract
 
-### Critical Safety Rules (NON-NEGOTIABLE)
+- **Output flags.** `--json` prints one JSON object on stdout, and it is the only
+  JSON there - but it is not always the _first_ line. In standalone mode, a
+  workspace whose snapshot store does not exist yet gets a plain-text notice on
+  stdout (`Snapshot index file not found. Starting with empty state.`) ahead of
+  the payload, so select the JSON line instead of assuming line 1. The notice
+  stops once a snapshot-writing command has created the store; `status` does not
+  create it, so running `status` first is not a workaround. `--silent`
+  suppresses banners, spinners **and the JSON envelope** for every command
+  routed through the shared result printer (`snapshot list`, `snapshot create`,
+  `config get`, ...). The suppression is not absolute: `status` and
+  `snapshot show` write their JSON directly on their success paths and `api`
+  always does, `watch` and `diagnostics logs --follow` stream to stdout, and
+  the fatal handlers print their JSON error even under `--silent`.
+  **Use `--json` alone.**
+- **Exit status.** The process exits 0 when the payload's top-level `success` is
+  `true` and 1 when it is `false` - for every command, including `api` and
+  `batch`. Branch on the exit code first and parse stdout second.
+- **Envelope.** Success is `{"success": true, ...}`; failure is
+  `{"success": false, "error": "<message>"}`. `snapshot create` returns
+  `snapshot.id` (with `description`, `tags`, `notes`, `isFavorite`); and
+  `snapshot list` returns `snapshots[]` and `total`.
+- **Fan-out results cannot be judged by `success` alone.** A `batchSearch` or
+  `batchAnalyze` payload (through `api`, or as one entry of a batch file) reports
+  `success: false` only when **every** item failed; a partial failure keeps
+  `success: true` and reports the count in `failedQueries` / `failedOperations`.
+  An empty batch also reports `success: true`. **After any fan-out call, read
+  those two fields.** The top-level `batch <file>` result is different: it
+  carries `total` and `failed` and reports `success: false` as soon as one entry
+  failed; a batch that never ran (missing or malformed file, refused method)
+  reports `success: false` with an `error` and no counts at all.
+- **`api` exits 0 whenever the call resolved.** Its envelope is
+  `{"success": true, "result": <payload>}`: a `result.success` of `false` - or
+  a `result` of `null` for an unknown id - still exits 0. Read `result`, not the
+  outer envelope.
+- **No global `--mode`.** Mode is automatic: standalone (`.snapshots/` read
+  directly) first, IPC when the extension is running. `-m, --mode` belongs to
+  `search query` and `search-enhanced query` and selects the search strategy.
+- **Prompts.** `--silent` does not answer a prompt. Only the flag a command's own
+  `--help` documents can skip one: `snapshot delete` skips its confirmation with
+  `-y, --yes` (there `--force` means "delete even when a later snapshot cannot be
+  rebuilt from it"), and `files restore` uses `-f, --force`. Not every command has
+  such a flag, so never assume `--silent` or `--force` answers one. One declared
+  flag does nothing: `snapshot restore` accepts `-y, --yes` but never forwards
+  it, and restore never prompts on the CLI in either mode, so there is no
+  confirmation for the flag to skip.
+- **Snapshot ids.** Any unambiguous prefix or fragment resolves to a full id, so
+  `snapshot show 1789120661991` works for `snapshot-1789120661991-fe3a3996`; an
+  ambiguous abbreviation is refused with the list of candidates. Discover ids
+  with `snapshot list --json` and never invent one.
+- **Modes.** Commands that standalone mode does not implement need the
+  extension. They fail with `success: false` and an error that begins
+  `Method <name> is not available in standalone mode`; the process exits 1. They
+  never return invented data.
 
-1. **ALWAYS** use `--json --silent` flags on every command
-2. **ALWAYS** check `success: true` in JSON response before proceeding
-3. **NEVER** make changes without creating a backup snapshot first
-4. **ALWAYS** parse JSON output, never assume success
-5. **NEVER** proceed if any command returns `success: false`
-6. **ALWAYS** restore backup if any operation fails
-7. **NEVER** execute batch operations without individual validation
-8. **ALWAYS** create recovery snapshots at critical checkpoints
-9. **NEVER** ignore error messages or warnings
-10. **ALWAYS** document all changes with detailed snapshots
+| Feature                                                            | Standalone | Extension |
+| ------------------------------------------------------------------ | ---------- | --------- |
+| Snapshot CRUD (`snapshot create/list/show/restore/delete/compare`) | Yes        | Yes       |
+| File operations (`files ...`)                                      | Yes        | Yes       |
+| Filtering and metadata (`filter ...`)                              | Yes        | Yes       |
+| Configuration (`config ...`)                                       | Yes        | Yes       |
+| Git integration (`git ...`)                                        | Yes        | Yes       |
+| `workspace info`                                                   | Yes        | Yes       |
+| Auto-snapshot rules (`rules ...`)                                  | Yes        | Yes       |
+| Diagnostics (`diagnostics ...`, except `logs --follow`)            | Yes        | Yes       |
+| Workspace state (`workspace state`, `workspace files`)             | No         | Yes       |
+| Utility (`utility validate`, `utility export`)                     | No         | Yes       |
+| Semantic search (`search`, `search-enhanced`)                      | No         | Yes       |
+| Analysis (`analyze ...`)                                           | No         | Yes       |
+| Chunking (`chunk ...`)                                             | No         | Yes       |
+| Live events (`watch`)                                              | No         | Yes       |
 
-### Pre-Operation Safety Checklist
+`diagnostics logs --follow` is the exception inside `diagnostics`: streaming
+needs the extension and fails in standalone mode with `{"success": false,
+"error": "Streaming logs requires the CodeLapse extension over IPC; standalone
+mode has no log source."}` and exit 1, not the `Method <name>` error.
 
-Before starting ANY operation, verify:
+## Hard rules
 
-- [ ] CodeLapse connection is active (`codelapse status`)
-- [ ] Workspace is in a clean state
-- [ ] No pending changes that could be lost
-- [ ] Backup snapshot created with descriptive notes
-- [ ] Recovery plan established
-- [ ] User notification prepared for any failures
+1. Use `--json` on every command whose output you need to read. Add `--silent`
+   only when you truly need no output at all.
+2. Check the exit code first, then the payload's `success`, then - for a fan-out
+   call - `failedQueries` / `failedOperations`.
+3. **NEVER** make changes without creating a backup snapshot first.
+4. **ALWAYS** parse the JSON output; never assume success from silence.
+5. **NEVER** proceed if a command exits 1 or returns `success: false`.
+6. **ALWAYS** restore the backup if an operation fails, then re-check the result.
+7. **NEVER** run batch operations without validating each item's result.
+8. **ALWAYS** create a recovery snapshot at each critical checkpoint.
+9. **NEVER** ignore an error message or a warning.
+10. **ALWAYS** document what you changed in the closing snapshot's description,
+    `--notes` or `--tags`.
+11. **NEVER** treat `success: true` from a fan-out call as proof that every item
+    worked.
 
-## Required Command Format
+## The canonical loop
+
+Replace the two placeholder steps with your own edit and verification commands.
 
 ```bash
-codelapse <command> --json --silent
+# 1. Check that the CLI can reach the workspace.
+codelapse status --json || exit 1
+
+# 2. Read the workspace before you touch it.
+codelapse workspace info --json || exit 1
+
+# 3. Create the backup and capture its id. --json prints one JSON object, but a
+#    plain-text storage notice can precede it on a first run, so keep only the
+#    line that parses as JSON (jq's fromjson? ignores the other lines).
+backup_id=$(codelapse snapshot create "Backup before refactor" --tags backup --json \
+  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+[ -n "$backup_id" ] || exit 1
+
+# 4. Make the changes (your edits here).
+
+# 5. Verify the changes (your tests here).
+
+# 6. Record what you finished.
+codelapse snapshot create "Completed: refactor" --tags complete --favorite --json
 ```
 
-## Essential Commands
+```powershell
+# 1. Check that the CLI can reach the workspace.
+codelapse status --json | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'CodeLapse is not reachable' }
 
-### Check Connection
+# 2. Read the workspace before you touch it.
+codelapse workspace info --json | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'workspace info failed' }
 
-```bash
-codelapse status --json --silent
+# 3. Create the backup and capture its id. A plain-text storage notice can
+#    precede the JSON on a first run, so keep the line that starts with '{'.
+$backup = codelapse snapshot create 'Backup before refactor' --tags backup --json |
+  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
+$backupId = $backup.snapshot.id
+
+# 4. Make the changes (your edits here).
+
+# 5. Verify the changes (your tests here).
+
+# 6. Record what you finished.
+codelapse snapshot create 'Completed: refactor' --tags complete --favorite --json | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Completion snapshot failed' }
 ```
 
-**Must run first.** If `success: false`, stop and report connection error.
+## Command reference
 
-### Create Backup (Before ANY Changes)
+Add `--json` to every command you read; the flags are the ones this build's
+`--help` documents. `codelapse --help` and `codelapse <group> --help` are the
+live source of truth when this table and the installed binary disagree.
+
+| Command                                                                                                                                      | What you get                                                                                                       | Mode                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------- |
+| `codelapse status`                                                                                                                           | `connected`, `mode`, `workspace`                                                                                   | standalone             |
+| `codelapse snapshot create <description> [-t, --tags a,b] [-n, --notes t] [-r, --task-ref t] [-f, --favorite] [-s, --selective --files a,b]` | `snapshot.id`                                                                                                      | standalone             |
+| `codelapse snapshot list [-t, --tags a,b] [-f, --favorites] [-l, --limit n] [--since <date>]`                                                | `snapshots[]`, `total`                                                                                             | standalone             |
+| `codelapse snapshot show <id> [--files] [--content <path>]`                                                                                  | one snapshot, or file content                                                                                      | standalone             |
+| `codelapse snapshot restore <id> [--backup] [--files a,b] [-y, --yes]`                                                                       | restore result; `-y, --yes` is declared but never forwarded, and restore does not prompt, so the flag does nothing | standalone             |
+| `codelapse snapshot compare <id1> <id2> [--files]`                                                                                           | `comparison`, `summary`                                                                                            | standalone             |
+| `codelapse snapshot delete <id> [-y, --yes] [--force]`                                                                                       | deletion result                                                                                                    | standalone             |
+| `codelapse workspace info`                                                                                                                   | `workspace.root`, `config` (standalone)                                                                            | standalone             |
+| `codelapse workspace state`                                                                                                                  | current workspace state                                                                                            | extension              |
+| `codelapse git commit <snapshot-id> [-m, --message <msg>]`                                                                                   | a git commit from the snapshot                                                                                     | standalone, clean tree |
+| `codelapse git compare <snapshot-id> <commit-hash> [-f, --files]`                                                                            | snapshot vs commit diff                                                                                            | standalone             |
+| `codelapse config get [key]` / `codelapse config set <key> <value>`                                                                          | `config`, `key` (get); `key`, `value` (set)                                                                        | standalone             |
+| `codelapse batch <file>`                                                                                                                     | `total`, `failed`, `results[]`                                                                                     | standalone methods     |
+| `codelapse api <method> [-d, --data <json>]`                                                                                                 | `result` (any allowlisted method)                                                                                  | depends on the method  |
+| `codelapse filter favorites [-l, --limit n] [--offset n]`                                                                                    | `snapshots[]`, `totalCount`                                                                                        | standalone             |
+| `codelapse diagnostics run [--no-system] [--no-snapshots] [--no-git] [--no-config]`                                                          | `diagnostics[]`, `summary`                                                                                         | standalone             |
+
+## Error recovery
+
+The exit status is the first signal; these are the messages that come with it.
+
+| Exit 1 says                                                                  | Cause                                                                             | Do this                                                                                          |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `Method <name> is not available in standalone mode ...`                      | the command needs the extension and none answered                                 | start VS Code with CodeLapse active, or drop the command (see the mode table)                    |
+| `Could not find CodeLapse extension connection. Make sure VSCode is running` | no extension running, or no workspace open in VS Code                             | run `codelapse status --json`; ask the user to open the workspace, then retry once               |
+| `Snapshot <id> not found`                                                    | wrong or deleted id                                                               | run `snapshot list --json`; use a full id or an unambiguous prefix you actually saw              |
+| restore failed (`not found`, or a disk or permission error)                  | the backup cannot be applied                                                      | **stop**; change nothing further; list the snapshots; tell the user; never hand-repair the tree  |
+| `snapshot create` fails with a filesystem error                              | no space or no write permission for `.snapshots/`                                 | stop before changing anything; report the error text and the workspace path to the user          |
+| `codelapse batch` exits 1 with `"failed": N` (N > 0)                         | at least one entry failed; the rest still ran                                     | read `results[]` for which entry failed and why; fix or restore, then decide whether to continue |
+| `codelapse batch` exits 1 with an `error` and no `failed` count              | the batch never ran: missing or malformed file, or a method the allowlist refused | fix the file or the entry; nothing ran, so there is nothing to undo                              |
+| exit 0 but `failedQueries` / `failedOperations` > 0                          | a partial fan-out failure, which does not flip `success`                          | read `result.success` and the counts; treat the failed items as unfinished work                  |
+| `error: unknown option '--mode'`                                             | you invented a flag                                                               | run `codelapse <command> --help`; there is no global `--mode`                                    |
+
+## Recipes
+
+### 1. Single-file modification
 
 ```bash
-codelapse snapshot create "Backup before [your operation]" --tags "backup" --notes "Detailed reason for backup, e.g., 'About to refactor X module' or 'Before attempting Y experimental change.'" --json --silent
+#!/usr/bin/env bash
+# Back up one file, change it, verify, then document - or restore and stop.
+set -euo pipefail
+target='src/auth.ts'
+# Replace this stub with your real verification command (exit 0 on success).
+verify_changes() { return 0; }
+
+codelapse status --json > /dev/null
+
+backup_id=$(codelapse snapshot create "Backup before modifying $target" --tags backup,file-mod --json \
+  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+[ -n "$backup_id" ] || { echo 'no snapshot id returned' >&2; exit 1; }
+
+# ... edit $target here ...
+if ! verify_changes; then
+  codelapse snapshot restore "$backup_id" --backup --json > /dev/null
+  echo "verification failed; restored $backup_id" >&2
+  exit 1
+fi
+
+codelapse snapshot create "Completed: modified $target" --tags complete,file-mod --favorite --json > /dev/null
 ```
 
-**Save the returned `snapshot.id` for emergency restore.**
+```powershell
+# Back up one file, change it, verify, then document - or restore and stop.
+$ErrorActionPreference = 'Stop'
+$target = 'src/auth.ts'
+# Replace this stub with your real verification command (exit 0 on success).
+function Test-Changes { $true }
 
-### Using Snapshot Notes (`--notes`)
+codelapse status --json | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'CodeLapse is not reachable' }
 
-The `--notes` flag allows you to add a detailed description to your snapshots, beyond the main description. This is useful for:
+$backup = codelapse snapshot create "Backup before modifying $target" --tags backup,file-mod --json |
+  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
+$backupId = $backup.snapshot.id
 
-- Documenting specific changes made (e.g., "Added feature X", "Fixed bug Y").
-- Explaining the rationale behind changes.
-- Listing pending tasks or considerations related to the snapshot.
-- Providing context for future review or collaboration.
-
-**Example:**
-
-```bash
-codelapse snapshot create "Refactored user authentication" --notes "Implemented OAuth2 for improved security. Removed deprecated local authentication methods. Pending: Add unit tests for new OAuth flow." --json --silent
-```
-
-### Get Current State
-
-```bash
-codelapse workspace state --json --silent
-```
-
-> `workspace state` and `workspace files` need the VS Code extension running:
-> standalone mode serves `workspace info` only. See the mode availability table
-> in `API.md` for the full per-feature breakdown.
-
-### Emergency Restore
-
-```bash
-codelapse snapshot restore [snapshot-id] --backup --json --silent
-```
-
-### Final Documentation
-
-```bash
-codelapse snapshot create "Completed: [description of changes]" --tags "complete" --favorite --notes "[Detailed notes about what was done, features added, bugs fixed, etc.]" --json --silent
-```
-
-## Standard Workflow
-
-```bash
-# 1. VERIFY CONNECTION
-status_result=$(codelapse status --json --silent)
-# Parse: check success=true, connected=true
-
-# 2. CREATE SAFETY BACKUP
-backup_result=$(codelapse snapshot create "Backup before [task]" --tags "backup" --json --silent)
-backup_id=$(echo "$backup_result" | jq -r '.snapshot.id')
-
-# 3. GATHER CONTEXT (if needed)
-codelapse workspace state --json --silent
-
-# 4. MAKE YOUR CHANGES
-# (your file operations here)
-
-# 5. VERIFY SUCCESS
-# (test your changes)
-
-# 6. DOCUMENT COMPLETION
-codelapse snapshot create "Completed: [what you did]" --tags "complete" --favorite --json --silent
-```
-
-## 🛡️ COMPREHENSIVE ERROR HANDLING PATTERNS
-
-### Standard Error Handling Template
-
-```bash
-# Execute command with error handling
-execute_safe_command() {
-    local cmd="$1"
-    local operation_name="$2"
-    local backup_id="$3"
-
-    echo "Executing: $operation_name"
-    result=$(eval "$cmd")
-
-    if ! echo "$result" | jq -e '.success' > /dev/null; then
-        error_msg=$(echo "$result" | jq -r '.error // "Unknown error"')
-        error_code=$(echo "$result" | jq -r '.code // "UNKNOWN"')
-
-        echo "❌ OPERATION FAILED: $operation_name"
-        echo "Error: $error_msg (Code: $error_code)"
-
-        # Attempt recovery if backup exists
-        if [[ -n "$backup_id" ]]; then
-            echo "🔄 Attempting recovery from backup: $backup_id"
-            restore_result=$(codelapse snapshot restore "$backup_id" --backup --json --silent)
-
-            if echo "$restore_result" | jq -e '.success' > /dev/null; then
-                echo "✅ Successfully restored from backup"
-            else
-                echo "❌ CRITICAL: Backup restore failed!"
-                echo "Manual intervention required immediately"
-            fi
-        fi
-
-        return 1
-    fi
-
-    echo "✅ $operation_name completed successfully"
-    return 0
+# ... edit $target here ...
+if (-not (Test-Changes)) {
+  codelapse snapshot restore $backupId --backup --json | Out-Null
+  throw "Verification failed; restored $backupId"
 }
+
+codelapse snapshot create "Completed: modified $target" --tags complete,file-mod --favorite --json | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Completion snapshot failed' }
 ```
 
-### Error Recovery Procedures
+### 2. Multi-file refactoring with a checkpoint per file
 
-#### Connection Failures
-
-```bash
-handle_connection_error() {
-    echo "❌ CodeLapse connection failed"
-    echo "Recovery steps:"
-    echo "1. Verify CodeLapse extension is running"
-    echo "2. Check workspace is open in VS Code"
-    echo "3. Restart VS Code if necessary"
-    echo "4. Verify CLI installation: codelapse --version"
-
-    # Attempt reconnection
-    for i in {1..3}; do
-        echo "Reconnection attempt $i/3..."
-        sleep 2
-        result=$(codelapse status --json --silent 2>/dev/null)
-        if echo "$result" | jq -e '.success' > /dev/null; then
-            echo "✅ Reconnection successful"
-            return 0
-        fi
-    done
-
-    echo "❌ Unable to reconnect. Manual intervention required."
-    return 1
-}
-```
-
-#### Snapshot Operation Failures
+Plain word lists and arrays only - no namerefs - so macOS bash 3.2 and newer
+both run this.
 
 ```bash
-handle_snapshot_error() {
-    local operation="$1"
-    local error_msg="$2"
+#!/usr/bin/env bash
+# Checkpoint every file before touching it; restore the whole tree on failure.
+set -uo pipefail
+files='src/auth.ts src/api.ts src/service.ts'
+# Replace this stub with your real verification command (exit 0 on success).
+verify_changes() { return 0; }
 
-    echo "❌ Snapshot operation failed: $operation"
-    echo "Error: $error_msg"
+backup_id=$(codelapse snapshot create "Backup before multi-file refactor" --tags backup,refactor --json \
+  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+[ -n "$backup_id" ] || exit 1
 
-    case "$operation" in
-        "create")
-            echo "Recovery: Check disk space and permissions"
-            echo "Fallback: Create manual backup of critical files"
-            ;;
-        "restore")
-            echo "CRITICAL: Snapshot restore failed!"
-            echo "1. Do not make further changes"
-            echo "2. List available snapshots: codelapse snapshot list"
-            echo "3. Try alternative snapshot if available"
-            echo "4. Contact user immediately"
-            ;;
-        "list")
-            echo "Recovery: Check workspace integrity"
-            echo "Fallback: Use git status to verify current state"
-            ;;
-    esac
-}
-```
-
-### Validation Patterns
-
-```bash
-# Validate JSON response structure
-validate_response() {
-    local response="$1"
-    local expected_fields="$2"  # comma-separated list
-
-    if ! echo "$response" | jq empty 2>/dev/null; then
-        echo "❌ Invalid JSON response"
-        return 1
-    fi
-
-    if ! echo "$response" | jq -e '.success' > /dev/null; then
-        echo "❌ Operation unsuccessful"
-        return 1
-    fi
-
-    # Check for expected fields
-    IFS=',' read -ra FIELDS <<< "$expected_fields"
-    for field in "${FIELDS[@]}"; do
-        if ! echo "$response" | jq -e ".$field" > /dev/null; then
-            echo "❌ Missing expected field: $field"
-            return 1
-        fi
-    done
-
-    return 0
-}
-```
-
-## 📋 WORKFLOW TEMPLATES FOR COMMON OPERATIONS
-
-### Template 1: Single File Modification
-
-```bash
-#!/bin/bash
-# Safe single file modification template
-
-OPERATION_NAME="Modify specific file"
-TARGET_FILE="path/to/file.js"
-
-# 1. Connection check
-if ! execute_safe_command "codelapse status --json --silent" "Connection check"; then
-    handle_connection_error
+for file in $files; do
+  codelapse snapshot create "Checkpoint: before $file" --tags checkpoint --json > /dev/null || exit 1
+  # ... edit "$file" here ...
+  if ! verify_changes "$file"; then
+    codelapse snapshot restore "$backup_id" --backup --json > /dev/null
+    echo "failed on $file; restored $backup_id" >&2
     exit 1
-fi
-
-# 2. Create backup
-backup_result=$(codelapse snapshot create "Backup before modifying $TARGET_FILE" --tags "backup,file-mod" --notes "About to modify $TARGET_FILE for $OPERATION_NAME" --json --silent)
-if ! validate_response "$backup_result" "snapshot"; then
-    echo "❌ Failed to create backup. Aborting operation."
-    exit 1
-fi
-backup_id=$(echo "$backup_result" | jq -r '.snapshot.id')
-
-# 3. Verify file exists and get current state
-if [[ ! -f "$TARGET_FILE" ]]; then
-    echo "❌ Target file does not exist: $TARGET_FILE"
-    exit 1
-fi
-
-# 4. Make your changes here
-# ... your file modification logic ...
-
-# 5. Verify changes were successful
-if [[ $? -eq 0 ]]; then
-    # 6. Create completion snapshot
-    codelapse snapshot create "Completed: $OPERATION_NAME" --tags "complete,file-mod" --favorite --notes "Successfully modified $TARGET_FILE. Changes: [describe changes]" --json --silent
-    echo "✅ Operation completed successfully"
-else
-    echo "❌ File modification failed, restoring backup"
-    codelapse snapshot restore "$backup_id" --backup --json --silent
-    exit 1
-fi
-```
-
-### Template 2: Multi-File Refactoring
-
-```bash
-#!/bin/bash
-# Safe multi-file refactoring template
-
-OPERATION_NAME="Multi-file refactoring"
-declare -a TARGET_FILES=("file1.js" "file2.js" "file3.js")
-
-# 1. Connection and initial backup
-if ! execute_safe_command "codelapse status --json --silent" "Connection check"; then
-    exit 1
-fi
-
-backup_result=$(codelapse snapshot create "Backup before $OPERATION_NAME" --tags "backup,refactor" --notes "Multi-file refactoring operation starting. Files: ${TARGET_FILES[*]}" --json --silent)
-backup_id=$(echo "$backup_result" | jq -r '.snapshot.id')
-
-# 2. Validate all target files exist
-for file in "${TARGET_FILES[@]}"; do
-    if [[ ! -f "$file" ]]; then
-        echo "❌ Target file missing: $file"
-        exit 1
-    fi
+  fi
 done
 
-# 3. Create checkpoint before each major change
-checkpoint_count=0
-for file in "${TARGET_FILES[@]}"; do
-    echo "Processing file: $file"
-
-    # Create checkpoint
-    ((checkpoint_count++))
-    checkpoint_result=$(codelapse snapshot create "Checkpoint $checkpoint_count: Before modifying $file" --tags "checkpoint" --json --silent)
-    checkpoint_id=$(echo "$checkpoint_result" | jq -r '.snapshot.id')
-
-    # Make changes to file
-    # ... your modification logic for $file ...
-
-    if [[ $? -ne 0 ]]; then
-        echo "❌ Failed to modify $file, restoring from backup"
-        codelapse snapshot restore "$backup_id" --backup --json --silent
-        exit 1
-    fi
-
-    echo "✅ Successfully modified $file"
-done
-
-# 4. Final verification and completion
-codelapse snapshot create "Completed: $OPERATION_NAME" --tags "complete,refactor" --favorite --notes "Successfully refactored ${#TARGET_FILES[@]} files: ${TARGET_FILES[*]}" --json --silent
-echo "✅ Multi-file refactoring completed successfully"
+codelapse snapshot create "Completed: multi-file refactor" --tags complete,refactor --favorite --json > /dev/null
 ```
 
-### Template 3: Experimental Feature Implementation
+```powershell
+# Checkpoint every file before touching it; restore the whole tree on failure.
+$ErrorActionPreference = 'Stop'
+$files = @('src/auth.ts', 'src/api.ts', 'src/service.ts')
+# Replace this stub with your real verification command (exit 0 on success).
+function Test-Changes { param($File) $true }
 
-```bash
-#!/bin/bash
-# Template for implementing experimental features with extra safety
+$backup = codelapse snapshot create 'Backup before multi-file refactor' --tags backup,refactor --json |
+  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
+$backupId = $backup.snapshot.id
 
-OPERATION_NAME="Experimental feature implementation"
-FEATURE_NAME="new-experimental-feature"
-
-# 1. Enhanced safety checks for experimental work
-echo "🧪 Starting experimental feature implementation"
-echo "⚠️  Extra safety protocols enabled"
-
-# Connection check
-if ! execute_safe_command "codelapse status --json --silent" "Connection check"; then
-    exit 1
-fi
-
-# 2. Create multiple backup layers
-echo "Creating primary backup..."
-primary_backup=$(codelapse snapshot create "PRIMARY: Backup before $FEATURE_NAME" --tags "backup,experimental,primary" --notes "Primary backup before implementing experimental feature: $FEATURE_NAME" --json --silent)
-primary_backup_id=$(echo "$primary_backup" | jq -r '.snapshot.id')
-
-echo "Creating secondary backup..."
-secondary_backup=$(codelapse snapshot create "SECONDARY: Backup before $FEATURE_NAME" --tags "backup,experimental,secondary" --notes "Secondary backup for extra safety during experimental work" --json --silent)
-secondary_backup_id=$(echo "$secondary_backup" | jq -r '.snapshot.id')
-
-# 3. Implement feature in small, safe increments
-declare -a IMPLEMENTATION_STEPS=(
-    "Create basic structure"
-    "Implement core functionality"
-    "Add error handling"
-    "Add tests"
-    "Integration"
-)
-
-for i in "${!IMPLEMENTATION_STEPS[@]}"; do
-    step="${IMPLEMENTATION_STEPS[$i]}"
-    step_num=$((i + 1))
-
-    echo "Step $step_num: $step"
-
-    # Create step checkpoint
-    step_backup=$(codelapse snapshot create "Step $step_num: $step" --tags "checkpoint,experimental" --notes "Checkpoint before: $step" --json --silent)
-    step_backup_id=$(echo "$step_backup" | jq -r '.snapshot.id')
-
-    # Implement step
-    # ... your implementation logic for this step ...
-
-    if [[ $? -ne 0 ]]; then
-        echo "❌ Step $step_num failed, restoring from step checkpoint"
-        codelapse snapshot restore "$step_backup_id" --backup --json --silent
-        echo "Consider breaking this step into smaller parts"
-        exit 1
-    fi
-
-    echo "✅ Step $step_num completed"
-done
-
-# 4. Final experimental feature documentation
-codelapse snapshot create "🧪 EXPERIMENTAL: Completed $FEATURE_NAME" --tags "complete,experimental" --favorite --notes "Experimental feature '$FEATURE_NAME' implemented successfully. Steps completed: ${IMPLEMENTATION_STEPS[*]}. Requires testing and validation." --json --silent
-echo "✅ Experimental feature implementation completed"
-echo "⚠️  Remember: This is experimental and requires thorough testing"
-```
-
-## 🔄 BATCH OPERATION GUIDELINES
-
-### Batch Safety Protocols
-
-```bash
-# Safe batch operation template
-execute_batch_operation() {
-    local operation_name="$1"
-    local -n items_array=$2  # Array of items to process
-    local max_failures=3    # Maximum allowed failures
-    local failure_count=0
-
-    echo "🔄 Starting batch operation: $operation_name"
-    echo "Items to process: ${#items_array[@]}"
-
-    # Create batch backup
-    batch_backup=$(codelapse snapshot create "BATCH: Backup before $operation_name" --tags "backup,batch" --notes "Batch operation starting. Processing ${#items_array[@]} items." --json --silent)
-    batch_backup_id=$(echo "$batch_backup" | jq -r '.snapshot.id')
-
-    # Process each item with individual safety checks
-    for i in "${!items_array[@]}"; do
-        item="${items_array[$i]}"
-        item_num=$((i + 1))
-
-        echo "Processing item $item_num/${#items_array[@]}: $item"
-
-        # Create item checkpoint
-        item_backup=$(codelapse snapshot create "Batch item $item_num: $item" --tags "checkpoint,batch" --json --silent)
-        item_backup_id=$(echo "$item_backup" | jq -r '.snapshot.id')
-
-        # Process individual item
-        if ! process_single_item "$item"; then
-            ((failure_count++))
-            echo "❌ Failed to process item: $item (Failure $failure_count/$max_failures)"
-
-            # Restore from item checkpoint
-            codelapse snapshot restore "$item_backup_id" --backup --json --silent
-
-            # Check if we've exceeded failure threshold
-            if [[ $failure_count -ge $max_failures ]]; then
-                echo "❌ BATCH OPERATION ABORTED: Too many failures ($failure_count/$max_failures)"
-                echo "🔄 Restoring from batch backup"
-                codelapse snapshot restore "$batch_backup_id" --backup --json --silent
-                return 1
-            fi
-
-            echo "⚠️  Continuing with remaining items..."
-            continue
-        fi
-
-        echo "✅ Successfully processed: $item"
-    done
-
-    # Create batch completion snapshot
-    successful_items=$((${#items_array[@]} - failure_count))
-    codelapse snapshot create "BATCH COMPLETE: $operation_name" --tags "complete,batch" --favorite --notes "Batch operation completed. Successful: $successful_items/${#items_array[@]}, Failed: $failure_count" --json --silent
-
-    echo "✅ Batch operation completed: $successful_items/${#items_array[@]} successful"
-    return 0
+foreach ($file in $files) {
+  codelapse snapshot create "Checkpoint: before $file" --tags checkpoint --json | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Checkpoint for $file failed" }
+  # ... edit $file here ...
+  if (-not (Test-Changes $file)) {
+    codelapse snapshot restore $backupId --backup --json | Out-Null
+    throw "Verification failed on $file; restored $backupId"
+  }
 }
+
+codelapse snapshot create 'Completed: multi-file refactor' --tags complete,refactor --favorite --json | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Completion snapshot failed' }
 ```
 
-### Batch Operation Best Practices
+### 3. Batch work with a failure threshold
 
-1. **Always process items individually** - Never bulk process without individual validation
-2. **Set failure thresholds** - Define maximum acceptable failures before aborting
-3. **Create checkpoints** - Snapshot before each item in the batch
-4. **Implement rollback strategy** - Plan for partial or complete rollback
-5. **Monitor progress** - Provide clear progress indicators
-6. **Document failures** - Log which items failed and why
-
-## 🤖 AUTOMATION SCENARIO EXAMPLES
-
-### Scenario 1: Automated Code Review Fixes
+Both accepted batch file shapes are a bare `[...]` array or a `{"commands":
+[...]}` wrapper; every entry is validated against the API allowlist before
+anything runs, and a failed entry does not stop the rest of the batch.
 
 ```bash
-#!/bin/bash
-# Automated code review fix implementation
+#!/usr/bin/env bash
+# Abort and restore when more than three batch entries fail.
+set -uo pipefail
+max_failures=3
 
-REVIEW_FIXES=(
-    "Fix linting errors in utils.js"
-    "Update deprecated API calls in api.js"
-    "Add missing error handling in service.js"
-)
+cat > commands.json <<'JSON'
+[
+  { "method": "takeSnapshot", "data": { "description": "Batch: step 1" } },
+  { "method": "takeSnapshot", "data": { "description": "Batch: step 2" } }
+]
+JSON
 
-echo "🔍 Starting automated code review fixes"
+backup_id=$(codelapse snapshot create "BATCH: backup before batch" --tags backup,batch --json \
+  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+[ -n "$backup_id" ] || exit 1
 
-# Safety setup
-if ! execute_safe_command "codelapse status --json --silent" "Connection check"; then
-    exit 1
+result=$(codelapse batch commands.json --json)
+batch_status=$?
+failed=$(printf '%s' "$result" | jq -Rr 'fromjson? | objects | .failed // empty' | tail -n 1)
+total=$(printf '%s' "$result" | jq -Rr 'fromjson? | objects | .total // empty' | tail -n 1)
+
+if [ "$batch_status" -ne 0 ] && [ -z "$failed" ]; then
+  # Exit 1 without a `failed` count means nothing ran: the file is missing or
+  # malformed, or an entry was refused by the API allowlist.
+  reason=$(printf '%s' "$result" | jq -Rr 'fromjson? | objects | .error // "no error reported"' | tail -n 1)
+  echo "batch did not run: $reason" >&2
+  codelapse snapshot create "FAILED: batch did not run" --tags failed,batch --json > /dev/null
+  exit 1
 fi
 
-review_backup=$(codelapse snapshot create "Code review fixes batch" --tags "backup,review,automated" --notes "Automated fixes for code review comments: ${REVIEW_FIXES[*]}" --json --silent)
-review_backup_id=$(echo "$review_backup" | jq -r '.snapshot.id')
-
-# Process each fix
-for fix in "${REVIEW_FIXES[@]}"; do
-    echo "Applying fix: $fix"
-
-    # Create fix checkpoint
-    fix_backup=$(codelapse snapshot create "Fix checkpoint: $fix" --tags "checkpoint,review" --json --silent)
-    fix_backup_id=$(echo "$fix_backup" | jq -r '.snapshot.id')
-
-    # Apply the fix (implement your fix logic here)
-    case "$fix" in
-        *"linting errors"*)
-            # Run linter fixes
-            if ! npm run lint:fix; then
-                echo "❌ Linting fix failed"
-                codelapse snapshot restore "$fix_backup_id" --backup --json --silent
-                continue
-            fi
-            ;;
-        *"deprecated API"*)
-            # Update API calls
-            # ... your API update logic ...
-            ;;
-        *"error handling"*)
-            # Add error handling
-            # ... your error handling logic ...
-            ;;
-    esac
-
-    echo "✅ Applied fix: $fix"
-done
-
-codelapse snapshot create "Automated code review fixes completed" --tags "complete,review,automated" --favorite --json --silent
-echo "✅ All code review fixes applied successfully"
-```
-
-### Scenario 2: Dependency Update Automation
-
-```bash
-#!/bin/bash
-# Safe dependency update automation
-
-DEPENDENCIES_TO_UPDATE=("lodash" "axios" "moment")
-
-echo "📦 Starting automated dependency updates"
-
-# Enhanced safety for dependency updates
-deps_backup=$(codelapse snapshot create "DEPS: Before dependency updates" --tags "backup,dependencies,automated" --notes "Automated dependency updates for: ${DEPENDENCIES_TO_UPDATE[*]}" --json --silent)
-deps_backup_id=$(echo "$deps_backup" | jq -r '.snapshot.id')
-
-# Update each dependency individually
-for dep in "${DEPENDENCIES_TO_UPDATE[@]}"; do
-    echo "Updating dependency: $dep"
-
-    # Create dependency checkpoint
-    dep_backup=$(codelapse snapshot create "DEP: Before updating $dep" --tags "checkpoint,dependency" --json --silent)
-    dep_backup_id=$(echo "$dep_backup" | jq -r '.snapshot.id')
-
-    # Update dependency
-    if npm update "$dep"; then
-        # Run tests to verify update didn't break anything
-        if npm test; then
-            echo "✅ Successfully updated $dep"
-        else
-            echo "❌ Tests failed after updating $dep, rolling back"
-            codelapse snapshot restore "$dep_backup_id" --backup --json --silent
-        fi
-    else
-        echo "❌ Failed to update $dep"
-        codelapse snapshot restore "$dep_backup_id" --backup --json --silent
-    fi
-done
-
-codelapse snapshot create "Dependency updates completed" --tags "complete,dependencies,automated" --favorite --json --silent
-echo "✅ Dependency update automation completed"
-```
-
-### Scenario 3: Automated Testing and Documentation
-
-```bash
-#!/bin/bash
-# Automated testing and documentation generation
-
-echo "🧪 Starting automated testing and documentation"
-
-# Safety setup
-test_backup=$(codelapse snapshot create "TEST: Before automated testing" --tags "backup,testing,automated" --notes "Automated testing and documentation generation" --json --silent)
-test_backup_id=$(echo "$test_backup" | jq -r '.snapshot.id')
-
-# Run comprehensive test suite
-echo "Running test suite..."
-if npm run test:full; then
-    echo "✅ All tests passed"
-
-    # Generate documentation
-    echo "Generating documentation..."
-    if npm run docs:generate; then
-        echo "✅ Documentation generated successfully"
-
-        # Create completion snapshot
-        codelapse snapshot create "Automated testing and docs completed" --tags "complete,testing,docs,automated" --favorite --notes "All tests passed and documentation generated successfully" --json --silent
-    else
-        echo "❌ Documentation generation failed"
-        codelapse snapshot restore "$test_backup_id" --backup --json --silent
-        exit 1
-    fi
-else
-    echo "❌ Tests failed, not proceeding with documentation"
-    codelapse snapshot restore "$test_backup_id" --backup --json --silent
-    exit 1
+failed=${failed:-0}
+total=${total:-0}
+echo "batch: $failed of $total entries failed"
+if [ "$failed" -gt "$max_failures" ]; then
+  codelapse snapshot restore "$backup_id" --backup --json > /dev/null
+  echo "too many failures; restored $backup_id" >&2
+  exit 1
 fi
 
-echo "✅ Automated testing and documentation completed successfully"
+codelapse snapshot create "Completed: batch" --tags complete,batch --favorite --json > /dev/null
 ```
 
-## Quick Reference
+```powershell
+# Abort and restore when more than three batch entries fail.
+$ErrorActionPreference = 'Stop'
+$maxFailures = 3
 
-| Task        | Command Template                                                                           |
-| ----------- | ------------------------------------------------------------------------------------------ |
-| Start       | `codelapse status --json --silent`                                                         |
-| Backup      | `codelapse snapshot create "Backup before X" --tags "backup" --json --silent`              |
-| Restore     | `codelapse snapshot restore [id] --backup --json --silent`                                 |
-| Finish      | `codelapse snapshot create "Completed: X" --favorite --json --silent`                      |
-| Batch Start | `codelapse snapshot create "BATCH: Backup before X" --tags "backup,batch" --json --silent` |
-| Checkpoint  | `codelapse snapshot create "Checkpoint: X" --tags "checkpoint" --json --silent`            |
-| Emergency   | `codelapse snapshot restore [backup-id] --backup --json --silent`                          |
+# [IO.File]::WriteAllText avoids the UTF-8 BOM that Windows PowerShell 5.1
+# adds with -Encoding utf8; the CLI's JSON.parse rejects a BOM.
+$commands = @'
+[
+  { "method": "takeSnapshot", "data": { "description": "Batch: step 1" } },
+  { "method": "takeSnapshot", "data": { "description": "Batch: step 2" } }
+]
+'@
+[IO.File]::WriteAllText((Join-Path $PWD 'commands.json'), $commands)
 
-## Critical Safety Rules
+$backup = codelapse snapshot create 'BATCH: backup before batch' --tags backup,batch --json |
+  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
+$backupId = $backup.snapshot.id
 
-- **NEVER** skip the backup step
-- **NEVER** ignore `success: false` in responses
-- **NEVER** make destructive changes without user confirmation
-- **ALWAYS** restore backup if operations fail
-- **ALWAYS** inform user of any failures
-- **ALWAYS** create final snapshot documenting changes
+$result = codelapse batch commands.json --json | Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+$batchStatus = $LASTEXITCODE
 
-## Response Format
+if ($batchStatus -ne 0 -and $null -eq $result.failed) {
+  # Exit 1 without a `failed` count means nothing ran: the file is missing or
+  # malformed, or an entry was refused by the API allowlist.
+  codelapse snapshot create 'FAILED: batch did not run' --tags failed,batch --json | Out-Null
+  throw "Batch did not run (exit $batchStatus): $($result.error)"
+}
 
-When executing commands, always:
+Write-Output "batch: $($result.failed) of $($result.total) entries failed"
+if ($result.failed -gt $maxFailures) {
+  codelapse snapshot restore $backupId --backup --json | Out-Null
+  throw "$($result.failed) of $($result.total) batch entries failed; restored $backupId"
+}
 
-1. Show the command you're running
-2. Parse and report the success/failure
-3. Extract relevant data from JSON response
-4. Take appropriate action based on result
-
-## Example Usage
-
-```bash
-# Starting a refactoring task
-echo "Checking CodeLapse connection..."
-result=$(codelapse status --json --silent)
-if echo "$result" | jq -e '.success'; then
-    echo "✓ Connected to workspace: $(echo "$result" | jq -r '.workspace')"
-else
-    echo "✗ Connection failed: $(echo "$result" | jq -r '.error')"
-    exit 1
-fi
-
-echo "Creating backup snapshot..."
-backup=$(codelapse snapshot create "Backup before refactoring auth module" --tags "backup" --notes "Initial state before starting authentication module refactor. Focus on migrating from old API to new secure endpoints." --json --silent)
-backup_id=$(echo "$backup" | jq -r '.snapshot.id')
-echo "✓ Backup created: $backup_id"
-
-# ... perform your changes ...
-
-echo "Creating completion snapshot..."
-codelapse snapshot create "Refactored auth module for better error handling" --tags "refactor,complete" --favorite --json --silent
-echo "✓ Task completed and documented"
+codelapse snapshot create 'Completed: batch' --tags complete,batch --favorite --json | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Completion snapshot failed' }
 ```
+
+A `batchSearch` or `batchAnalyze` entry counts as one batch item, so it keeps
+`success: true` when only some of its own queries or operations failed - read
+`failedQueries` / `failedOperations` in that entry's `result` before counting it
+as done.
+
+## Never do this
+
+- Never combine `--json` with `--silent` and then parse stdout: for most
+  commands `--silent` suppresses the payload, so a parser that depends on it
+  breaks.
+- Never branch on `success` alone for a fan-out payload (`batchSearch` /
+  `batchAnalyze`, including one inside a batch file's `results[]`): it keeps
+  `success: true` through a partial failure.
+- Never run `search` or `search-enhanced` on sensitive code (see the warning at
+  the top).
+- Never assume a global `--mode`; mode is automatic.
+- Never parse the human-readable output; use `--json` and select the JSON line.
+- Never reuse a snapshot id you did not observe in `snapshot list --json`.
+- Never continue past a failed backup: restore, then stop and report.
+
+## Quick reference
+
+| Task        | Command                                                              |
+| ----------- | -------------------------------------------------------------------- |
+| Start       | `codelapse status --json`                                            |
+| Backup      | `codelapse snapshot create "Backup before X" --tags backup --json`   |
+| Restore     | `codelapse snapshot restore <id> --backup --json`                    |
+| Finish      | `codelapse snapshot create "Completed: X" --favorite --json`         |
+| Checkpoint  | `codelapse snapshot create "Checkpoint: X" --tags checkpoint --json` |
+| Find ids    | `codelapse snapshot list --json`                                     |
+| Batch       | `codelapse batch commands.json --json`                               |
+| Exit status | 0 when the payload's `success` is `true`; 1 when it is `false`       |
+| Discover    | `codelapse --help`, `codelapse <group> --help`                       |
 
 Remember: When in doubt, create a snapshot. Better to have too many backups than lose user's work.

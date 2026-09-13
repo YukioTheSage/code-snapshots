@@ -6,17 +6,29 @@ Thank you for your interest in contributing to CodeLapse! We welcome contributio
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally: `git clone https://github.com/YOUR_USERNAME/code-snapshots.git`
-3. **Install dependencies**: `npm install`
+3. **Install dependencies and build the linked core**:
+
+   ```bash
+   npm install
+   cd shared && npm install && npm run build && cd ..
+   cd cli && npm install && cd ..
+   ```
+
+   The extension and the CLI both depend on `codelapse-core`, a `file:` dependency
+   on the linked `shared/` directory. `npm install` links it but does not compile
+   it, so `npm run compile` fails with `Cannot find module 'codelapse-core'` until
+   `npm run build` has been run in `shared/`.
 4. **Open in VS Code** and press `F5` to launch the Extension Development Host
-5. **Make your changes** and test them
+5. **Make your changes** and test them - see [Testing your changes](#testing-your-changes)
 6. **Submit a pull request** with a clear description
 
 ## 📋 Development Setup
 
 ### Prerequisites
 
-- **Node.js** (v14 or higher)
-- **VS Code** (v1.75.0 or higher)
+- **Node.js** 18.15.0 or higher (CI runs Node 20; the CLI declares `engines.node >= 18.15.0`)
+- **VS Code** 1.85.0 or higher (the extension declares `engines.vscode ^1.85.0`)
+- **npm** 9 or higher
 - **Git**
 
 ### Installation
@@ -26,10 +38,18 @@ Thank you for your interest in contributing to CodeLapse! We welcome contributio
 git clone https://github.com/YukioTheSage/code-snapshots.git
 cd code-snapshots
 
-# Install dependencies
+# Install the extension dependencies
 npm install
 
-# Install CLI dependencies
+# Build the linked core first: shared/ is a file: dependency, so npm install
+# links it but does not compile it, and npm run compile fails with
+# "Cannot find module 'codelapse-core'" until this has run.
+cd shared
+npm install
+npm run build
+cd ..
+
+# Install the CLI dependencies
 cd cli
 npm install
 cd ..
@@ -59,17 +79,37 @@ npm run format
 
 ### Testing your changes
 
-1. **Extension Testing**:
-   - Open the project in VS Code
-   - Press `F5` to launch Extension Development Host
-   - Test your changes in the new VS Code window
+Extension unit tests (97 suites):
 
-2. **CLI Testing**:
-   ```bash
-   cd cli
-   npm run build
-   node dist/index.js --help
-   ```
+```bash
+npx jest --runInBand --forceExit
+```
+
+CLI tests (40 suites):
+
+```bash
+cd cli && npm run test:ci && cd ..
+```
+
+Lint budget - the warning ceiling may only fall, never rise:
+
+```bash
+npm run lint:budget
+```
+
+Formatting (TypeScript only; markdown is not checked):
+
+```bash
+npm run format:check
+cd cli && npm run format:check && cd ..
+```
+
+**Extension testing:** open the project in VS Code and press F5 to launch the
+Extension Development Host, then exercise your change in the new window.
+
+**CLI testing:** `cd cli && npm run build`, then run the binary with
+`node dist/cli.js --help`. The entry point is `dist/cli.js`; there is no
+`dist/index.js`.
 
 ## 🎯 How to Contribute
 
@@ -167,10 +207,11 @@ src/
 ```text
 cli/
 ├── src/
-│   ├── index.ts        # CLI entry point
-│   ├── commands/       # CLI command implementations
-│   └── utils/          # Shared utilities
-└── dist/              # Compiled JavaScript
+│   ├── cli.ts               # CLI entry point
+│   ├── commands/            # CLI command implementations
+│   ├── standaloneHandler.ts # Standalone mode (no VS Code extension)
+│   └── types/               # Shared CLI type definitions
+└── dist/                    # Compiled JavaScript
 ```
 
 ## 🔒 Security Considerations

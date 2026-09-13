@@ -6,10 +6,10 @@ Welcome to the CodeLapse developer documentation! This comprehensive guide will 
 
 ### Prerequisites
 
-- **Node.js**: Version 16.x or higher (check `engines` in `package.json`)
-- **npm**: Version 8.x or higher
-- **VS Code**: Version 1.75.0 or higher
-- **Git**: For version control and contribution workflow
+- **Node.js**: version 18.15.0 or higher (CI runs Node 20)
+- **npm**: version 9 or higher
+- **VS Code**: version 1.85.0 or higher
+- **Git**: for version control and the contribution workflow
 
 ### Development Setup
 
@@ -18,6 +18,19 @@ Welcome to the CodeLapse developer documentation! This comprehensive guide will 
    git clone https://github.com/YukioTheSage/code-snapshots.git
    cd code-snapshots
    npm install
+
+   # Build the linked core first: shared/ is a file: dependency, so npm
+   # install links it but does not compile it, and npm run compile fails
+   # with "Cannot find module 'codelapse-core'" until this has run.
+   cd shared
+   npm install
+   npm run build
+   cd ..
+
+   # Install the CLI dependencies
+   cd cli
+   npm install
+   cd ..
    ```
 
 2. **Open in VS Code**
@@ -46,12 +59,23 @@ npm run esbuild-prod
 # Watch mode (recommended for development)
 npm run watch
 
+# Extension unit tests (97 suites)
+npx jest --runInBand --forceExit
+
+# CLI tests (40 suites)
+cd cli && npm run test:ci && cd ..
+
 # Linting
 npm run lint
 npm run lint:fix
 
-# Formatting
-npm run format
+# Lint budget - the warning ceiling may only fall, never rise
+npm run lint:budget
+
+# Formatting (TypeScript only; markdown is not checked)
+npm run format        # rewrite files in place
+npm run format:check  # CI check, fails on any diff
+cd cli && npm run format:check && cd ..
 
 # Package extension
 npm run package
@@ -488,7 +512,7 @@ Thank you for your interest in contributing!
 
 1.  **Prerequisites**:
 
-    - Node.js (Check `engines` in `package.json` for recommended version)
+    - Node.js (check `engines.node` in `cli/package.json` for the required version)
     - npm or yarn
     - VS Code
 
@@ -500,6 +524,11 @@ Thank you for your interest in contributing!
     npm install # or yarn install
     code .
     ```
+
+    `npm install` links but does not compile the local `shared/` package, so the
+    build and watch commands below fail with `Cannot find module 'codelapse-core'`
+    until the linked core is built. Run the complete sequence in
+    [Development Setup](#development-setup) first.
 
 3.  **Development Workflow**:
     - Open the project in VS Code.
@@ -1142,6 +1171,11 @@ async function getSnapshot(id: string): Promise<Snapshot | null> {
    npm run watch  # Start development build
    ```
 
+   `npm install` links but does not compile the local `shared/` package, so
+   `npm run watch` fails with `Cannot find module 'codelapse-core'` until the
+   linked core is built. Run the complete sequence in
+   [Development Setup](#development-setup) first.
+
 3. **Create Feature Branch**
    ```bash
    git checkout -b feature/your-feature-name
@@ -1456,6 +1490,8 @@ class LocalizedMessages {
 # Common issues:
 # 1. TypeScript compilation errors
 npm run check-types
+# "Cannot find module 'codelapse-core'" means the linked shared/ package is not
+# built yet: cd shared && npm install && npm run build (see "Development Setup")
 
 # 2. Missing dependencies
 npm install
