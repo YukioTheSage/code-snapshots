@@ -16,10 +16,11 @@ import {
   PerformanceMetrics,
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
-import { QualityMetrics } from '../types/enhancedChunking';
+import { QualityMetrics, ArchitecturalLayer } from '../types/enhancedChunking';
 import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
 import { QueryProcessor, QueryContext } from './queryProcessor';
 import { ResultManager } from './resultManager';
+import { classifyArchitecturalLayer } from './architecturalLayer';
 import { throwIfCancelled } from '../utils/cancellation';
 import { getWorkspaceId } from './workspaceIdentity';
 
@@ -1325,7 +1326,7 @@ export class SemanticSearchService implements vscode.Disposable {
 
     return {
       surroundingContext,
-      architecturalLayer: this.detectArchitecturalLayer(result.filePath) as any,
+      architecturalLayer: this.detectArchitecturalLayer(result.filePath),
       frameworkContext: this.detectFrameworks(content),
       fileContext: {
         totalLines: content.split('\n').length,
@@ -1340,14 +1341,8 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Detect architectural layer from file path
    */
-  private detectArchitecturalLayer(filePath: string): string {
-    if (/\/(controller|api|endpoint)s?\//.test(filePath)) return 'presentation';
-    if (/\/(service|business|domain)s?\//.test(filePath)) return 'business';
-    if (/\/(repository|dao|data)s?\//.test(filePath)) return 'data';
-    if (/\/(model|entity)s?\//.test(filePath)) return 'model';
-    if (/\/(util|helper|common)s?\//.test(filePath)) return 'utility';
-    if (/\/(test|spec)s?\//.test(filePath)) return 'test';
-    return 'unknown';
+  private detectArchitecturalLayer(filePath: string): ArchitecturalLayer {
+    return classifyArchitecturalLayer(filePath);
   }
 
   /**

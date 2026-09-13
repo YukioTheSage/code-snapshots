@@ -24,9 +24,14 @@ import {
   ResponseSuggestion,
 } from '../types/enhancedSearch';
 import { SemanticSearchResult } from './semanticSearchService';
-import { QualityMetrics, ContextInfo } from '../types/enhancedChunking';
+import {
+  QualityMetrics,
+  ContextInfo,
+  ArchitecturalLayer,
+} from '../types/enhancedChunking';
 import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
 import { filePathMatchesPattern } from '../utils/pathMatching';
+import { classifyArchitecturalLayer } from './architecturalLayer';
 
 /**
  * Ranking configuration for multi-criteria ranking
@@ -1301,33 +1306,8 @@ export class ResultManager {
     return patterns;
   }
 
-  private inferArchitecturalLayer(filePath: string): string {
-    const path = filePath.toLowerCase();
-
-    if (
-      path.includes('controller') ||
-      path.includes('api') ||
-      path.includes('route')
-    )
-      return 'presentation';
-    if (
-      path.includes('service') ||
-      path.includes('business') ||
-      path.includes('logic')
-    )
-      return 'business';
-    if (
-      path.includes('repository') ||
-      path.includes('dao') ||
-      path.includes('database')
-    )
-      return 'data';
-    if (path.includes('model') || path.includes('entity')) return 'domain';
-    if (path.includes('util') || path.includes('helper')) return 'utility';
-    if (path.includes('config') || path.includes('setting'))
-      return 'configuration';
-
-    return 'unknown';
+  private inferArchitecturalLayer(filePath: string): ArchitecturalLayer {
+    return classifyArchitecturalLayer(filePath);
   }
 
   private detectFrameworkContext(content: string): string[] {

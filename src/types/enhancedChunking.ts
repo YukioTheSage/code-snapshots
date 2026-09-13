@@ -310,6 +310,8 @@ export type ArchitecturalLayer =
   | 'infrastructure' // Infrastructure/utility layer
   | 'test' // Test layer
   | 'configuration' // Configuration layer
+  | 'domain' // Domain model layer - returned for model/entity paths
+  | 'utility' // Utility layer - returned for util/helper paths
   | 'unknown'; // Unknown or mixed
 
 /**
