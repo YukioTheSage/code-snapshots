@@ -1,5 +1,5 @@
 import { EmbeddingService } from '../embeddingService';
-import { CodeChunk } from '../codeChunker';
+import { buildChunkId, CodeChunk } from '../codeChunker';
 
 /**
  * The failure `@google/genai` 0.10.0 produces for an HTTP 429.
@@ -73,9 +73,16 @@ describe('EmbeddingService retry classification', () => {
     const embedContent = jest.fn().mockResolvedValue({ embeddings: [] });
     const { service, delay } = serviceWith(embedContent);
 
-    // The guard's message embeds `chunk.id`, so at HEAD the substring check
-    // read the start line in that id as a rate limit and paid 10s + 20s of
-    // backoff to rethrow the same deterministic error it already had.
+    // The historical shape, kept verbatim from the bug report: `buildChunkId`
+    // emits `<startLine>-<endLine>`, so a chunk starting on source line 429
+    // carries "429" in its id, and at HEAD the substring check read that as a
+    // rate limit and paid 10s + 20s of backoff to rethrow the same
+    // deterministic error it already had.
+    //
+    // This is the COINCIDENCE pin, not the fence pin: here the digits sit
+    // between `_` and `-`, and `_` is a word character, so the kept token
+    // match alone would not retry this id either. The fence is pinned by the
+    // `buildChunkId` case below.
     await expect(service.embedCodeChunk(chunkOnLine429)).rejects.toThrow(
       'empty vector for chunk snap-1_src-parser.ts_429-431_0f9e8d7c6b5a',
     );
@@ -83,6 +90,38 @@ describe('EmbeddingService retry classification', () => {
     expect(embedContent).toHaveBeenCalledTimes(1);
     expect(delay).not.toHaveBeenCalled();
   });
+
+  // The FENCE pin. `buildChunkId` preserves `-` and `.` from the path and
+  // replaces every other separator with `_`, so a path position such as
+  // `src/test-429-case.ts` yields an id whose digits are surrounded by
+  // non-word characters: the kept `/\b429\b/` token match alone WOULD read it
+  // as a rate limit, and only the `EmbeddingResponseError` exclusion inside
+  // `isProviderRateLimitError` keeps this deterministic failure from being
+  // retried. Delete that exclusion and this test fails while every other test
+  // in this file stays green.
+  it.each(['src/test-429-case.ts', 'src/v1.429.js'])(
+    'does not retry an empty-vector response for a chunk id built from %s',
+    async (filePath) => {
+      const fenceChunk: CodeChunk = {
+        ...chunk,
+        filePath,
+        id: buildChunkId('snap-1', filePath, 12, 14, chunk.content),
+      };
+      // The premise of this test: the id's digits are a token the message-only
+      // match accepts on its own, so the type is the only thing protecting it.
+      expect(fenceChunk.id).toMatch(/\b429\b/);
+
+      const embedContent = jest.fn().mockResolvedValue({ embeddings: [] });
+      const { service, delay } = serviceWith(embedContent);
+
+      await expect(service.embedCodeChunk(fenceChunk)).rejects.toThrow(
+        `empty vector for chunk ${fenceChunk.id}`,
+      );
+
+      expect(embedContent).toHaveBeenCalledTimes(1);
+      expect(delay).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not retry an empty vector for the search query', async () => {
     const embedContent = jest
