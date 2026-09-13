@@ -9,10 +9,13 @@ describe('shared build output', () => {
         'utf8',
       ),
     ) as { exclude: string[] };
-    const excludesTests = config.exclude.some(
-      (pattern) =>
-        pattern.includes('__tests__') || pattern.includes('*.test.ts'),
-    );
-    expect(excludesTests).toBe(true);
+    // One pattern per shape the package means to keep out of the build: a
+    // __tests__ directory, a .test.ts file and a .spec.ts file. Extra
+    // excludes are not a failure; each shape's presence is what is pinned.
+    const covers = (shape: string): boolean =>
+      config.exclude.some((pattern) => pattern.includes(shape));
+    expect(covers('__tests__')).toBe(true);
+    expect(covers('*.test.ts')).toBe(true);
+    expect(covers('*.spec.ts')).toBe(true);
   });
 });
