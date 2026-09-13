@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { CodeChunker } from '../codeChunker';
 import * as vscode from 'vscode';
 
