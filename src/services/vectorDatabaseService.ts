@@ -194,6 +194,18 @@ export class VectorDatabaseService {
   ): Promise<void> {
     await this.ensureInitialized();
 
+    // Purge this snapshot's existing vectors before writing the new ones, so a
+    // retry cannot mix the two id sets. A chunk id carries a content hash, so
+    // re-chunking the same file produces different ids for the same code, and
+    // the stale copy stayed searchable and ranked beside the new one. The cost
+    // is a window in which the snapshot has no vectors; the snapshot is marked
+    // indexed only after this method resolves, so a failure here - including
+    // the throw from a client without `deleteMany` - leaves it retryable.
+    //
+    // `purged: false` cannot happen here: `ensureInitialized` above guarantees
+    // the client and the index, so the attach step short-circuits.
+    await this.deleteSnapshotVectors(snapshotId);
+
     const timestamp = Date.now();
 
     const vectors: VectorRecord[] = chunks.map((chunk) => {
