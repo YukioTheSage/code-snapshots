@@ -33,9 +33,11 @@ itself. The bash examples need `jq`; the PowerShell examples do not.
   create it, so running `status` first is not a workaround. `--silent`
   suppresses banners, spinners **and the JSON envelope** for every command
   routed through the shared result printer (`snapshot list`, `snapshot create`,
-  `config get`, ...). The exceptions are the commands that write their JSON
-  directly - `status`, `snapshot show` (success path) and `api` - which print it
-  anyway. **Use `--json` alone.**
+  `config get`, ...). The suppression is not absolute: `status` and
+  `snapshot show` write their JSON directly on their success paths and `api`
+  always does, `watch` and `diagnostics logs --follow` stream to stdout, and
+  the fatal handlers print their JSON error even under `--silent`.
+  **Use `--json` alone.**
 - **Exit status.** The process exits 0 when the payload's top-level `success` is
   `true` and 1 when it is `false` - for every command, including `api` and
   `batch`. Branch on the exit code first and parse stdout second.
@@ -63,7 +65,9 @@ itself. The bash examples need `jq`; the PowerShell examples do not.
   `--help` documents can skip one: `snapshot delete` skips its confirmation with
   `-y, --yes` (there `--force` means "delete even when a later snapshot cannot be
   rebuilt from it"), and `files restore` uses `-f, --force`. Not every command has
-  such a flag, so never assume `--silent` or `--force` answers one.
+  such a flag, so never assume `--silent` or `--force` answers one. One declared
+  flag does not work yet: `snapshot restore` accepts `-y, --yes` but does not
+  forward it, so the prompt still appears.
 - **Snapshot ids.** Any unambiguous prefix or fragment resolves to a full id, so
   `snapshot show 1789120661991` works for `snapshot-1789120661991-fe3a3996`; an
   ambiguous abbreviation is refused with the list of candidates. Discover ids
@@ -82,13 +86,18 @@ itself. The bash examples need `jq`; the PowerShell examples do not.
 | Git integration (`git ...`)                                        | Yes        | Yes       |
 | `workspace info`                                                   | Yes        | Yes       |
 | Auto-snapshot rules (`rules ...`)                                  | Yes        | Yes       |
-| Diagnostics (`diagnostics ...`)                                    | Yes        | Yes       |
+| Diagnostics (`diagnostics ...`, except `logs --follow`)            | Yes        | Yes       |
 | Workspace state (`workspace state`, `workspace files`)             | No         | Yes       |
 | Utility (`utility validate`, `utility export`)                     | No         | Yes       |
 | Semantic search (`search`, `search-enhanced`)                      | No         | Yes       |
 | Analysis (`analyze ...`)                                           | No         | Yes       |
 | Chunking (`chunk ...`)                                             | No         | Yes       |
 | Live events (`watch`)                                              | No         | Yes       |
+
+`diagnostics logs --follow` is the exception inside `diagnostics`: streaming
+needs the extension and fails in standalone mode with `{"success": false,
+"error": "Streaming logs requires the CodeLapse extension over IPC; standalone
+mode has no log source."}` and exit 1, not the `Method <name>` error.
 
 ## Hard rules
 
@@ -165,24 +174,24 @@ Add `--json` to every command you read; the flags are the ones this build's
 `--help` documents. `codelapse --help` and `codelapse <group> --help` are the
 live source of truth when this table and the installed binary disagree.
 
-| Command                                                                                                                                      | What you get                                | Mode                   |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ---------------------- |
-| `codelapse status`                                                                                                                           | `connected`, `mode`, `workspace`            | standalone             |
-| `codelapse snapshot create <description> [-t, --tags a,b] [-n, --notes t] [-r, --task-ref t] [-f, --favorite] [-s, --selective --files a,b]` | `snapshot.id`                               | standalone             |
-| `codelapse snapshot list [-t, --tags a,b] [-f, --favorites] [-l, --limit n] [--since <date>]`                                                | `snapshots[]`, `total`                      | standalone             |
-| `codelapse snapshot show <id> [--files] [--content <path>]`                                                                                  | one snapshot, or file content               | standalone             |
-| `codelapse snapshot restore <id> [--backup] [--files a,b] [-y, --yes]`                                                                       | restore result                              | standalone             |
-| `codelapse snapshot compare <id1> <id2> [--files]`                                                                                           | `comparison`, `summary`                     | standalone             |
-| `codelapse snapshot delete <id> [-y, --yes] [--force]`                                                                                       | deletion result                             | standalone             |
-| `codelapse workspace info`                                                                                                                   | `workspace.root`, `config` (standalone)     | standalone             |
-| `codelapse workspace state`                                                                                                                  | current workspace state                     | extension              |
-| `codelapse git commit <snapshot-id> [-m, --message <msg>]`                                                                                   | a git commit from the snapshot              | standalone, clean tree |
-| `codelapse git compare <snapshot-id> <commit-hash> [-f, --files]`                                                                            | snapshot vs commit diff                     | standalone             |
-| `codelapse config get [key]` / `codelapse config set <key> <value>`                                                                          | `config`, `key` (get); `key`, `value` (set) | standalone             |
-| `codelapse batch <file>`                                                                                                                     | `total`, `failed`, `results[]`              | standalone methods     |
-| `codelapse api <method> [-d, --data <json>]`                                                                                                 | `result` (any allowlisted method)           | depends on the method  |
-| `codelapse filter favorites [-l, --limit n] [--offset n]`                                                                                    | `snapshots[]`, `totalCount`                 | standalone             |
-| `codelapse diagnostics run [--no-system] [--no-snapshots] [--no-git] [--no-config]`                                                          | `diagnostics[]`, `summary`                  | standalone             |
+| Command                                                                                                                                      | What you get                                                                               | Mode                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------- |
+| `codelapse status`                                                                                                                           | `connected`, `mode`, `workspace`                                                           | standalone             |
+| `codelapse snapshot create <description> [-t, --tags a,b] [-n, --notes t] [-r, --task-ref t] [-f, --favorite] [-s, --selective --files a,b]` | `snapshot.id`                                                                              | standalone             |
+| `codelapse snapshot list [-t, --tags a,b] [-f, --favorites] [-l, --limit n] [--since <date>]`                                                | `snapshots[]`, `total`                                                                     | standalone             |
+| `codelapse snapshot show <id> [--files] [--content <path>]`                                                                                  | one snapshot, or file content                                                              | standalone             |
+| `codelapse snapshot restore <id> [--backup] [--files a,b] [-y, --yes]`                                                                       | restore result; `-y, --yes` is declared but not yet forwarded, so the prompt still appears | standalone             |
+| `codelapse snapshot compare <id1> <id2> [--files]`                                                                                           | `comparison`, `summary`                                                                    | standalone             |
+| `codelapse snapshot delete <id> [-y, --yes] [--force]`                                                                                       | deletion result                                                                            | standalone             |
+| `codelapse workspace info`                                                                                                                   | `workspace.root`, `config` (standalone)                                                    | standalone             |
+| `codelapse workspace state`                                                                                                                  | current workspace state                                                                    | extension              |
+| `codelapse git commit <snapshot-id> [-m, --message <msg>]`                                                                                   | a git commit from the snapshot                                                             | standalone, clean tree |
+| `codelapse git compare <snapshot-id> <commit-hash> [-f, --files]`                                                                            | snapshot vs commit diff                                                                    | standalone             |
+| `codelapse config get [key]` / `codelapse config set <key> <value>`                                                                          | `config`, `key` (get); `key`, `value` (set)                                                | standalone             |
+| `codelapse batch <file>`                                                                                                                     | `total`, `failed`, `results[]`                                                             | standalone methods     |
+| `codelapse api <method> [-d, --data <json>]`                                                                                                 | `result` (any allowlisted method)                                                          | depends on the method  |
+| `codelapse filter favorites [-l, --limit n] [--offset n]`                                                                                    | `snapshots[]`, `totalCount`                                                                | standalone             |
+| `codelapse diagnostics run [--no-system] [--no-snapshots] [--no-git] [--no-config]`                                                          | `diagnostics[]`, `summary`                                                                 | standalone             |
 
 ## Error recovery
 
