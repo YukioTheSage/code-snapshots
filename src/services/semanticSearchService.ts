@@ -948,6 +948,11 @@ export class SemanticSearchService implements vscode.Disposable {
       );
     }
 
+    // The cache holds whole vectors -- about 24 MB at 3072 dimensions -- keyed
+    // by content hash, and nothing else ever released them, so a purged
+    // snapshot stayed resident for the life of the window.
+    this.embeddingService.clearCache();
+
     this.indexedSnapshots.delete(snapshotId);
     // Persist removal
     await this.persistIndexedSnapshots();

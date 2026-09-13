@@ -154,6 +154,16 @@ export class EmbeddingService {
 
         const embedding = response.embeddings?.[0]?.values ?? [];
 
+        // An empty response is a failure, not a vector. `?? []` used to be
+        // cached, and `getCachedEmbedding` returned it because an empty array
+        // is truthy, so this chunk was served the empty vector on every retry
+        // and `upsertVectors` threw "Embedding not found" for it permanently.
+        if (embedding.length === 0) {
+          throw new Error(
+            `Embedding provider returned an empty vector for chunk ${chunk.id}`,
+          );
+        }
+
         // No fixed post-success delay: a five-second sleep after every response
         // was the dominant cost of indexing and did nothing for a quota that
         // was not being approached. The 429 branch below is the rate limiter.
@@ -242,6 +252,15 @@ export class EmbeddingService {
         });
 
         const embedding = response.embeddings?.[0]?.values ?? [];
+
+        // Same rule as `embedCodeChunk`: an empty vector is not a query
+        // vector, and returning it made the vector store query with zero
+        // dimensions and match nothing.
+        if (embedding.length === 0) {
+          throw new Error(
+            'Embedding provider returned an empty vector for the search query',
+          );
+        }
 
         // No fixed post-success delay: a five-second sleep after every response
         // was the dominant cost of a search and did nothing for a quota that
@@ -386,7 +405,12 @@ export class EmbeddingService {
 
   private getCachedEmbedding(key: string): number[] | undefined {
     const value = this.embeddingCache.get(key);
-    if (!value) {
+    // An empty array is truthy, so `!value` alone served a cached empty
+    // vector to every later attempt and the chunk could never be embedded
+    // again. Nothing writes one any more, and this drops one that was cached
+    // before the write side rejected it so the caller recomputes instead.
+    if (!value || value.length === 0) {
+      this.embeddingCache.delete(key);
       return undefined;
     }
 
