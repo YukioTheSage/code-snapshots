@@ -400,7 +400,7 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 | ⚡ [CLI Guide](cli/README.md)                  | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing-to-codelapse) |
 | 🏗️ [Standalone Mode](STANDALONE_MODE.md)     | 🤖 [AI Guidelines](cli/AI_GUIDE.md)            | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
 | ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 📦 [Core Package](shared/README.md)           | 💬 [Issues](https://github.com/YukioTheSage/code-snapshots/issues) |
-| 🛡️ [Security](SECURITY.md)       |                                                |                                                         |
+| 🛡️ [Security](SECURITY.md)       |                                                | 📄 [Changelog](CHANGELOG.md)                            |
 
 ---
 
