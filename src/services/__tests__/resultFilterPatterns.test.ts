@@ -1,5 +1,6 @@
 import { ResultManager } from '../resultManager';
 import { QueryProcessor } from '../queryProcessor';
+import { SemanticSearchService } from '../semanticSearchService';
 import {
   EnhancedSemanticSearchOptions,
   EnhancedSemanticSearchResult,
@@ -83,7 +84,7 @@ describe('search result file patterns', () => {
       { language: 'typescript' },
     );
 
-    expect(processed.filters.includeFilePatterns).toEqual(['*.ts']);
+    expect(processed.filters.includeFilePatterns).toEqual(['*.ts', '*.tsx']);
   });
 });
 
@@ -271,5 +272,99 @@ describe('absent and empty pattern lists', () => {
         excludeFilePatterns: [],
       }),
     ).toEqual(allKept);
+  });
+});
+
+describe('a search for several languages', () => {
+  function makeMatch(filePath: string, score: number, language: string) {
+    return {
+      chunkId: `chunk-${filePath}`,
+      filePath,
+      snapshotId: 'snap-1',
+      score,
+      metadata: {
+        filePath,
+        snapshotId: 'snap-1',
+        language,
+        startLine: 0,
+        endLine: 1,
+        timestamp: 1,
+        workspaceId: 'ws-1',
+      },
+    };
+  }
+
+  function buildService(matches: unknown[]) {
+    const snapshotManager = {
+      getSnapshots: () => [{ id: 'snap-1', timestamp: 1 }],
+      getSnapshotById: () => ({
+        id: 'snap-1',
+        timestamp: 1,
+        description: 's',
+        files: {},
+      }),
+      getSnapshotFileContentPublic: jest
+        .fn()
+        .mockImplementation(
+          async (_id: string, filePath: string) =>
+            `export const x = '${filePath}';`,
+        ),
+      onDidChangeSnapshots: jest.fn(),
+    };
+    const service = new SemanticSearchService(
+      snapshotManager as never,
+      {
+        hasCredentials: jest.fn().mockResolvedValue(true),
+        promptForCredentials: jest.fn(),
+      } as never,
+      {
+        workspaceState: { get: jest.fn(() => []), update: jest.fn() },
+      } as never,
+    );
+    (service as unknown as { embeddingService: unknown }).embeddingService = {
+      embedSearchQuery: jest.fn().mockResolvedValue([0.1, 0.2]),
+    };
+    (
+      service as unknown as { vectorDatabaseService: unknown }
+    ).vectorDatabaseService = {
+      searchSimilarCode: jest.fn().mockResolvedValue(matches),
+    };
+    (
+      service as unknown as { enhancedCodeChunker: unknown }
+    ).enhancedCodeChunker = {
+      chunkFileEnhanced: jest.fn().mockResolvedValue([]),
+    };
+    return service;
+  }
+
+  it('keeps a result for every requested language, not just the first', async () => {
+    // The reviewer's case: `codelapse search --languages typescript,javascript`.
+    // `processQuery` set `context.language` to `languages[0]`, so the include
+    // filter named only `*.ts` and every `.js` hit the store returned was
+    // dropped before the caller saw it -- as were the `.jsx`/`.tsx` files the
+    // chunker indexes as javascript/typescript.
+    const service = buildService([
+      makeMatch('src/services/userService.ts', 0.9, 'typescript'),
+      makeMatch('src/services/userService.js', 0.85, 'javascript'),
+    ]);
+
+    const results = await service.searchCodeEnhanced({
+      query: 'find authentication code',
+      languages: ['typescript', 'javascript'],
+      limit: 10,
+      searchMode: 'semantic',
+      includeExplanations: false,
+      includeRelationships: false,
+      includeQualityMetrics: false,
+      contextRadius: 5,
+      rankingStrategy: 'relevance',
+      filterCriteria: {},
+      enableDiversification: true,
+    });
+
+    expect(results.map((result) => result.filePath)).toEqual([
+      'src/services/userService.ts',
+      'src/services/userService.js',
+    ]);
   });
 });

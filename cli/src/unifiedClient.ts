@@ -513,13 +513,18 @@ export class UnifiedClient {
    * Ask a running extension to serve a method standalone cannot.
    *
    * The error is kept rather than discarded: "no extension answered" and "the
-   * extension refused" are different problems with different fixes, and the
-   * caller's message says which one happened.
+   * extension refused" are different problems with different fixes, and
+   * `connected` records which one happened. `CodeLapseClient.callApi` rejects
+   * with the handler's own error when the extension answers
+   * `{success: false, error}`, and the socket stays connected in that case;
+   * a connection that never came up, or dropped, leaves `isConnected()` false.
    */
   private async tryIpcCall(
     method: string,
     payload: Record<string, any>,
-  ): Promise<{ ok: true; value: any } | { ok: false; error: string }> {
+  ): Promise<
+    { ok: true; value: any } | { ok: false; error: string; connected: boolean }
+  > {
     try {
       const value = await this.ipcClient.callApi(method, payload);
       if (this.verbose) {
@@ -532,6 +537,9 @@ export class UnifiedClient {
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        // Read after the failure: a rejection caused by a lost socket has
+        // already cleared `connected` by the time it settles.
+        connected: this.ipcClient.isConnected(),
       };
     }
   }
@@ -564,6 +572,12 @@ export class UnifiedClient {
         const fallback = await this.tryIpcCall(method, payload);
         if (fallback.ok) {
           return fallback.value;
+        }
+        if (fallback.connected) {
+          // The extension answered and its backend refused; that error is the
+          // actionable one. Wrapping it in "no extension answered" sent the
+          // user looking for a VS Code that was already running.
+          throw new Error(fallback.error);
         }
         throw new Error(
           `Method ${method} is not available in standalone mode and no CodeLapse extension answered over IPC (${

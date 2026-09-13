@@ -1,6 +1,7 @@
 import {
   compareSearchResults,
   SemanticSearchResult,
+  SemanticSearchService,
 } from '../semanticSearchService';
 
 function result(
@@ -76,5 +77,92 @@ describe('compareSearchResults', () => {
     );
 
     expect(new Set(orders).size).toBe(1);
+  });
+});
+
+function makeMatch(filePath: string, snapshotId: string, score: number) {
+  return {
+    chunkId: `chunk-${filePath}`,
+    filePath,
+    snapshotId,
+    score,
+    metadata: {
+      filePath,
+      snapshotId,
+      language: 'typescript',
+      startLine: 0,
+      endLine: 1,
+      timestamp: 1,
+      workspaceId: 'ws-1',
+    },
+  };
+}
+
+/**
+ * The fixture the comparator's own doc comment names: scores 1.00 / 0.96 / 0.92
+ * with snapshot timestamps 1 / 3 / 2, so the old 5%-band comparator ranked the
+ * 0.96 result first. The snapshots carry the timestamps because `searchCode`
+ * stamps each result with its snapshot's timestamp.
+ */
+function buildSearchService(matches: unknown[]) {
+  const snapshots: Record<
+    string,
+    { id: string; timestamp: number; description: string; files: object }
+  > = {
+    'snap-1': { id: 'snap-1', timestamp: 1, description: 's', files: {} },
+    'snap-2': { id: 'snap-2', timestamp: 3, description: 's', files: {} },
+    'snap-3': { id: 'snap-3', timestamp: 2, description: 's', files: {} },
+  };
+  const snapshotManager = {
+    getSnapshots: () =>
+      Object.values(snapshots).map(({ id, timestamp }) => ({ id, timestamp })),
+    getSnapshotById: (id: string) => snapshots[id],
+    getSnapshotFileContentPublic: jest
+      .fn()
+      .mockResolvedValue('export const x = 1;'),
+    onDidChangeSnapshots: jest.fn(),
+  };
+  const service = new SemanticSearchService(
+    snapshotManager as never,
+    {
+      hasCredentials: jest.fn().mockResolvedValue(true),
+      promptForCredentials: jest.fn(),
+    } as never,
+    { workspaceState: { get: jest.fn(() => []), update: jest.fn() } } as never,
+  );
+  (service as unknown as { embeddingService: unknown }).embeddingService = {
+    embedSearchQuery: jest.fn().mockResolvedValue([0.1, 0.2]),
+  };
+  (
+    service as unknown as { vectorDatabaseService: unknown }
+  ).vectorDatabaseService = {
+    searchSimilarCode: jest.fn().mockResolvedValue(matches),
+  };
+  (service as unknown as { enhancedCodeChunker: unknown }).enhancedCodeChunker =
+    {
+      chunkFileEnhanced: jest.fn().mockResolvedValue([]),
+    };
+  return service;
+}
+
+describe('searchCode applies the total order at both of its sort sites', () => {
+  const matches = [
+    makeMatch('src/a.ts', 'snap-1', 1.0),
+    makeMatch('src/b.ts', 'snap-2', 0.96),
+    makeMatch('src/c.ts', 'snap-3', 0.92),
+  ];
+
+  it('ranks the 1.00/0.96/0.92 fixture by score at every limit', async () => {
+    // The comparator is pinned directly above; this pins its use. At limit 1
+    // the initial sort decides which single result survives the diversity
+    // pass, and at limit 3 the final sort decides the order of the selected
+    // set, so reverting either site fails one of the two calls.
+    const service = buildSearchService(matches);
+
+    const single = await service.searchCode({ query: 'anything', limit: 1 });
+    expect(single.map((result) => result.score)).toEqual([1.0]);
+
+    const all = await service.searchCode({ query: 'anything', limit: 3 });
+    expect(all.map((result) => result.score)).toEqual([1.0, 0.96, 0.92]);
   });
 });

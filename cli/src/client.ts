@@ -60,6 +60,18 @@ export class CodeLapseClient extends EventEmitter {
   }
 
   /**
+   * Whether the socket is connected to a running extension.
+   *
+   * `UnifiedClient` uses this to tell "no extension answered" (the connection
+   * failed) from "the extension answered and its backend refused" (the socket
+   * is up and `callApi` rejected with the handler's own error), so a failure
+   * is not reported as a missing extension.
+   */
+  isConnected(): boolean {
+    return this.connected;
+  }
+
+  /**
    * Get connection status and basic info
    */
   async getStatus(): Promise<ConnectionStatus> {

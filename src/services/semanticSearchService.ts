@@ -543,9 +543,13 @@ export class SemanticSearchService implements vscode.Disposable {
   ): Promise<ProcessedQuery> {
     const { query, languages, searchMode } = options;
 
-    // Create query context from options
+    // Create query context from options. Both forms are carried: `language`
+    // stays the primary language for the heuristics that want one, and
+    // `languages` is what the include filter needs so every requested language
+    // contributes its patterns.
     const context: QueryContext = {
       language: languages?.[0],
+      languages,
       availableSnapshots: this.snapshotManager.getSnapshots().map((s) => s.id),
     };
 
@@ -917,6 +921,15 @@ export class SemanticSearchService implements vscode.Disposable {
 
     // Gather all chunks
     const allChunks: CodeChunk[] = [];
+    // A file that cannot be read or chunked must not be dropped silently.
+    // `upsertVectors` purges the snapshot's vectors before writing the first
+    // batch (Task 11), so continuing past a file failure would delete the old
+    // vectors, write only the files that worked, and this method would still
+    // return -- which marks the snapshot indexed at the call site. Collect the
+    // failures and refuse the whole snapshot instead: the purge then never
+    // runs, the previous vectors stay intact, and the snapshot stays unindexed
+    // so a later run retries it without `--force`.
+    const failedFiles: Array<{ filePath: string; error: string }> = [];
 
     // Process each file
     for (const filePath of allFiles) {
@@ -954,8 +967,24 @@ export class SemanticSearchService implements vscode.Disposable {
 
         allChunks.push(...fileChunks);
       } catch (error) {
-        log(`Error processing file ${filePath} for indexing: ${error}`);
+        const message = error instanceof Error ? error.message : String(error);
+        failedFiles.push({ filePath, error: message });
+        log(`Error processing file ${filePath} for indexing: ${message}`);
       }
+    }
+
+    if (failedFiles.length > 0) {
+      const detail = failedFiles
+        .slice(0, 3)
+        .map((failure) => `${failure.filePath}: ${failure.error}`)
+        .join('; ');
+      throw new Error(
+        `Snapshot ${snapshotId} was not indexed: ${failedFiles.length} of ${
+          allFiles.length
+        } file(s) failed to read or chunk (${detail}${
+          failedFiles.length > 3 ? '; ...' : ''
+        }). The vector store was not written, so this snapshot's previous vectors are intact.`,
+      );
     }
 
     if (allChunks.length === 0) {

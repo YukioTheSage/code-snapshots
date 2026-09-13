@@ -28,6 +28,8 @@ import {
 export interface QueryContext {
   /** Programming language context */
   language?: string;
+  /** Every language the caller requested, when more than one is given. */
+  languages?: string[];
   /** Current file being worked on */
   currentFile?: string;
   /** Recent search queries for context */
@@ -891,18 +893,31 @@ export class QueryProcessor {
       filters.qualityThreshold = 0.7;
     }
 
-    // Filter by language if specified. The pattern is matched against the
-    // result file path, its basename and each of its path segments
+    // Filter by language if specified. Every requested language contributes
+    // its own patterns: this read `context.language` (`languages[0]`) alone, so
+    // `--languages typescript,javascript` kept .ts results and dropped every .js
+    // one, along with the .tsx/.jsx files the chunker indexes as
+    // typescript/javascript. The pattern is matched against the result file
+    // path, its basename and each of its path segments
     // (`filePathMatchesPattern` in `../utils/pathMatching`), which is what makes
     // the bare "*.ts" form select every TypeScript file in any directory. A
-    // language with no known extension gets no include filter at all: the old
-    // '*' fallback produced '*.*', which reads as "everything" while dropping
-    // every dotless path (Makefile, Dockerfile, LICENSE).
-    if (context.language) {
-      const extension = this.getFileExtensionForLanguage(context.language);
-      if (extension) {
-        filters.includeFilePatterns = [`*.${extension}`];
-      }
+    // language with no known extension contributes nothing: the old '*'
+    // fallback produced '*.*', which reads as "everything" while dropping every
+    // dotless path (Makefile, Dockerfile, LICENSE).
+    const requestedLanguages = context.languages?.length
+      ? context.languages
+      : context.language
+      ? [context.language]
+      : [];
+    const includePatterns = Array.from(
+      new Set(
+        requestedLanguages.flatMap((language) =>
+          this.getFilePatternsForLanguage(language),
+        ),
+      ),
+    );
+    if (includePatterns.length > 0) {
+      filters.includeFilePatterns = includePatterns;
     }
 
     // Exclude test files for implementation searches (unless specifically
@@ -1077,23 +1092,30 @@ export class QueryProcessor {
   }
 
   /**
-   * Get file extension for programming language, if we map that language.
+   * Get the file patterns for a programming language, if we map that language.
+   *
+   * A language maps to every extension the chunker indexes as that language
+   * (`codeChunker.ts`'s extension map), so a typescript search keeps .tsx and a
+   * javascript search keeps .jsx: the store holds those chunks under those
+   * language names, and a single `*.ts` pattern dropped them silently.
    */
-  private getFileExtensionForLanguage(language: string): string | undefined {
-    const extensions: Record<string, string> = {
-      javascript: 'js',
-      typescript: 'ts',
-      python: 'py',
-      java: 'java',
-      'c#': 'cs',
-      'c++': 'cpp',
-      go: 'go',
-      rust: 'rs',
-      php: 'php',
-      ruby: 'rb',
+  private getFilePatternsForLanguage(language: string): string[] {
+    const extensions: Record<string, string[]> = {
+      javascript: ['js', 'jsx'],
+      typescript: ['ts', 'tsx'],
+      python: ['py'],
+      java: ['java'],
+      'c#': ['cs'],
+      'c++': ['cpp'],
+      go: ['go'],
+      rust: ['rs'],
+      php: ['php'],
+      ruby: ['rb'],
     };
 
-    return extensions[language.toLowerCase()];
+    return (extensions[language.toLowerCase()] ?? []).map(
+      (extension) => `*.${extension}`,
+    );
   }
 
   /**

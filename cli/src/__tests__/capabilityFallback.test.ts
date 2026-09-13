@@ -20,7 +20,11 @@ describe('per-method IPC fallback', () => {
 
     client = new UnifiedClient('auto', false, 50);
     ipcCallApi = jest.fn().mockResolvedValue({ snapshots: [], totalCount: 0 });
-    (client as any).ipcClient = { callApi: ipcCallApi, getStatus: jest.fn() };
+    (client as any).ipcClient = {
+      callApi: ipcCallApi,
+      getStatus: jest.fn(),
+      isConnected: jest.fn(() => false),
+    };
     (client as any).activeMode = 'standalone';
     (client as any).standaloneHandler = {};
   });
@@ -55,6 +59,23 @@ describe('per-method IPC fallback', () => {
 
     await expect(client.callApi('searchSnapshots', {})).rejects.toThrow(
       /no CodeLapse extension answered over IPC/i,
+    );
+  });
+
+  it('surfaces the backend error when the extension did answer', async () => {
+    // A running extension answers with `success: false`, and
+    // `CodeLapseClient.callApi` rejects with the handler's own error. The
+    // wrapper blamed "no CodeLapse extension answered over IPC" for that too,
+    // sending the user to look for a VS Code that was already running; the
+    // backend's error is the actionable one.
+    (client as any).ipcClient.isConnected = jest.fn(() => true);
+    ipcCallApi.mockRejectedValue(new Error('Vector store rejected the query'));
+
+    const rejection = client.callApi('searchSnapshots', {});
+
+    await expect(rejection).rejects.toThrow('Vector store rejected the query');
+    await expect(rejection).rejects.not.toThrow(
+      /no CodeLapse extension answered/i,
     );
   });
 
