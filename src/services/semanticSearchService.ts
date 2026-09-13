@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { runWithConcurrencyLimit } from 'codelapse-core';
 import { log, logVerbose } from '../logger';
 import { SnapshotManager, Snapshot } from '../snapshotManager';
 import { CredentialsManager } from './credentialsManager';
@@ -148,6 +149,13 @@ export class SemanticSearchService implements vscode.Disposable {
    * `handleSnapshotChanges` has to know about it.
    */
   private inFlightSnapshotId: string | undefined;
+  /**
+   * How many result contents are read at once. Each read is one snapshot-file
+   * read plus one chunking pass, so the sequential loop made a forty-hit search
+   * pay forty read latencies in series; the bound keeps a large result set from
+   * opening every snapshot file at once.
+   */
+  private readonly MAX_CONTENT_READ_CONCURRENCY = 4;
   /** Set by `dispose()`. Checked before any further work or state write. */
   private disposed = false;
   /** The snapshot-change subscription, released by `dispose()`. */
@@ -285,75 +293,87 @@ export class SemanticSearchService implements vscode.Disposable {
     // Enhance results with actual content and snapshot info
     const enhancedResults: (SemanticSearchResult & { fileKey: string })[] = [];
 
-    // First pass: process all results and enrich with content
-    const processedResults: (SemanticSearchResult & { fileKey: string })[] = [];
+    // First pass: process all results and enrich with content. One read per
+    // result, with a fixed ceiling on how many are in flight, and the helper
+    // writes each result back at its input index so the order is preserved. A
+    // read that fails still only drops its own result.
+    const processedResults = (
+      await runWithConcurrencyLimit(
+        searchResults,
+        this.MAX_CONTENT_READ_CONCURRENCY,
+        async (result) => {
+          try {
+            const snapshot = this.snapshotManager.getSnapshotById(
+              result.snapshotId,
+            );
 
-    for (const result of searchResults) {
-      try {
-        const snapshot = this.snapshotManager.getSnapshotById(
-          result.snapshotId,
-        );
+            if (!snapshot) {
+              logVerbose(
+                `Snapshot ${result.snapshotId} not found, skipping result`,
+              );
+              return undefined;
+            }
 
-        if (!snapshot) {
-          logVerbose(
-            `Snapshot ${result.snapshotId} not found, skipping result`,
-          );
-          continue;
-        }
+            const content =
+              await this.snapshotManager.getSnapshotFileContentPublic(
+                result.snapshotId,
+                result.filePath,
+              );
 
-        const content = await this.snapshotManager.getSnapshotFileContentPublic(
-          result.snapshotId,
-          result.filePath,
-        );
+            if (!content) {
+              logVerbose(
+                `Content not found for ${result.filePath} in snapshot ${result.snapshotId}`,
+              );
+              return undefined;
+            }
 
-        if (!content) {
-          logVerbose(
-            `Content not found for ${result.filePath} in snapshot ${result.snapshotId}`,
-          );
-          continue;
-        }
+            // Extract the specific chunk of content
+            const lines = content.split('\n');
+            const startLine = Math.max(0, result.metadata.startLine);
+            const endLine = Math.min(lines.length - 1, result.metadata.endLine);
 
-        // Extract the specific chunk of content
-        const lines = content.split('\n');
-        const startLine = Math.max(0, result.metadata.startLine);
-        const endLine = Math.min(lines.length - 1, result.metadata.endLine);
+            const chunkContent = lines.slice(startLine, endLine + 1).join('\n');
 
-        const chunkContent = lines.slice(startLine, endLine + 1).join('\n');
+            // Add context lines if needed for better understanding
+            let contentWithContext = chunkContent;
+            const contextLines = 5; // Add 5 lines of context if available
 
-        // Add context lines if needed for better understanding
-        let contentWithContext = chunkContent;
-        const contextLines = 5; // Add 5 lines of context if available
+            if (startLine > contextLines) {
+              // Add context before
+              const contextBefore = lines
+                .slice(Math.max(0, startLine - contextLines), startLine)
+                .join('\n');
+              if (contextBefore.trim()) {
+                contentWithContext = `// Context before:\n${contextBefore}\n\n${contentWithContext}`;
+              }
+            }
 
-        if (startLine > contextLines) {
-          // Add context before
-          const contextBefore = lines
-            .slice(Math.max(0, startLine - contextLines), startLine)
-            .join('\n');
-          if (contextBefore.trim()) {
-            contentWithContext = `// Context before:\n${contextBefore}\n\n${contentWithContext}`;
+            const fileKey = `${result.snapshotId}:${result.filePath}`;
+
+            const processedResult: SemanticSearchResult = {
+              snapshotId: result.snapshotId,
+              snapshot,
+              filePath: result.filePath,
+              startLine,
+              endLine,
+              score: result.score,
+              content: contentWithContext,
+              timestamp: snapshot.timestamp,
+            };
+            return {
+              ...(await this.attachQualityMetrics(processedResult)),
+              fileKey,
+            };
+          } catch (error) {
+            log(`Error enhancing search result: ${error}`);
+            return undefined;
           }
-        }
-
-        const fileKey = `${result.snapshotId}:${result.filePath}`;
-
-        const processedResult: SemanticSearchResult = {
-          snapshotId: result.snapshotId,
-          snapshot,
-          filePath: result.filePath,
-          startLine,
-          endLine,
-          score: result.score,
-          content: contentWithContext,
-          timestamp: snapshot.timestamp,
-        };
-        processedResults.push({
-          ...(await this.attachQualityMetrics(processedResult)),
-          fileKey,
-        });
-      } catch (error) {
-        log(`Error enhancing search result: ${error}`);
-      }
-    }
+        },
+      )
+    ).filter(
+      (result): result is SemanticSearchResult & { fileKey: string } =>
+        result !== undefined,
+    );
 
     // Sort all processed results for the initial ranking. The same total order
     // as the final sort: which result is "first per file" in the diversity pass
