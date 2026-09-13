@@ -700,7 +700,8 @@ setting that makes it do so.
    and re-registering a command id in another extension does not take over its
    execution path. The setting that claimed to do this
    (`vscode-snapshots.git.autoSnapshotBeforeOperation`) never fired, and both it
-   and its dead registration have been removed. See [Known Issues](KNOWN_ISSUES.md).
+   and its dead registration have been removed. See the
+   [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 2. **What to do instead**:
    - Press `Ctrl+Alt+S` before the Git operation.

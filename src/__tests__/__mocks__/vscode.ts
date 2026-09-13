@@ -230,7 +230,7 @@ export const window = {
 export const workspace = {
   // `get` returns the caller's own fallback, matching the real API's behaviour
   // for an unset key. Returning undefined here previously made every
-  // config-reading constructor compute NaN (see AUDIT_REPORT.md section 15).
+  // config-reading constructor compute NaN.
   getConfiguration: jest.fn(() => ({
     get: jest.fn((_key: string, fallback?: unknown) => fallback),
     has: jest.fn(() => false),

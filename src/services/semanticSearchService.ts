@@ -1282,8 +1282,7 @@ export class SemanticSearchService implements vscode.Disposable {
    * builder (`queryProcessor.ts:getPenaltyFactors`) for the same reason -- a
    * registration against a condition that cannot fire is configuration reading
    * as a working safety net -- and this copy is not even reachable: no caller
-   * exists for this method. It can come back when a smell signal does; see
-   * docs/KNOWN_ISSUES.md, "Every penalty condition is unreachable".
+   * exists for this method. It can come back when a smell signal does.
    */
 
   /**

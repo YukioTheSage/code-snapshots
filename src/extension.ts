@@ -285,9 +285,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // command ID in another extension does not take over the built-in Git
     // extension's execution path, so the handler would have been a pass-through.
     // The advertised safety net did not exist, so the setting and the dead
-    // registration are gone rather than left as a decorative promise. See
-    // docs/KNOWN_ISSUES.md; take the snapshot explicitly instead (`codelapse git
-    // auto-commit <operation>`, or Ctrl+Alt+S before the Git operation).
+    // registration are gone rather than left as a decorative promise. Take the
+    // snapshot explicitly instead (`codelapse git auto-commit <operation>`, or
+    // Ctrl+Alt+S before the Git operation).
     // --- End Git Command Interception ---
 
     // Setup auto-snapshot timer if enabled

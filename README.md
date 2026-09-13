@@ -155,7 +155,7 @@ codelapse status --json --silent
 > (the previous `git.autoSnapshotBeforeOperation` did nothing and was removed),
 > and VS Code exposes no pre-operation hook. Take the snapshot explicitly with
 > Ctrl+Alt+S or `codelapse git auto-commit <operation>` before a destructive Git
-> operation. See [Known Issues](docs/KNOWN_ISSUES.md).
+> operation. See the [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 </details>
 
@@ -387,7 +387,7 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 | ⚡ [CLI Guide](cli/README.md)                  | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing) |
 | 🏗️ [Standalone Mode](STANDALONE_MODE.md)     | 🤖 [AI Guidelines](cli/README.md#ai-agent-guidelines) | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
 | ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 📦 [Core Package](shared/README.md)           | 💬 [Issues](https://github.com/YukioTheSage/code-snapshots/issues) |
-| ⚠️ [Known Issues](docs/KNOWN_ISSUES.md)       |                                                |                                                         |
+| 🛡️ [Security](SECURITY.md)       |                                                |                                                         |
 
 ---
 
@@ -411,7 +411,7 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 
 > There is no setting for taking a snapshot *before* a Git operation. The previous
 > `git.autoSnapshotBeforeOperation` was removed because nothing ever invoked the
-> interception it configured. See [Known Issues](docs/KNOWN_ISSUES.md).
+> interception it configured. See the [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 </details>
 

@@ -101,7 +101,7 @@ export function getMaxSnapshotStoreBytes(): number {
 
 // `getGitAutoSnapshotEnabled` was removed along with `git.autoSnapshotBeforeOperation`
 // and the unreachable command interception it fed. Nothing invoked the wrapper
-// commands, so the setting could never have an effect. See docs/KNOWN_ISSUES.md.
+// commands, so the setting could never have an effect.
 
 // Add a type for auto-snapshot rules
 export interface AutoSnapshotRule {

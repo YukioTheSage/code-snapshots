@@ -5,8 +5,8 @@
  * a gap in it looks like a bug in the code under test: "Class extends value
  * undefined" or "X is not a function" at construction time. Before this test
  * existed, no suite imported SnapshotManager or SnapshotStorage at all, so the
- * gaps went unnoticed and every plan's tests failed before their first
- * assertion (PLAN_AUDIT.md blocker B1).
+ * gaps went unnoticed and every suite's tests failed before their first
+ * assertion.
  *
  * This asserts the mock is sufficient to construct the extension's most
  * important objects and that configuration defaults resolve to real numbers.

@@ -275,7 +275,7 @@ codelapse search index --snapshots snapshot-123 --purge
 
 `--all` together with `--snapshots` is refused before the extension is called.
 
-Since plan 11 the index path purges a snapshot's vectors before upserting
+The index path purges a snapshot's vectors before upserting
 unconditionally, so `--purge` is accepted and kept for compatibility but is a
 no-op.
 

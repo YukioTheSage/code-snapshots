@@ -54,8 +54,8 @@ CodeLapse has evolved into a comprehensive snapshot management system with the f
 - [ ] Auto-snapshot before pull/merge/rebase — **not implemented**. The
       `git.autoSnapshotBeforeOperation` setting was removed because its
       interception handlers were never invoked; VS Code exposes no
-      pre-operation hook, so this needs a design decision. See
-      [Known Issues](KNOWN_ISSUES.md).
+      pre-operation hook, so this needs a design decision. See the
+      [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 #### Getting Started:
 

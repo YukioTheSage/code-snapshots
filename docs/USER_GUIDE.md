@@ -80,8 +80,8 @@ Set up automated safety nets for your development workflow:
 > `git pull` / `merge` / `rebase` runs from the VS Code Git UI — VS Code exposes
 > no pre-operation hook, and the setting that claimed to do this
 > (`git.autoSnapshotBeforeOperation`) never fired and has been removed. Take one
-> yourself before a destructive Git operation. See
-> [Known Issues](KNOWN_ISSUES.md).
+> yourself before a destructive Git operation. See the
+> [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 ### Semantic Search
 > ⚠️ **EXPERIMENTAL FEATURE** - See [security warnings](#semantic-search) below

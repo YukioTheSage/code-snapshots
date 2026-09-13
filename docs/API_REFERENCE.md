@@ -691,7 +691,7 @@ Monitor real-time events from the CodeLapse extension.
 
 > **Requires a running extension.** Events are pushed over IPC. In standalone mode
 > there is no event source: the command prints its banner, receives nothing and
-> exits 0. See [Known Issues](KNOWN_ISSUES.md).
+> exits 0. See the [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 ### `codelapse watch`
 
