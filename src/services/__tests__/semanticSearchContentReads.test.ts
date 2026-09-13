@@ -81,14 +81,15 @@ describe('SemanticSearchService content reads', () => {
     expect(maxInFlight).toBeLessThanOrEqual(4);
   });
 
-  it('preserves the ranking order when reads finish out of order', async () => {
+  it('still enriches and returns every result when reads finish out of order', async () => {
     const matches = Array.from({ length: 8 }, (_, index) => makeMatch(index));
     const { service, snapshotManager } = buildService(matches);
 
     snapshotManager.getSnapshotFileContentPublic.mockImplementation(
       async (_snapshotId: string, filePath: string) => {
         const index = Number(filePath.replace(/\D/g, ''));
-        // The highest-scored result is the slowest to read.
+        // The highest-scored result is the slowest to read, so a pass that
+        // returned results as they completed would finish 1..7, 0.
         await new Promise((resolve) =>
           setTimeout(resolve, index === 0 ? 25 : 0),
         );
@@ -98,6 +99,12 @@ describe('SemanticSearchService content reads', () => {
 
     const results = await service.searchCode({ query: 'anything', limit: 20 });
 
+    // This test cannot discriminate the enrichment pass's positional order:
+    // `searchCode` re-sorts with the total-order `compareSearchResults` before
+    // and after its diversity pass, so a fixture comes back identically
+    // whichever order the reads completed in. What it pins is that every read
+    // ran and every enriched result survived. Positional preservation is pinned
+    // at the helper's own seam in shared/src/utils/__tests__/asyncUtils.test.ts.
     expect(results.map((result) => result.filePath)).toEqual([
       'src/file0.ts',
       'src/file1.ts',
@@ -108,5 +115,14 @@ describe('SemanticSearchService content reads', () => {
       'src/file6.ts',
       'src/file7.ts',
     ]);
+    // Each result carries the content of its own read, so nothing was dropped
+    // and no result was paired with another result's content.
+    expect(results.map((result) => result.content)).toEqual(
+      Array.from(
+        { length: 8 },
+        (_, index) =>
+          `export const file${index} = ${index};\nexport const more${index} = 1;`,
+      ),
+    );
   });
 });

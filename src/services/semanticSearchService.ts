@@ -295,8 +295,12 @@ export class SemanticSearchService implements vscode.Disposable {
 
     // First pass: process all results and enrich with content. One read per
     // result, with a fixed ceiling on how many are in flight, and the helper
-    // writes each result back at its input index so the order is preserved. A
-    // read that fails still only drops its own result.
+    // writes each result back at its input index so the array stays aligned
+    // with `searchResults`. The whole callback body is inside its own
+    // try/catch: a failed read returns `undefined` instead of rejecting, which
+    // matters because the helper propagates a rejection out of the pass and
+    // would fail the whole search rather than drop the one result whose read
+    // failed.
     const processedResults = (
       await runWithConcurrencyLimit(
         searchResults,
