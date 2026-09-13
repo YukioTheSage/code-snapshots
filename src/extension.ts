@@ -13,7 +13,7 @@ import { SnapshotContentProvider } from './snapshotContentProvider'; // Import t
 import { registerCommands, CommandDependencies } from './commands'; // Import the new command registration function and interface
 import { ChangeNotifier } from './changeNotifier'; // Import the new notifier class
 import { GitExtension, API as GitAPI } from './types/git.d'; // Import Git API types
-import { getGitAutoSnapshotEnabled } from './config'; // Import config helper
+import { getUxSettings } from './config'; // Import config helper
 import { CredentialsManager } from './services/credentialsManager';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
@@ -23,6 +23,28 @@ import { CliConnectorService } from './services/cliConnectorService';
 // --- Snapshot Content Provider Removed ---
 // The class definition previously here has been moved to src/snapshotContentProvider.ts
 // --- End Snapshot Content Provider Removed ---
+
+/**
+ * Retention for a window that is opening, guarded so it cannot take the rest
+ * of activation down with it.
+ *
+ * This is the first thing activation does that deletes anything, and the
+ * storage layer rethrows every deletion failure except "not found" -- a file
+ * lock on Windows or a symlink it refuses to follow is enough. Retention is
+ * best-effort everywhere else, so a prune that cannot complete reports itself
+ * and lets the status bar, the tree views and every command be created.
+ */
+export async function enforceStartupRetention(
+  snapshotManager: SnapshotManager,
+): Promise<void> {
+  try {
+    await snapshotManager.enforceSnapshotSizeLimitOnActivation();
+  } catch (error) {
+    log(
+      `Size retention at activation failed for ${snapshotManager.getStoreDirectory()}: ${error}`,
+    );
+  }
+}
 
 export async function activate(context: vscode.ExtensionContext) {
   // Make activate async
@@ -65,6 +87,10 @@ export async function activate(context: vscode.ExtensionContext) {
     // Initialize core components
     log('Initializing SnapshotManager...'); // Use logger
     const snapshotManager = new SnapshotManager(gitApi); // Pass Git API
+    // A store can already be over the configured size when the window opens,
+    // and nothing else revisits it until the next take. Guarded: a prune that
+    // cannot complete must not stop the rest of activation.
+    await enforceStartupRetention(snapshotManager);
 
     log('Initializing StatusBarController...'); // Use logger
     const statusBarController = new StatusBarController(snapshotManager);
@@ -118,21 +144,22 @@ export async function activate(context: vscode.ExtensionContext) {
       manualSnapshotTreeDataProvider,
       'My Snapshots',
     );
-    context.subscriptions.push({
-      dispose: () => {
-        manualFilterStatusBar.dispose();
-      },
-    });
 
     const autoFilterStatusBar = new FilterStatusBar(
       autoSnapshotTreeDataProvider,
       'Auto Snapshots',
     );
-    context.subscriptions.push({
-      dispose: () => {
-        autoFilterStatusBar.dispose();
-      },
-    });
+
+    // Both status bars and both tree providers are Disposable, so they are
+    // registered directly. The manual `{ dispose: () => x.dispose() }` wrappers
+    // this replaces were the only disposal the tree providers ever had -- and
+    // they had none, so their listeners outlived them.
+    context.subscriptions.push(
+      manualFilterStatusBar,
+      autoFilterStatusBar,
+      manualSnapshotTreeDataProvider,
+      autoSnapshotTreeDataProvider,
+    );
     log('Filter Status Bars initialized.');
 
     // Register the Snapshot Content Provider for diff views
@@ -158,7 +185,7 @@ export async function activate(context: vscode.ExtensionContext) {
       context,
       semanticSearchService,
     );
-    (snapshotManager as any).semanticSearchService = semanticSearchService;
+    snapshotManager.setSemanticSearchService(semanticSearchService);
     context.subscriptions.push(semanticSearchService);
 
     // Initialize Terminal API Service
@@ -175,6 +202,7 @@ export async function activate(context: vscode.ExtensionContext) {
       terminalApiService,
       context,
       semanticSearchService,
+      gitApi,
     );
     context.subscriptions.push(cliConnectorService);
     log('CliConnectorService initialized successfully');
@@ -216,9 +244,20 @@ export async function activate(context: vscode.ExtensionContext) {
       takeSnapshot: (options: any) => terminalApiService.takeSnapshot(options),
       restoreSnapshot: (id: string, options?: any) =>
         terminalApiService.restoreSnapshot(id, options),
-      deleteSnapshot: (id: string) => terminalApiService.deleteSnapshot(id),
+      deleteSnapshot: (id: string, options?: { skipConfirm?: boolean }) =>
+        terminalApiService.deleteSnapshot(id, options),
       searchSnapshots: (query: string, options?: any) =>
         terminalApiService.searchSnapshots(query, options),
+      // Internals surfaced for the integration test suite only; the tree
+      // providers, decorator and status bar controller have no other way to be
+      // reached from a test host.
+      testHooks: {
+        manualTreeProvider: manualSnapshotTreeDataProvider,
+        autoTreeProvider: autoSnapshotTreeDataProvider,
+        snapshotManager,
+        editorDecorator,
+        statusBarController,
+      },
     };
 
     // Register the API command
@@ -227,11 +266,7 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // Register status bar controller for disposal
-    context.subscriptions.push({
-      dispose: () => {
-        statusBarController.dispose();
-      },
-    });
+    context.subscriptions.push(statusBarController);
 
     // Register Config Tree View for settings
     const configTreeDataProvider = new ConfigTreeDataProvider(context);
@@ -243,7 +278,16 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // --- Setup Git Command Interception ---
-    setupGitCommandInterception(context, snapshotManager);
+    // Removed. `setupGitCommandInterception` registered three private command
+    // IDs (`vscode-snapshots.internal.preGitCommand.git.pull` and friends) that
+    // nothing in the repository ever invoked, so `git.autoSnapshotBeforeOperation`
+    // never fired -- and even if something had invoked them, re-registering a
+    // command ID in another extension does not take over the built-in Git
+    // extension's execution path, so the handler would have been a pass-through.
+    // The advertised safety net did not exist, so the setting and the dead
+    // registration are gone rather than left as a decorative promise. Take the
+    // snapshot explicitly instead (`codelapse git auto-commit <operation>`, or
+    // Ctrl+Alt+S before the Git operation).
     // --- End Git Command Interception ---
 
     // Setup auto-snapshot timer if enabled
@@ -273,29 +317,17 @@ export async function activate(context: vscode.ExtensionContext) {
         autoSnapshotTimer = setInterval(async () => {
           try {
             log('Auto-snapshot triggered by timer');
-            const lastIdx = snapshotManager.getCurrentSnapshotIndex();
-            if (lastIdx >= 0) {
-              const lastSnapshot = snapshotManager.getSnapshots()[lastIdx];
-              const workspaceRoot = snapshotManager.getWorkspaceRoot();
-              if (workspaceRoot) {
-                const changes = await snapshotManager.calculateRestoreChanges(
-                  lastSnapshot,
-                  workspaceRoot,
-                );
-                if (changes.length === 0) {
-                  log(
-                    'Skipping timer-based auto snapshot: no changes detected since last snapshot',
-                  );
-                  return;
-                }
-              }
-            }
-            // Take snapshot with enhanced context information
+
+            // Take snapshot with enhanced context information. The manager
+            // decides whether there is anything to record -- the change check
+            // that used to live here asked a different question (it compared
+            // against the newest snapshot) and the two could disagree, so a
+            // "no changes" verdict here could contradict the manager's.
             const now = new Date();
             const formattedTime = now.toLocaleTimeString();
             const formattedDate = now.toLocaleDateString();
 
-            await snapshotManager.takeSnapshot(
+            const outcome = await snapshotManager.takeSnapshot(
               `Auto snapshot at ${formattedTime}`,
               {
                 tags: ['auto', 'timed', 'scheduled'],
@@ -304,7 +336,11 @@ export async function activate(context: vscode.ExtensionContext) {
               },
             );
 
-            log('Time-based auto-snapshot completed successfully');
+            if (outcome.created) {
+              log('Time-based auto-snapshot completed successfully');
+            } else {
+              log('Time-based auto-snapshot skipped: no changes detected');
+            }
           } catch (error: unknown) {
             const errMsg =
               error instanceof Error ? error.message : String(error);
@@ -347,11 +383,16 @@ export async function activate(context: vscode.ExtensionContext) {
     WelcomeView.showWelcomeExperience(context);
 
     // Add keyboard shortcut hints to status bar for better discoverability
+    //
+    // Gated on `ux.showKeyboardShortcutHints` as well as the one-time flag: the
+    // setting was previously ignored, so turning it off had no effect. Read
+    // through getUxSettings() so all four ux.* settings share one accessor.
+    const shortcutHintsEnabled = getUxSettings().showKeyboardShortcutHints;
     const takingSnapshotHintShown = context.globalState.get<boolean>(
       'codeSnapshots.takingSnapshotHintShown',
       false,
     );
-    if (!takingSnapshotHintShown) {
+    if (shortcutHintsEnabled && !takingSnapshotHintShown) {
       // Show keyboard shortcut hint after a short delay
       setTimeout(() => {
         vscode.window
@@ -370,23 +411,10 @@ export async function activate(context: vscode.ExtensionContext) {
       }, 10000); // Show after 10 seconds
     }
 
-    // Register additional command that will be needed for the UX improvements
-    const registerFocusSnapshotViewCommand = (
-      context: vscode.ExtensionContext,
-    ): void => {
-      const focusViewCmd = vscode.commands.registerCommand(
-        'vscode-snapshots.focusSnapshotView',
-        async () => {
-          await vscode.commands.executeCommand(
-            'workbench.view.extension.snapshot-explorer',
-          );
-        },
-      );
-      context.subscriptions.push(focusViewCmd);
-      log('focusSnapshotView command registered');
-    };
-
-    registerFocusSnapshotViewCommand(context);
+    // The "focus view" commands live in commands.ts: this file used to
+    // register `focusSnapshotView`, an id no manifest entry declares and no
+    // caller invokes, while the two ids that *are* contributed went
+    // unregistered and reported "command not found" from the palette.
 
     // Enhance status bar with more help
     statusBarItem.tooltip =
@@ -417,81 +445,3 @@ export async function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   // Clean up resources when extension is deactivated
 }
-
-// --- Helper Function for Git Command Interception ---
-
-function setupGitCommandInterception(
-  context: vscode.ExtensionContext,
-  snapshotManager: SnapshotManager,
-) {
-  const gitCommandsToWrap = ['git.pull', 'git.merge', 'git.rebase']; // Add more if needed, e.g., git.sync, git.pullRebase
-
-  log('Setting up Git command interception...');
-
-  gitCommandsToWrap.forEach((commandId) => {
-    const disposable = vscode.commands.registerCommand(
-      `vscode-snapshots.internal.preGitCommand.${commandId}`, // Use a unique internal command ID
-      async (...args: unknown[]): Promise<void> => {
-        // Check configuration *at the time of execution*
-        const autoSnapshotEnabled = getGitAutoSnapshotEnabled(); // Use config helper
-
-        if (autoSnapshotEnabled) {
-          log(`Intercepted Git command: ${commandId}.`);
-          const lastIdx = snapshotManager.getCurrentSnapshotIndex();
-          let shouldSnapshot = true;
-          if (lastIdx >= 0) {
-            const lastSnapshot = snapshotManager.getSnapshots()[lastIdx];
-            const { added, modified, deleted } =
-              snapshotManager.getSnapshotChangeSummary(lastSnapshot.id);
-            if (added + modified + deleted === 0) {
-              shouldSnapshot = false;
-              log(
-                'Skipping git-based auto snapshot: no changes detected since last snapshot',
-              );
-            }
-          }
-          if (shouldSnapshot) {
-            try {
-              // Take snapshot silently with a descriptive message
-              const description = `Auto-snapshot before ${commandId}`;
-              await snapshotManager.takeSnapshot(description, {
-                tags: ['auto', 'git', commandId],
-              }); // Mark as auto for skip logic
-              log(`Auto-snapshot taken successfully before ${commandId}.`);
-            } catch (error: unknown) {
-              const errMsg =
-                error instanceof Error ? error.message : String(error);
-              log(
-                `Failed to take auto-snapshot before ${commandId}: ${errMsg}`,
-              );
-              vscode.window.showWarningMessage(
-                `Failed to take automatic snapshot before ${commandId}. Proceeding with Git operation.`,
-              );
-            }
-          }
-        } else {
-          log(
-            `Intercepted Git command: ${commandId}. Auto-snapshot disabled, skipping.`,
-          );
-        }
-
-        // Execute the original Git command
-        log(`Executing original Git command: ${commandId}`);
-        try {
-          await vscode.commands.executeCommand(commandId, ...args);
-          log(`Original Git command ${commandId} executed successfully.`);
-        } catch (error: unknown) {
-          const errMsg = error instanceof Error ? error.message : String(error);
-          log(`Error executing original Git command ${commandId}: ${errMsg}`);
-        }
-      },
-    );
-
-    context.subscriptions.push(disposable);
-    log(`Registered wrapper for Git command: ${commandId}`);
-  });
-
-  log('Git command interception setup complete.');
-}
-
-// --- End Helper Function ---

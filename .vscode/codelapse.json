@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "description": "CodeLapse configuration - shared between CLI and VS Code extension",
+  "snapshotLocation": ".snapshots",
+  "maxSnapshots": 50,
+  "git": {
+    "addCommitInfo": true,
+    "autoSnapshotBeforeOperation": false
+  },
+  "semanticSearch": {
+    "enabled": false,
+    "provider": "gemini",
+    "chunkSize": 200,
+    "autoIndex": false
+  }
+}

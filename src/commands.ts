@@ -1,17 +1,21 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { SnapshotManager } from './snapshotManager';
+import { SnapshotManager, TakeSnapshotOutcome } from './snapshotManager';
 import { SnapshotQuickPick } from './ui/quickPick';
 import { SnapshotTreeDataProvider, SnapshotTreeItem } from './ui/treeView';
 import { SnapshotContentProvider } from './snapshotContentProvider';
 import { SnapshotContextInput } from './ui/snapshotContextInput';
 import { log, logVerbose, showOutputChannel } from './logger';
 import { ChangeNotifier } from './changeNotifier';
-import { API as GitAPI } from './types/git.d';
+import { API as GitAPI, CommitOptions } from './types/git.d';
 import { AutoSnapshotRulesUI } from './ui/autoSnapshotRulesUI';
 import { SemanticSearchService } from './services/semanticSearchService';
 import { SemanticSearchWebview } from './ui/semanticSearchWebview';
+import { throwIfCancelled, isCancellationError } from './utils/cancellation';
+import { ACTIVE_NONE } from './snapshotSelection';
+import { AnimationHelpers } from './utils';
+import { getUxSettings } from './config';
 
 // Structure to hold dependencies passed from activate
 export interface CommandDependencies {
@@ -45,6 +49,7 @@ export function registerCommands(deps: CommandDependencies): void {
   registerDiagnosticCommand(deps);
   registerManageAutoSnapshotRulesCommand(deps);
   registerToggleChangedFilesCommand(deps);
+  registerFocusViewCommands(deps);
   registerSemanticIndexCommand(deps);
   registerSemanticSearchCommand(deps);
   registerShowLogsCommand(deps);
@@ -53,6 +58,50 @@ export function registerCommands(deps: CommandDependencies): void {
 }
 
 // --- Individual Command Registration Functions ---
+
+/**
+ * Registers the two "focus this view" commands.
+ *
+ * VS Code generates `<viewId>.focus` for every view declared in
+ * `contributes.views`. The previous implementation registered an id that was
+ * never contributed and targeted a workbench command that does not exist, so
+ * the two ids the manifest actually declares reported "command not found".
+ */
+function registerFocusViewCommands({ context }: CommandDependencies): void {
+  log('Registering focus view commands...');
+
+  const manual = vscode.commands.registerCommand(
+    'vscode-snapshots.focusManualSnapshotView',
+    async () => {
+      // Both views declare `when: workspaceFolderCount > 0`, so with no folder
+      // open there is no view to focus and executeCommand would do nothing
+      // silently. Say so instead.
+      if (!vscode.workspace.workspaceFolders?.length) {
+        vscode.window.showInformationMessage(
+          'Open a folder to use the CodeLapse snapshot views.',
+        );
+        return;
+      }
+      await vscode.commands.executeCommand('manualSnapshotHistoryView.focus');
+    },
+  );
+
+  const auto = vscode.commands.registerCommand(
+    'vscode-snapshots.focusAutoSnapshotView',
+    async () => {
+      if (!vscode.workspace.workspaceFolders?.length) {
+        vscode.window.showInformationMessage(
+          'Open a folder to use the CodeLapse snapshot views.',
+        );
+        return;
+      }
+      await vscode.commands.executeCommand('autoSnapshotHistoryView.focus');
+    },
+  );
+
+  context.subscriptions.push(manual, auto);
+  log('Focus view commands registered successfully');
+}
 
 function registerManageAutoSnapshotRulesCommand({
   context,
@@ -83,10 +132,10 @@ function registerTakeSnapshotCommand({
 
       // If user cancelled, exit
       if (!contextOptions) {
-        return;
+        return undefined;
       }
 
-      await vscode.window.withProgress(
+      return await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
           title: 'Taking Snapshot...',
@@ -102,11 +151,12 @@ function registerTakeSnapshotCommand({
               increment: 5,
             });
 
-            // Cancel support
-            token.onCancellationRequested(() => {
-              log('Snapshot creation cancelled by user');
-              throw new Error('Operation cancelled');
-            });
+            // Cancellation is checked at the await boundaries below. A listener
+            // that throws cannot interrupt the work: its return value is
+            // discarded, so the throw lands in the emitter's dispatch frame and
+            // the operation runs to completion while the UI says it was
+            // cancelled. See utils/cancellation.ts.
+            throwIfCancelled(token);
 
             // Scanning workspace files stage
             progress.report({
@@ -116,16 +166,11 @@ function registerTakeSnapshotCommand({
               increment: 15,
             });
 
-            await new Promise((resolve) => setTimeout(resolve, 100)); // Small delay for UI update
-
             // Processing files stage
             progress.report({
               message: 'Processing files...',
               increment: 30,
             });
-
-            // First phase of snapshot taking
-            await new Promise((resolve) => setTimeout(resolve, 200)); // Small delay for UI update
 
             // Saving stage
             progress.report({
@@ -134,17 +179,19 @@ function registerTakeSnapshotCommand({
             });
 
             // Take the actual snapshot - core operation
-            await snapshotManager.takeSnapshot(contextOptions.description, {
-              tags: contextOptions.tags,
-              notes: contextOptions.notes,
-              taskReference: contextOptions.taskReference,
-              isFavorite: contextOptions.isFavorite,
-              isSelective: contextOptions.isSelective,
-              selectedFiles: contextOptions.selectedFiles,
-            });
+            const outcome = await snapshotManager.takeSnapshot(
+              contextOptions.description,
+              {
+                tags: contextOptions.tags,
+                notes: contextOptions.notes,
+                taskReference: contextOptions.taskReference,
+                isFavorite: contextOptions.isFavorite,
+                isSelective: contextOptions.isSelective,
+                selectedFiles: contextOptions.selectedFiles,
+              },
+            );
 
-            // Wait to prevent flashing notification
-            await new Promise((resolve) => setTimeout(resolve, 200));
+            throwIfCancelled(token);
 
             // Finalizing stage
             progress.report({
@@ -152,7 +199,17 @@ function registerTakeSnapshotCommand({
               increment: 25,
             });
 
-            // Reset notification state
+            if (!outcome.created) {
+              // Reporting success here is what produced a "View Snapshot"
+              // button that opened a different snapshot from the one the
+              // message implied had just been taken.
+              vscode.window.showInformationMessage(
+                'Nothing to snapshot: the workspace is unchanged since the previous snapshot.',
+              );
+              return outcome;
+            }
+
+            // Reset notification state only when a snapshot was recorded.
             changeNotifier.resetNotificationState();
 
             // Show success message with tag count if applicable
@@ -180,14 +237,14 @@ function registerTakeSnapshotCommand({
               )
               .then((selection) => {
                 if (selection === 'View Snapshot') {
-                  // Find the newly created snapshot
-                  const snapshots = snapshotManager.getSnapshots();
-                  const newSnapshot = snapshots[snapshots.length - 1];
-
-                  // Execute command to view the snapshot details
+                  // The snapshot this call created, not whatever happens to be
+                  // last in the list.
                   vscode.commands.executeCommand(
                     'vscode-snapshots.showChangedFilesInSnapshot',
-                    { snapshot: newSnapshot, contextValue: 'snapshotItem' },
+                    {
+                      snapshot: outcome.snapshot,
+                      contextValue: 'snapshotItem',
+                    },
                   );
                 } else if (selection === 'Copy Task Reference') {
                   vscode.env.clipboard.writeText(contextOptions.taskReference);
@@ -196,15 +253,14 @@ function registerTakeSnapshotCommand({
                   );
                 }
               });
+
+            return outcome;
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Operation cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Snapshot creation cancelled',
               );
-              return;
+              return undefined;
             }
 
             log(
@@ -217,6 +273,7 @@ function registerTakeSnapshotCommand({
                 error instanceof Error ? error.message : error
               }`,
             );
+            return undefined;
           }
         },
       );
@@ -312,6 +369,27 @@ function registerJumpToSnapshotCommand({
         return;
       }
 
+      // Warn before the confirmation UI, so the user knows this snapshot cannot
+      // be fully applied before they are asked to approve anything. The restore
+      // itself will skip those files and refuse to delete anything; saying so up
+      // front is the difference between an informed choice and a surprise.
+      const unrecoverableFiles = snapshotManager.getUnrecoverableFilesFor(
+        snapshot.id,
+      );
+      if (unrecoverableFiles.length > 0) {
+        const proceed = await vscode.window.showWarningMessage(
+          `This snapshot's history is incomplete: ${unrecoverableFiles.length} file(s) cannot be reconstructed and will be skipped. Files not in the snapshot will also be left untouched rather than deleted. Restore what is readable anyway?`,
+          { modal: true },
+          'Restore What Is Readable',
+        );
+        if (proceed !== 'Restore What Is Readable') {
+          log(
+            `Restore cancelled by user: snapshot ${targetSnapshotId} has ${unrecoverableFiles.length} unrecoverable file(s).`,
+          );
+          return;
+        }
+      }
+
       if (changes.length === 0) {
         log('No changes detected between snapshot and workspace.'); // Corrected: Use log
         vscode.window.showInformationMessage(
@@ -335,32 +413,40 @@ function registerJumpToSnapshotCommand({
         description: 'Do not restore',
       };
 
-      const selectedOption = await vscode.window.showQuickPick(
-        [
-          CONFIRM_OPTION,
-          CANCEL_OPTION,
+      // `ux.confirmRestoreOperations` was declared and documented but read by
+      // nothing, so turning it off still produced this prompt.
+      if (getUxSettings().confirmRestoreOperations) {
+        const selectedOption = await vscode.window.showQuickPick(
+          [
+            CONFIRM_OPTION,
+            CANCEL_OPTION,
+            {
+              label: '--- Changes ---',
+              kind: vscode.QuickPickItemKind.Separator,
+            },
+            ...quickPickItems,
+          ],
           {
-            label: '--- Changes ---',
-            kind: vscode.QuickPickItemKind.Separator,
+            placeHolder: 'Review changes and confirm restore',
+            title: `Restore Snapshot '${snapshot.description || snapshot.id}'?`,
+            ignoreFocusOut: true,
           },
-          ...quickPickItems,
-        ],
-        {
-          placeHolder: 'Review changes and confirm restore',
-          title: `Restore Snapshot '${snapshot.description || snapshot.id}'?`,
-          ignoreFocusOut: true,
-        },
-      );
+        );
 
-      if (selectedOption !== CONFIRM_OPTION) {
-        log('User cancelled restore from preview.'); // Corrected: Use log
-        vscode.window.showInformationMessage('Snapshot restore cancelled.');
-        return;
+        if (selectedOption !== CONFIRM_OPTION) {
+          log('User cancelled restore from preview.'); // Corrected: Use log
+          vscode.window.showInformationMessage('Snapshot restore cancelled.');
+          return;
+        }
+        log('User confirmed restore from preview.'); // Corrected: Use log
       }
-      log('User confirmed restore from preview.'); // Corrected: Use log
       // --- End: Preview and Confirmation UI ---
 
       // --- Start: Conflict Resolution UI ---
+      // This prompt is deliberately NOT gated on ux.confirmRestoreOperations:
+      // it protects unsaved work, which is a different concern from routine
+      // confirmation. The setting turns off the convenience prompt above, not
+      // the data-loss guard.
       const affectedRelativePaths = new Set<string>(
         changes.map((c) => c.relativePath),
       ); // Use calculated changes for affected paths
@@ -392,8 +478,21 @@ function registerJumpToSnapshotCommand({
           'Cancel',
         );
 
-        if (result === 'Cancel') {
-          log('Restore cancelled due to unsaved changes conflict.');
+        // Fail closed. Dismissing a modal returns `undefined`, which matched
+        // neither branch below, so closing the dialog -- the least deliberate
+        // action available -- was read as consent and the restore proceeded,
+        // overwriting the unsaved changes this prompt exists to protect. The
+        // confirmation prompt above already treats "not the confirm option" as
+        // cancel; this one now does the same.
+        if (
+          result !== 'Restore (Overwrite Unsaved)' &&
+          result !== 'Take Snapshot & Restore'
+        ) {
+          log(
+            `Restore cancelled due to unsaved changes conflict (dialog result: ${String(
+              result,
+            )}).`,
+          );
           vscode.window.showInformationMessage('Snapshot restore cancelled.');
           return;
         }
@@ -402,9 +501,24 @@ function registerJumpToSnapshotCommand({
           log(
             'Taking snapshot before restoring due to unsaved changes conflict.',
           );
-          // Trigger the take snapshot command - assumes it handles its own progress/UI
-          await vscode.commands.executeCommand('vscode-snapshots.takeSnapshot');
-          // Check if snapshot was actually taken? For now, assume success or command handles failure.
+
+          // The take command prompts for context, so the user can cancel it,
+          // and it refuses to record anything when the workspace is unchanged.
+          // Both outcomes leave the unsaved changes unprotected, and the
+          // previous code restored anyway -- discarding exactly what this
+          // prompt exists to protect.
+          const outcome = await vscode.commands.executeCommand<
+            TakeSnapshotOutcome | undefined
+          >('vscode-snapshots.takeSnapshot');
+
+          if (!outcome?.created) {
+            log('No snapshot was taken; cancelling the restore.');
+            vscode.window.showWarningMessage(
+              'No snapshot was taken, so the restore has been cancelled to avoid discarding your unsaved changes.',
+            );
+            return;
+          }
+
           log('Snapshot taken, proceeding with restore.');
         }
         log(
@@ -412,6 +526,36 @@ function registerJumpToSnapshotCommand({
         );
       }
       // --- End: Conflict Resolution UI ---
+
+      // A restore overwrites the workspace from disk and writes nothing to VS
+      // Code's undo stack, so the pre-restore state is the only thing a user can
+      // be brought back to -- and a snapshot is the only mechanism this product
+      // has for that. Taken unconditionally rather than only when unsaved
+      // buffers exist: a snapshot reads files from disk, so the dirty-buffer
+      // prompt never protected the state this protects. A "nothing changed"
+      // outcome is not a failure -- the newest snapshot already holds it.
+      let protectiveOutcome: TakeSnapshotOutcome | undefined;
+      try {
+        protectiveOutcome = await snapshotManager.takeSnapshot(
+          `Backup before restoring ${snapshot.description || targetSnapshotId}`,
+          { tags: ['backup', 'auto'] },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`Failed to take protective snapshot before restore: ${message}`);
+        vscode.window.showErrorMessage(
+          `Cannot restore snapshot: failed to take a protective snapshot first (${message}).`,
+        );
+        return;
+      }
+      const protectiveId = protectiveOutcome?.created
+        ? protectiveOutcome.snapshot.id
+        : undefined;
+      log(
+        protectiveOutcome?.created
+          ? `Protective snapshot ${protectiveId} taken before restore.`
+          : 'Workspace unchanged since the newest snapshot; no protective snapshot needed.',
+      );
 
       // --- Apply Restore with Progress ---
       await vscode.window.withProgress(
@@ -424,13 +568,11 @@ function registerJumpToSnapshotCommand({
         },
         async (progress, token) => {
           try {
-            // Add cancellation support
-            token.onCancellationRequested(() => {
-              log(
-                `Snapshot restore cancelled by user for ID: ${targetSnapshotId}`,
-              );
-              throw new Error('Restore cancelled');
-            });
+            // Cancellation is checked at the await boundaries below. A listener
+            // that throws cannot interrupt the work: its return value is discarded,
+            // so the throw lands in the emitter's dispatch frame. See
+            // utils/cancellation.ts.
+            throwIfCancelled(token);
 
             // Save editor states for better transition
             progress.report({
@@ -438,9 +580,6 @@ function registerJumpToSnapshotCommand({
               increment: 10,
             });
             const editorStates = await preserveEditorViewStates();
-
-            // Add small delay to make the UI more responsive
-            await new Promise((resolve) => setTimeout(resolve, 150));
 
             // Report more detailed progress
             progress.report({ message: 'Analyzing changes...', increment: 15 });
@@ -454,14 +593,13 @@ function registerJumpToSnapshotCommand({
             );
 
             progress.report({
-              message: 'Backing up current state...',
+              message: protectiveOutcome?.created
+                ? `Protective snapshot ready: ${protectiveId}`
+                : 'No new protective snapshot needed',
               increment: 15,
             });
 
-            // Implement a step to optionally create a backup snapshot of the current state
-            // This would be a good place to add that functionality in the future
-
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            throwIfCancelled(token);
 
             progress.report({ message: 'Restoring files...', increment: 30 });
 
@@ -469,7 +607,7 @@ function registerJumpToSnapshotCommand({
             const startTime = Date.now();
 
             // Actual restore operation
-            const success = await snapshotManager.applySnapshotRestore(
+            const result = await snapshotManager.applySnapshotRestore(
               targetSnapshotId,
             );
 
@@ -477,9 +615,9 @@ function registerJumpToSnapshotCommand({
             const duration = Date.now() - startTime;
             log(`Snapshot restore completed in ${duration}ms`);
 
-            if (!success) {
+            if (!result.success) {
               log(
-                `applySnapshotRestore returned false for ${targetSnapshotId}`,
+                `applySnapshotRestore returned success=false for ${targetSnapshotId}`,
               );
               vscode.window.showErrorMessage(
                 `Failed to apply snapshot restore.`,
@@ -487,13 +625,33 @@ function registerJumpToSnapshotCommand({
               return;
             }
 
+            if (
+              result.skipped.length > 0 ||
+              result.refusedDeletions.length > 0
+            ) {
+              // The restore did what it could. Saying nothing would repeat the
+              // original bug: the user would believe the workspace now matches
+              // the snapshot when part of it could not be reconstructed.
+              vscode.window.showWarningMessage(
+                `Restored ${result.restored.length} file(s). ${result.skipped.length} file(s) could not be restored because this snapshot's history is incomplete, and ${result.refusedDeletions.length} file(s) were left untouched for the same reason.`,
+              );
+            }
+
+            const divergentBuffers = result.divergentBuffers ?? [];
+            if (divergentBuffers.length > 0) {
+              vscode.window.showWarningMessage(
+                `Restored, but ${
+                  divergentBuffers.length
+                } file(s) have unsaved edits that were kept: ${divergentBuffers.join(
+                  ', ',
+                )}. The workspace matches no snapshot until you save or discard them.`,
+              );
+            }
+
             progress.report({
               message: 'Refreshing workspace...',
               increment: 15,
             });
-
-            // Add small delay for smooth transition
-            await new Promise((resolve) => setTimeout(resolve, 250));
 
             // Restore editor view states for each open file
             await restoreEditorViewStates(editorStates);
@@ -507,14 +665,30 @@ function registerJumpToSnapshotCommand({
             if (snapshot.tags && snapshot.tags.length > 0) {
               actions.push('Filter by Tags');
             }
+            if (protectiveId) {
+              actions.push('Show backup');
+            }
+
+            // A selective restore writes only the files its snapshot captured, so
+            // the workspace is not now that snapshot's state. Reporting an
+            // unqualified success is the same over-claim the preview was fixed
+            // for: the user would read "Restored snapshot ..." as "the workspace
+            // matches it".
+            const backupSummary = protectiveId
+              ? ` The previous state is saved as snapshot ${protectiveId}.`
+              : '';
+            const restoredSummary = result.selective
+              ? `Restored ${
+                  result.restored.length
+                } captured file(s) from snapshot '${
+                  snapshot.description || snapshot.id
+                }'; the rest of the workspace was left untouched.${backupSummary}`
+              : `Restored snapshot '${
+                  snapshot.description || snapshot.id
+                }' from ${snapshotDate}.${backupSummary}`;
 
             vscode.window
-              .showInformationMessage(
-                `Restored snapshot '${
-                  snapshot.description || snapshot.id
-                }' from ${snapshotDate}.`,
-                ...actions,
-              )
+              .showInformationMessage(restoredSummary, ...actions)
               .then((selection) => {
                 if (selection === 'View Changes') {
                   vscode.commands.executeCommand(
@@ -527,13 +701,19 @@ function registerJumpToSnapshotCommand({
                     'vscode-snapshots.filterByTags',
                     snapshot.tags,
                   );
+                } else if (selection === 'Show backup' && protectiveId) {
+                  // The backup is itself a snapshot; opening it is the undo
+                  // path. Guard against re-entering the restore that created it.
+                  if (protectiveId !== targetSnapshotId) {
+                    vscode.commands.executeCommand(
+                      'vscode-snapshots.jumpToSnapshot',
+                      protectiveId,
+                    );
+                  }
                 }
               });
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Restore cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Snapshot restore cancelled',
               );
@@ -577,6 +757,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot) {
         log('restoreFromTree called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       // Execute the main jumpToSnapshot command, which now handles UI/confirmation
@@ -599,6 +782,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot) {
         log('compareWithCurrentFromTree called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -711,6 +897,9 @@ function registerTreeViewCommands({
       // Ensure item is a snapshot node, not a file node
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('deleteFromTree called with invalid or non-snapshot item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -750,6 +939,9 @@ function registerTreeViewCommands({
         item.contextValue !== 'snapshotFile' // Ensure it's a file item
       ) {
         log('compareFileWithWorkspace called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a file inside a snapshot in the CodeLapse view.',
+        );
         return;
       }
 
@@ -835,6 +1027,9 @@ function registerTreeViewCommands({
         item.contextValue !== 'snapshotFile' // Ensure it's a file item
       ) {
         log('restoreFileFromSnapshot called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a file inside a snapshot in the CodeLapse view.',
+        );
         return;
       }
 
@@ -901,6 +1096,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('showChangedFilesInSnapshot called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
 
@@ -1026,6 +1224,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('toggleFavoriteStatus called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -1067,6 +1268,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('editSnapshotTags called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -1123,6 +1327,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('editSnapshotNotes called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -1170,6 +1377,9 @@ function registerTreeViewCommands({
     async (item: SnapshotTreeItem) => {
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('editTaskReference called with invalid item');
+        vscode.window.showInformationMessage(
+          'Run this command from a snapshot in the CodeLapse view.',
+        );
         return;
       }
       try {
@@ -1224,17 +1434,23 @@ function registerPreviousSnapshotCommand({
   const previousSnapshotCmd = vscode.commands.registerCommand(
     'vscode-snapshots.previousSnapshot',
     async () => {
-      // Check if there are any previous snapshots
+      // Ask the manager where this navigation would land, so the progress
+      // title names the snapshot that is actually restored. Computing the
+      // target separately is how a title ends up naming a different one.
+      const targetIndex = snapshotManager.getNavigationTargetIndex('previous');
       const snapshots = snapshotManager.getSnapshots();
-      const currentIndex = snapshotManager.getCurrentSnapshotIndex();
 
-      if (currentIndex <= 0) {
-        vscode.window.showInformationMessage('No previous snapshots available');
+      if (targetIndex === ACTIVE_NONE) {
+        vscode.window.showInformationMessage(
+          snapshots.length === 0
+            ? 'No snapshots available'
+            : 'No previous snapshots available',
+        );
         return;
       }
 
       // Get previous snapshot details for better progress messaging
-      const previousSnapshot = snapshots[currentIndex - 1];
+      const previousSnapshot = snapshots[targetIndex];
       const previousDate = new Date(
         previousSnapshot.timestamp,
       ).toLocaleString();
@@ -1250,17 +1466,25 @@ function registerPreviousSnapshotCommand({
         },
         async (progress, token) => {
           try {
-            // Add cancellation support
-            token.onCancellationRequested(() => {
-              log('Navigation to previous snapshot cancelled by user');
-              throw new Error('Navigation cancelled');
-            });
+            // Cancellation is checked at the await boundaries below; see
+            // utils/cancellation.ts for why a throwing listener cannot work.
+            throwIfCancelled(token);
 
             // Begin smooth transition
             progress.report({
               message: 'Preparing files...',
               increment: 20,
             });
+
+            // Decorative transition indicator, gated on ux.useAnimations:
+            // `animationHelpers` was dead code, so the setting had no effect.
+            // Cleared once the restore has settled rather than lingering.
+            if (getUxSettings().useAnimations) {
+              const indicator =
+                AnimationHelpers.showTransitionIndicators('backward');
+              context.subscriptions.push(indicator);
+              setTimeout(() => indicator.dispose(), 1500);
+            }
 
             // First, save view states of open editors
             const editorStates = await preserveEditorViewStates();
@@ -1284,9 +1508,6 @@ function registerPreviousSnapshotCommand({
               message: 'Applying changes...',
               increment: 30,
             });
-
-            // Add small delay for smoother visual transition
-            await new Promise((resolve) => setTimeout(resolve, 300));
 
             // Restore editor states
             await restoreEditorViewStates(editorStates);
@@ -1314,10 +1535,7 @@ function registerPreviousSnapshotCommand({
                 }
               });
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Navigation cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Navigation to previous snapshot cancelled',
               );
@@ -1351,17 +1569,22 @@ function registerNextSnapshotCommand({
   const nextSnapshotCmd = vscode.commands.registerCommand(
     'vscode-snapshots.nextSnapshot',
     async () => {
-      // Check if there are any next snapshots
+      // See the previous-snapshot command: the manager resolves the target so
+      // the command and the navigation cannot disagree.
+      const targetIndex = snapshotManager.getNavigationTargetIndex('next');
       const snapshots = snapshotManager.getSnapshots();
-      const currentIndex = snapshotManager.getCurrentSnapshotIndex();
 
-      if (currentIndex >= snapshots.length - 1) {
-        vscode.window.showInformationMessage('No next snapshots available');
+      if (targetIndex === ACTIVE_NONE) {
+        vscode.window.showInformationMessage(
+          snapshots.length === 0
+            ? 'No snapshots available'
+            : 'No next snapshots available',
+        );
         return;
       }
 
       // Get next snapshot details for better progress messaging
-      const nextSnapshot = snapshots[currentIndex + 1];
+      const nextSnapshot = snapshots[targetIndex];
       const nextDate = new Date(nextSnapshot.timestamp).toLocaleString();
       const nextDescription = nextSnapshot.description || 'unnamed snapshot';
 
@@ -1374,17 +1597,24 @@ function registerNextSnapshotCommand({
         },
         async (progress, token) => {
           try {
-            // Add cancellation support
-            token.onCancellationRequested(() => {
-              log('Navigation to next snapshot cancelled by user');
-              throw new Error('Navigation cancelled');
-            });
+            // Cancellation is checked at the await boundaries below; see
+            // utils/cancellation.ts for why a throwing listener cannot work.
+            throwIfCancelled(token);
 
             // Begin smooth transition
             progress.report({
               message: 'Preparing files...',
               increment: 20,
             });
+
+            // Decorative transition indicator, gated on ux.useAnimations; see
+            // the previous-snapshot command for the rationale.
+            if (getUxSettings().useAnimations) {
+              const indicator =
+                AnimationHelpers.showTransitionIndicators('forward');
+              context.subscriptions.push(indicator);
+              setTimeout(() => indicator.dispose(), 1500);
+            }
 
             // First, save view states of open editors
             const editorStates = await preserveEditorViewStates();
@@ -1409,9 +1639,6 @@ function registerNextSnapshotCommand({
               increment: 30,
             });
 
-            // Add small delay for smoother visual transition
-            await new Promise((resolve) => setTimeout(resolve, 300));
-
             // Restore editor states
             await restoreEditorViewStates(editorStates);
 
@@ -1435,10 +1662,7 @@ function registerNextSnapshotCommand({
                 }
               });
           } catch (error: unknown) {
-            if (
-              error instanceof Error &&
-              error.message === 'Navigation cancelled'
-            ) {
+            if (isCancellationError(error)) {
               vscode.window.showInformationMessage(
                 'Navigation to next snapshot cancelled',
               );
@@ -1683,12 +1907,28 @@ function registerFilterCommand({
   // --- Tag filter command ---
   const filterByTagsCmd = vscode.commands.registerCommand(
     'vscode-snapshots.filterByTags',
-    async () => {
+    async (preselectedTags?: string[]) => {
       log('filterByTags command executed');
 
-      // Ask where to apply the filter FIRST to get target providers
-      const targetProviders = await getTargetProviders('tag');
-      if (!targetProviders) return; // User cancelled target selection
+      // When called programmatically with tags (the "Filter by Tags" action in
+      // the restore success toast at the top of this file), apply them
+      // directly to both views. Prompting for a target there would interrogate
+      // the user about a decision the caller already made. This parameter was
+      // previously dropped entirely, so the action opened an unselected picker.
+      const applyToBothViews = Array.isArray(preselectedTags);
+
+      let targetProviders: SnapshotTreeDataProvider[];
+      if (applyToBothViews) {
+        targetProviders = [
+          snapshotTreeDataProvider,
+          autoSnapshotTreeDataProvider,
+        ];
+      } else {
+        // Ask where to apply the filter FIRST to get target providers
+        const chosen = await getTargetProviders('tag');
+        if (!chosen) return; // User cancelled target selection
+        targetProviders = chosen;
+      }
 
       // Get all unique tags from all snapshots (regardless of target) for the selection list
       const allSnapshots = snapshotManager.getSnapshots();
@@ -1701,6 +1941,23 @@ function registerFilterCommand({
 
       if (tagCounts.size === 0) {
         vscode.window.showInformationMessage('No tags found in any snapshots');
+        return;
+      }
+
+      if (applyToBothViews) {
+        const tags = (preselectedTags ?? []).filter((t) => t.length > 0);
+        if (tags.length === 0) {
+          vscode.window.showInformationMessage(
+            'That snapshot has no tags to filter by.',
+          );
+          return;
+        }
+        applyFilterToProviders(targetProviders, { tags });
+        vscode.window.showInformationMessage(
+          `Filtering by ${tags.length} tag${
+            tags.length === 1 ? '' : 's'
+          } in both views: ${tags.join(', ')}`,
+        );
         return;
       }
 
@@ -2065,6 +2322,13 @@ function registerSemanticIndexCommand({
       try {
         await semanticSearchService.indexAllSnapshots();
       } catch (error) {
+        // A user-initiated cancel is not a failure. The indexing run now stops
+        // at a cancellation boundary instead of running to completion behind a
+        // toast, so it reaches here as a CancellationError.
+        if (isCancellationError(error)) {
+          vscode.window.showInformationMessage('Indexing cancelled');
+          return;
+        }
         vscode.window.showErrorMessage(`Indexing failed: ${error}`);
       }
     },
@@ -2159,7 +2423,7 @@ function registerCreateGitCommitCommand({
       if (!item || !item.snapshot || item.contextValue !== 'snapshotItem') {
         log('createGitCommitFromSnapshot called with invalid item.');
         vscode.window.showErrorMessage(
-          'Please run this command from a snapshot item in the tree view.',
+          'Run this command from a snapshot in the CodeLapse view.',
         );
         return;
       }
@@ -2189,7 +2453,7 @@ function registerCreateGitCommitCommand({
       );
 
       // 2. Get Commit Message
-      const defaultCommitMessage = `Snapshot: ${
+      const defaultCommitMessage = `Snapshot ${snapshot.id}: ${
         snapshot.description || new Date(snapshot.timestamp).toLocaleString()
       }`;
       const commitMessage = await vscode.window.showInputBox({
@@ -2216,27 +2480,28 @@ function registerCreateGitCommitCommand({
           `Triggering restore operation via jumpToSnapshot for ${snapshot.id} before commit.`,
         );
 
-        // Store current snapshot index before restoration
-        const initialSnapshotIndex = snapshotManager.getCurrentSnapshotIndex();
-
-        // Execute jumpToSnapshot command which handles UI/confirmation
+        // Execute jumpToSnapshot command which handles UI/confirmation. It is
+        // awaited, and the restore writes the index before it returns, so
+        // there is nothing left to "wait for" afterwards.
         await vscode.commands.executeCommand(
           'vscode-snapshots.jumpToSnapshot',
           snapshot.id,
         );
 
-        // Verify the restoration was successful by checking if the current snapshot index changed
-        // Wait a short time to ensure the snapshot manager has updated
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // Verify the restoration happened by asking which snapshot the
+        // workspace now reflects, rather than comparing array positions that a
+        // concurrent prune could invalidate.
+        const isRestored = snapshotManager.isSnapshotActive(snapshot.id);
+        const targetIndex = snapshotManager
+          .getSnapshots()
+          .findIndex((s) => s.id === snapshot.id);
 
-        const currentSnapshotIndex = snapshotManager.getCurrentSnapshotIndex();
-        const snapshots = snapshotManager.getSnapshots();
-        const targetIndex = snapshots.findIndex((s) => s.id === snapshot.id);
-
-        // If the current index doesn't match our target snapshot's index, restoration failed or was cancelled
-        if (currentSnapshotIndex !== targetIndex) {
+        // If the workspace is not at the target snapshot, restoration failed or was cancelled
+        if (!isRestored) {
           log(
-            `Restore verification failed. Current index: ${currentSnapshotIndex}, Target index: ${targetIndex}`,
+            `Restore verification failed. Active snapshot: ${
+              snapshotManager.getActiveSnapshot()?.id ?? 'none'
+            }, target index: ${targetIndex}`,
           );
           vscode.window.showInformationMessage(
             'Restore operation cancelled or failed. No commit created.',
@@ -2270,18 +2535,12 @@ function registerCreateGitCommitCommand({
         },
         async (progress) => {
           try {
-            progress.report({ message: 'Staging changes...' });
-            log('Staging all changes after restore...');
-
-            // On macOS, ensure we're using path strings correctly
-            await repo.add([]); // Stage all changes in the repository root
-
             progress.report({ message: 'Committing...' });
-            log(`Committing with message: "${commitMessage}"`);
+            log('Committing all changes after restore...');
 
             // Additional logging to help diagnose any issues
             try {
-              await repo.commit(commitMessage);
+              await stageAndCommit(repo, commitMessage);
               log(`Git commit operation completed successfully`);
             } catch (commitErr: unknown) {
               log(
@@ -2399,4 +2658,32 @@ interface EditorState {
   selection: vscode.Selection;
   visibleRanges: readonly vscode.Range[];
   options: vscode.TextEditorOptions;
+}
+
+/**
+ * Stages the working tree and commits it.
+ *
+ * Uses `commit(message, { all: true })` rather than `add([])`. The Git
+ * extension's `add` maps to `git add -- <pathspecs>`, and with no pathspecs git
+ * prints "Nothing specified, nothing added" -- verified against real git. So a
+ * commit following `add([])` recorded only whatever was already staged, which is
+ * either nothing or unrelated files. `CommitOptions.all` is the API's own way to
+ * say "commit the working tree" and does not depend on how an empty array is
+ * interpreted.
+ *
+ * Note the scope: `all` covers changes to tracked files. Files the snapshot
+ * restored that git has never seen are untracked, and `git commit -a` does not
+ * include those -- also verified against real git. Selecting untracked files
+ * would need an explicit pathspec, which is a behaviour change this fix does not
+ * make.
+ *
+ * Extracted from the command so the staging contract is testable without a real
+ * repository; the parameter type is the real `CommitOptions`, so a double that
+ * satisfies it is proof the call shape is right.
+ */
+export async function stageAndCommit(
+  repo: { commit: (message: string, opts?: CommitOptions) => Promise<void> },
+  message: string,
+): Promise<void> {
+  await repo.commit(message, { all: true });
 }

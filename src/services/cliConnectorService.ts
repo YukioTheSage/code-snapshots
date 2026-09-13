@@ -4,22 +4,164 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as diff from 'diff';
+import { ConfigManager, MAX_JSON_PAYLOAD_BYTES } from 'codelapse-core';
+import { toRatio } from './qualityScale';
+import { resolveSetting } from '../configSource';
 import { TerminalApiService } from './terminalApiService';
 import { SemanticSearchService } from './semanticSearchService';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
 import { QueryProcessor } from './queryProcessor';
 import { ResultManager } from './resultManager';
-import { QualityMetricsCalculator } from './qualityMetricsCalculator';
-import { RelationshipAnalyzer } from './relationshipAnalyzer';
 import {
   EnhancedSemanticSearchOptions,
   AIAgentResponse,
-  ResponseMetadata,
-  PerformanceMetrics,
-  SearchQualityMetrics,
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunk } from '../types/enhancedChunking';
-import { log } from '../logger';
+import { log, subscribeToLogEntries } from '../logger';
+import { getWorkspaceId } from './workspaceIdentity';
+import type { Snapshot } from '../snapshotManager';
+import type {
+  API as GitAPI,
+  GitExtension,
+  RefType as GitRefType,
+  Repository as GitRepository,
+} from '../types/git';
+
+/**
+ * `RefType.Head` of the built-in Git extension API.
+ *
+ * `src/types/git.d.ts` is ambient, so it has no runtime module: importing the
+ * const enum as a value would emit a `require()` for a file that does not exist
+ * once the extension is bundled. The numeric member value is repeated here and
+ * typed against the ambient enum instead.
+ */
+const GIT_REF_TYPE_HEAD: GitRefType = 0;
+
+/** Result of the `getGitBranchInfo` / `listBranches` IPC methods. */
+interface GitBranchInfoResult {
+  currentBranch: string;
+  commitHash: string;
+  remoteUrl: string;
+  hasChanges: boolean;
+  branches: string[];
+}
+
+/** Result of the `createGitCommitFromSnapshot` IPC method. */
+interface GitCommitFromSnapshotResult {
+  commitHash: string;
+  branch: string;
+  message: string;
+}
+
+type GitFileChangeType = 'added' | 'modified' | 'deleted';
+
+interface GitFileDifference {
+  file: string;
+  changeType: GitFileChangeType;
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+/** Result of the `compareSnapshotWithGitCommit` IPC method. */
+interface GitComparisonResult {
+  differences: GitFileDifference[];
+  fileChanges?: {
+    added: string[];
+    modified: string[];
+    deleted: string[];
+  };
+}
+
+/**
+ * A batch stride of 0 or a negative value never advances its loop, so an
+ * unvalidated payload value could wedge the extension host. The value comes
+ * straight from the CLI request, so it is checked before use and the caller
+ * gets an error envelope instead of a hang.
+ */
+function assertValidMaxConcurrency(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+    return `Invalid maxConcurrency: ${String(
+      value,
+    )}. Expected a positive number.`;
+  }
+  return null;
+}
+
+/**
+ * `maxRetries` bounds `retryFailedOperations` / `retryFailedQueries`
+ * (`while (retryCount < maxRetries && !success)`), a loop that only leaves an
+ * attempt behind by succeeding. JSON `1e999` parses to `Infinity`, which that
+ * loop can never reach, so the value comes straight from the CLI request and is
+ * checked before the retry helper can be entered. 0 is legitimate: it means
+ * "do not retry". A large finite value is deliberately left uncapped: how many
+ * attempts a caller is willing to pay for is its own choice, and the loop still
+ * leaves on the first success.
+ */
+function assertValidMaxRetries(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return `Invalid maxRetries: ${String(
+      value,
+    )}. Expected a non-negative integer.`;
+  }
+  return null;
+}
+
+/**
+ * The largest delay `setTimeout` honours: Node clamps a delay above it — or
+ * below 1 — to 1ms, so a longer `timeout` is not a long wait but an immediate
+ * one.
+ */
+const MAX_TIMER_DELAY_MS = 2147483647;
+
+/**
+ * `timeout` is handed to `withTimeout`. `setTimeout` coerces a null, NaN, zero
+ * or negative delay to 0 — and overflows `Infinity` to 1ms — so an unvalidated
+ * value makes the race report a timeout on operations that never timed out. The
+ * same clamp catches a finite value above the timer ceiling, which is why the
+ * ceiling is part of the check rather than a formality. The value comes straight
+ * from the CLI request, so it is checked here and the caller gets an error
+ * envelope instead of a fabricated failure.
+ */
+function assertValidTimeout(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return `Invalid timeout: ${String(
+      value,
+    )}. Expected a positive number of milliseconds.`;
+  }
+  if (value > MAX_TIMER_DELAY_MS) {
+    return `Invalid timeout: ${String(
+      value,
+    )}. Expected at most ${MAX_TIMER_DELAY_MS} milliseconds: setTimeout clamps a longer delay to 1ms.`;
+  }
+  return null;
+}
+
+/**
+ * Races `work` against a timeout that is always cleared, win or lose. The
+ * previous inline form armed a timer per operation and dropped the handle, so
+ * every batch left up to `maxConcurrency` timers pending and the unit suite's
+ * worker never exited cleanly.
+ */
+async function withTimeout<T>(
+  work: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 /**
  * Service that enables CLI tools to communicate with the VSCode extension
@@ -27,33 +169,70 @@ import { log } from '../logger';
 export class CliConnectorService implements vscode.Disposable {
   private server?: net.Server;
   private connections: Set<net.Socket> = new Set();
+  private authenticatedSockets: Set<net.Socket> = new Set();
+  private socketBuffers: Map<net.Socket, string> = new Map();
+  private authToken: string;
+  private logUnsubscribe?: () => void;
+  /** Released by `dispose()`. Re-reads the chunker settings on a config change. */
+  private chunkerConfigSubscription?: vscode.Disposable;
+  private logStreaming = false;
   private terminalApiService: TerminalApiService;
   private context: vscode.ExtensionContext;
   private socketPath: string;
+  // Git API: injected by the extension when it already resolved one, otherwise
+  // looked up lazily from the built-in `vscode.git` extension.
+  private gitApi: GitAPI | null;
 
   // Enhanced services for AI agent optimization
   private semanticSearchService?: SemanticSearchService;
   private enhancedCodeChunker: EnhancedCodeChunker;
   private queryProcessor: QueryProcessor;
   private resultManager: ResultManager;
-  private qualityMetricsCalculator: QualityMetricsCalculator;
-  private relationshipAnalyzer: RelationshipAnalyzer;
 
   constructor(
     terminalApiService: TerminalApiService,
     context: vscode.ExtensionContext,
     semanticSearchService?: SemanticSearchService,
+    gitApi?: GitAPI | null,
   ) {
     this.terminalApiService = terminalApiService;
     this.context = context;
     this.semanticSearchService = semanticSearchService;
+    this.gitApi = gitApi ?? null;
+
+    // Generate authentication token for IPC security
+    this.authToken = crypto.randomBytes(32).toString('hex');
+
+    // `diagnostics logs --follow` asks for streamed entries; the buffer in the
+    // logger is the only source, so register once and forward only while a
+    // client has requested the stream.
+    this.logUnsubscribe = subscribeToLogEntries((entry) => {
+      if (this.logStreaming) {
+        this.broadcastEvent({ type: 'log', data: entry });
+      }
+    });
 
     // Initialize enhanced services
     this.enhancedCodeChunker = new EnhancedCodeChunker();
     this.queryProcessor = new QueryProcessor();
     this.resultManager = new ResultManager();
-    this.qualityMetricsCalculator = new QualityMetricsCalculator();
-    this.relationshipAnalyzer = new RelationshipAnalyzer();
+
+    // The chunker captures its line-count settings at construction; re-reading
+    // them when the setting changes is what removes the Reload Window step.
+    this.chunkerConfigSubscription = vscode.workspace.onDidChangeConfiguration(
+      (event) => {
+        if (
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkSize',
+          ) ||
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkOverlap',
+          )
+        ) {
+          this.enhancedCodeChunker.refreshConfig();
+        }
+      },
+    );
 
     // Create platform-specific socket path
     const workspaceId = this.getWorkspaceId();
@@ -67,6 +246,83 @@ export class CliConnectorService implements vscode.Disposable {
     this.startServer();
   }
 
+  private async handleSocketData(
+    socket: net.Socket,
+    data: Buffer,
+  ): Promise<void> {
+    let buffer = (this.socketBuffers.get(socket) ?? '') + data.toString();
+    this.socketBuffers.set(socket, buffer);
+
+    // The peer controls how much arrives before a newline. Without a ceiling a
+    // peer that never sends one grows this process's heap until it dies.
+    if (buffer.length > MAX_JSON_PAYLOAD_BYTES) {
+      log(
+        `CLI client message buffer exceeded ${MAX_JSON_PAYLOAD_BYTES} bytes; destroying connection.`,
+      );
+      this.socketBuffers.delete(socket);
+      socket.destroy();
+      return;
+    }
+
+    let newlineIndex: number;
+    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+      const rawLine = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      this.socketBuffers.set(socket, buffer);
+
+      if (!rawLine) continue;
+
+      try {
+        const message = JSON.parse(rawLine);
+
+        // Handle authentication
+        if (message.method === 'authenticate') {
+          if (message.data?.token === this.authToken) {
+            this.authenticatedSockets.add(socket);
+            socket.write(
+              JSON.stringify({
+                success: true,
+                id: message.id,
+                result: { authenticated: true },
+              }) + '\n',
+            );
+          } else {
+            socket.write(
+              JSON.stringify({
+                success: false,
+                id: message.id,
+                error: 'Authentication failed: invalid token',
+              }) + '\n',
+            );
+            socket.destroy();
+          }
+          continue;
+        }
+
+        // Reject unauthenticated requests
+        if (!this.authenticatedSockets.has(socket)) {
+          socket.write(
+            JSON.stringify({
+              success: false,
+              id: message.id,
+              error: 'Not authenticated. Send authenticate message first.',
+            }) + '\n',
+          );
+          socket.destroy();
+          continue;
+        }
+
+        const response = await this.handleCliRequest(message);
+        socket.write(JSON.stringify(response) + '\n');
+      } catch (error) {
+        const errorResponse = {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        socket.write(JSON.stringify(errorResponse) + '\n');
+      }
+    }
+  }
   /**
    * Start the IPC server for CLI communication
    */
@@ -82,40 +338,24 @@ export class CliConnectorService implements vscode.Disposable {
         this.connections.add(socket);
 
         // Buffer to accumulate partial data chunks from this socket
-        let buffer = '';
+        this.socketBuffers.set(socket, '');
 
-        socket.on('data', async (data) => {
-          buffer += data.toString();
-
-          let newlineIndex: number;
-          while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-            const rawLine = buffer.slice(0, newlineIndex).trim();
-            buffer = buffer.slice(newlineIndex + 1);
-
-            if (!rawLine) continue;
-
-            try {
-              const message = JSON.parse(rawLine);
-              const response = await this.handleCliRequest(message);
-              socket.write(JSON.stringify(response) + '\n');
-            } catch (error) {
-              const errorResponse = {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-              };
-              socket.write(JSON.stringify(errorResponse) + '\n');
-            }
-          }
+        socket.on('data', (data) => {
+          void this.handleSocketData(socket, data);
         });
 
         socket.on('close', () => {
           log(`CLI client disconnected`);
           this.connections.delete(socket);
+          this.authenticatedSockets.delete(socket);
+          this.socketBuffers.delete(socket);
         });
 
         socket.on('error', (error) => {
           log(`CLI client error: ${error.message}`);
           this.connections.delete(socket);
+          this.authenticatedSockets.delete(socket);
+          this.socketBuffers.delete(socket);
         });
       });
 
@@ -146,11 +386,114 @@ export class CliConnectorService implements vscode.Disposable {
         case 'getStatus':
           result = await this.getConnectionStatus();
           break;
+        case 'getConfig':
+        case 'setConfig':
+        case 'resetConfig':
+        case 'getConfigSchema':
+        case 'validateConfig':
+        case 'exportConfig':
+        case 'importConfig':
+          result = await this.handleConfigRequest(method, data);
+          break;
+        case 'getAutoSnapshotRules':
+          result = {
+            rules: await this.terminalApiService.getAutoSnapshotRules(),
+          };
+          break;
+        case 'addAutoSnapshotRule':
+          result = {
+            rule: await this.terminalApiService.addAutoSnapshotRule(
+              data?.rule ?? data,
+            ),
+          };
+          break;
+        case 'updateAutoSnapshotRule':
+          result = {
+            rule: await this.terminalApiService.updateAutoSnapshotRule(
+              data?.ruleId ?? data?.id,
+              data?.updates ?? data,
+            ),
+          };
+          break;
+        case 'removeAutoSnapshotRule':
+          await this.terminalApiService.removeAutoSnapshotRule(
+            data?.ruleId ?? data?.id,
+          );
+          result = { success: true };
+          break;
+        case 'toggleAutoSnapshotRule':
+          result = {
+            rule: await this.terminalApiService.toggleAutoSnapshotRule(
+              data?.ruleId ?? data?.id,
+              typeof data?.enabled === 'boolean' ? data.enabled : undefined,
+            ),
+          };
+          break;
+        case 'testAutoSnapshotRule':
+          result = await this.terminalApiService.testAutoSnapshotRule(data);
+          break;
+        case 'runDiagnostics':
+          result = await this.terminalApiService.runDiagnostics();
+          break;
+        case 'healthCheck':
+          result = await this.terminalApiService.healthCheck();
+          break;
+        case 'getSystemInfo':
+          result = {
+            systemInfo: await this.terminalApiService.getSystemInfo(),
+          };
+          break;
+        case 'getPerformanceMetrics':
+          result = await this.terminalApiService.getPerformanceMetrics();
+          break;
+        case 'getLogs':
+          result = this.terminalApiService.getLogs(data);
+          break;
+        case 'clearLogs':
+          result = this.terminalApiService.clearLogs(data);
+          break;
+        case 'streamLogs':
+          this.logStreaming = true;
+          result = { streaming: true };
+          break;
         case 'takeSnapshot':
           result = await this.terminalApiService.takeSnapshot(data);
           break;
         case 'getSnapshots':
           result = await this.terminalApiService.getSnapshots(data);
+          break;
+        case 'filterSnapshots':
+          result = await this.terminalApiService.filterSnapshots(data);
+          break;
+        case 'updateSnapshotMetadata':
+          result = await this.terminalApiService.updateSnapshotMetadata(
+            data.id ?? data.snapshotId,
+            data.metadata ?? data.updates ?? {},
+          );
+          break;
+        case 'editSnapshotTags':
+          result = await this.terminalApiService.editSnapshotTags(
+            data.id ?? data.snapshotId,
+            Array.isArray(data.tags) ? data.tags : [],
+          );
+          break;
+        case 'editSnapshotNotes':
+          result = await this.terminalApiService.editSnapshotNotes(
+            data.id ?? data.snapshotId,
+            typeof data.notes === 'string' ? data.notes : '',
+          );
+          break;
+        case 'editTaskReference':
+          result = await this.terminalApiService.editTaskReference(
+            data.id ?? data.snapshotId,
+            typeof data.taskReference === 'string' ? data.taskReference : '',
+          );
+          break;
+        case 'toggleFavoriteStatus':
+          result = await this.terminalApiService.toggleFavoriteStatus(
+            data.id ?? data.snapshotId,
+            typeof data.isFavorite === 'boolean' ? data.isFavorite : undefined,
+          );
           break;
         case 'getSnapshot':
           result = await this.terminalApiService.getSnapshot(data.id);
@@ -162,7 +505,19 @@ export class CliConnectorService implements vscode.Disposable {
           );
           break;
         case 'deleteSnapshot':
-          result = await this.terminalApiService.deleteSnapshot(data.id);
+          // The last place `skipConfirm` can be lost on its way from the CLI
+          // to the dialog: forwarding only `data.id` left
+          // `!options?.skipConfirm` with no choice but to raise the modal.
+          // Strict boolean, because this suppresses the confirmation for a
+          // destructive operation arriving over IPC -- only a real `true` may
+          // do that, and a malformed value ("false", 1, {}) fails closed and
+          // keeps the dialog.
+          result = await this.terminalApiService.deleteSnapshot(data.id, {
+            skipConfirm: data.skipConfirm === true,
+            // Strict boolean, like skipConfirm: this authorises destroying data
+            // a later snapshot inherits, so only a real `true` may do it.
+            force: data.force === true,
+          });
           break;
         case 'navigateSnapshot':
           result = await this.terminalApiService.navigateSnapshot(
@@ -193,9 +548,13 @@ export class CliConnectorService implements vscode.Disposable {
           );
           break;
         case 'indexSnapshots':
-          result = await this.terminalApiService.indexSnapshots(
-            data.snapshotIds,
-          );
+          result = await this.terminalApiService.indexSnapshots({
+            snapshotIds: data.snapshotIds,
+            // Strict booleans: a re-index and a purge are explicit acts, so
+            // only a real true performs them.
+            force: data.force === true,
+            purgeFirst: data.purgeFirst === true,
+          });
           break;
         case 'getWorkspaceInfo':
           result = await this.terminalApiService.getWorkspaceInfo();
@@ -211,6 +570,32 @@ export class CliConnectorService implements vscode.Disposable {
             data.id,
             data.format,
           );
+          break;
+
+        // Git integration (used by `codelapse git ...`)
+        case 'getGitBranchInfo':
+          result = await this.handleGetGitBranchInfo();
+          break;
+        case 'listBranches':
+          result = await this.handleListBranches();
+          break;
+        case 'createBranch':
+          result = await this.handleCreateBranch(data);
+          break;
+        case 'switchBranch':
+          result = await this.handleSwitchBranch(data);
+          break;
+        case 'deleteBranch':
+          result = await this.handleDeleteBranch(data);
+          break;
+        case 'createGitCommitFromSnapshot':
+          result = await this.handleCreateGitCommitFromSnapshot(data);
+          break;
+        case 'autoSnapshotBeforeGitOperation':
+          result = await this.handleAutoSnapshotBeforeGitOperation(data);
+          break;
+        case 'compareSnapshotWithGitCommit':
+          result = await this.handleCompareSnapshotWithGitCommit(data);
           break;
 
         // Enhanced AI-optimized methods
@@ -269,6 +654,188 @@ export class CliConnectorService implements vscode.Disposable {
   }
 
   /**
+   * The workspace root a config request writes to.
+   */
+  private getConfigWorkspaceRoot(): string {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      throw new Error(
+        'No workspace folder is open; configuration commands require a workspace.',
+      );
+    }
+    return workspaceRoot;
+  }
+
+  /**
+   * Resolve a caller-supplied config path while keeping it inside the
+   * workspace, matching the CLI's export/import containment rule.
+   */
+  private resolveConfigFilePath(workspaceRoot: string, input: unknown): string {
+    if (typeof input !== 'string' || input.trim().length === 0) {
+      throw new Error('A config file path is required.');
+    }
+
+    const resolved = path.resolve(workspaceRoot, input);
+    const relative = path.relative(workspaceRoot, resolved);
+    if (
+      relative === '..' ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error(
+        `Path traversal blocked: "${input}" is outside the workspace root (${workspaceRoot})`,
+      );
+    }
+    return resolved;
+  }
+
+  private flattenConfigEntries(
+    value: Record<string, unknown>,
+    prefix = '',
+  ): Array<{ keyPath: string; value: unknown }> {
+    const entries: Array<{ keyPath: string; value: unknown }> = [];
+    for (const [key, child] of Object.entries(value)) {
+      const keyPath = prefix ? `${prefix}.${key}` : key;
+      if (
+        typeof child === 'object' &&
+        child !== null &&
+        !Array.isArray(child)
+      ) {
+        entries.push(
+          ...this.flattenConfigEntries(
+            child as Record<string, unknown>,
+            keyPath,
+          ),
+        );
+      } else {
+        entries.push({ keyPath, value: child });
+      }
+    }
+    return entries;
+  }
+
+  /**
+   * Config commands over IPC for the CLI. All seven share one ConfigManager so
+   * `setConfig` cannot write a file the following `getConfig` does not read.
+   */
+  private async handleConfigRequest(method: string, data: any): Promise<any> {
+    const workspaceRoot = this.getConfigWorkspaceRoot();
+    const manager = new ConfigManager(workspaceRoot);
+
+    switch (method) {
+      case 'getConfig': {
+        if (typeof data?.key === 'string' && data.key.length > 0) {
+          const fallback = manager.getNested(data.key);
+          const resolved = resolveSetting(data.key, fallback);
+          return {
+            config: resolved.value,
+            value: resolved.value,
+            source: resolved.source,
+          };
+        }
+        return { config: manager.getConfig() };
+      }
+
+      case 'setConfig': {
+        const key = this.requireNonEmptyString(data?.key, 'key');
+        await manager.setNested(key, data?.value);
+        const persisted = manager.getNested(key);
+        const resolved = resolveSetting(key, persisted);
+        const warning =
+          resolved.source === 'settings'
+            ? `Stored in .vscode/codelapse.json, but the VS Code setting "vscode-snapshots.${key}" is explicitly set to ${JSON.stringify(
+                resolved.value,
+              )} and overrides it.`
+            : undefined;
+        return warning ? { value: persisted, warning } : { value: persisted };
+      }
+
+      case 'resetConfig': {
+        const key =
+          typeof data?.key === 'string' && data.key.length > 0
+            ? data.key
+            : undefined;
+        if (key) {
+          await manager.resetNested(key);
+          return { resetValues: manager.getNested(key) };
+        }
+        await manager.reset();
+        return { resetValues: manager.getConfig() };
+      }
+
+      case 'getConfigSchema':
+        return {
+          schema: manager.getConfigSchema(),
+          availableKeys: manager.getAvailableKeyPaths(),
+        };
+
+      case 'validateConfig': {
+        const validation = manager.validate();
+        return {
+          isValid: validation.valid,
+          errors: validation.errors,
+          warnings: [],
+        };
+      }
+
+      case 'exportConfig': {
+        const filePath = this.resolveConfigFilePath(
+          workspaceRoot,
+          data?.filePath,
+        );
+        await fs.promises.writeFile(filePath, manager.exportConfig(), 'utf8');
+        return { filePath };
+      }
+
+      case 'importConfig': {
+        const filePath = this.resolveConfigFilePath(
+          workspaceRoot,
+          data?.filePath,
+        );
+        const serialized = await fs.promises.readFile(filePath, 'utf8');
+        const parsed = JSON.parse(serialized) as unknown;
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error('Imported configuration must be a JSON object');
+        }
+
+        if (data?.merge === true) {
+          const entries = this.flattenConfigEntries(
+            parsed as Record<string, unknown>,
+          );
+          if (entries.length === 0) {
+            return { importedKeys: [] };
+          }
+
+          const availableKeys = new Set(manager.getAvailableKeyPaths());
+          for (const entry of entries) {
+            if (!availableKeys.has(entry.keyPath)) {
+              throw new Error(
+                `Invalid configuration key path "${entry.keyPath}" in import file`,
+              );
+            }
+          }
+
+          const importedKeys: string[] = [];
+          for (const entry of entries) {
+            await manager.setNested(entry.keyPath, entry.value);
+            importedKeys.push(entry.keyPath);
+          }
+          return { importedKeys };
+        }
+
+        await manager.importConfig(serialized);
+        return { importedKeys: Object.keys(parsed) };
+      }
+
+      default:
+        throw new Error(`Unknown config method: ${method}`);
+    }
+  }
+  /**
    * Get connection status for CLI
    */
   private async getConnectionStatus(): Promise<any> {
@@ -278,10 +845,705 @@ export class CliConnectorService implements vscode.Disposable {
       connected: true,
       workspace: workspaceInfo.workspaceRoot,
       totalSnapshots: workspaceInfo.totalSnapshots,
-      currentSnapshot: workspaceInfo.currentSnapshot?.description || null,
+      // The status payload reports the snapshot's *identity*, matching
+      // standalone mode (unifiedClient.getStatus sends
+      // `getCurrentSnapshot()?.id`). It previously reported the description, so
+      // this one field meant two different things depending on whether an
+      // extension happened to be connected. Descriptions are display text and
+      // may be empty or duplicated, so callers cannot branch on them.
+      currentSnapshot: workspaceInfo.currentSnapshot?.id ?? null,
       extensionVersion: this.context.extension.packageJSON.version,
       apiVersion: '1.0.0',
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Git integration
+  //
+  // Everything below runs against the built-in VS Code Git extension API rather
+  // than shelling out to git: the synchronous `execFileSync` calls of
+  // `codelapse-core`'s GitIntegration would block the extension host.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resolve the built-in VS Code Git extension API.
+   *
+   * `getAPI` throws when git is disabled, so every failure mode is converted
+   * into an actionable error. Git commands refuse to run rather than reporting
+   * empty results the CLI would present as real data.
+   */
+  private async getGitApi(): Promise<GitAPI> {
+    if (this.gitApi) {
+      return this.gitApi;
+    }
+
+    const extension =
+      vscode.extensions.getExtension<GitExtension>('vscode.git');
+    if (!extension) {
+      throw new Error(
+        'The built-in VS Code Git extension is not available; git commands require VS Code with the Git extension installed and enabled.',
+      );
+    }
+
+    // Accessing `exports` before activation is invalid, so activate first.
+    if (!extension.isActive) {
+      await extension.activate();
+    }
+
+    const gitExtension = extension.exports;
+    if (gitExtension?.enabled === false) {
+      throw new Error(
+        'The VS Code Git extension is disabled, so git commands are unavailable. Enable Git (setting "git.enabled") and try again.',
+      );
+    }
+
+    try {
+      const api = gitExtension.getAPI(1);
+      if (!api) {
+        throw new Error('Git API version 1 is unavailable');
+      }
+      return api;
+    } catch (error) {
+      throw new Error(
+        `Failed to obtain the VS Code Git API: ${this.describeError(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Find the Git repository that contains the workspace folder.
+   */
+  private async getGitRepository(): Promise<GitRepository> {
+    const workspaceFolder = this.getWorkspaceFolder();
+    const api = await this.getGitApi();
+    const repository = api.getRepository(workspaceFolder.uri);
+
+    if (!repository) {
+      throw new Error(
+        'No Git repository found for this workspace; git commands require the workspace to be inside a Git repository.',
+      );
+    }
+
+    return repository;
+  }
+
+  /**
+   * The workspace folder every relative snapshot path is resolved against.
+   */
+  private getWorkspaceFolder(): vscode.WorkspaceFolder {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      throw new Error(
+        'No workspace folder is open; git commands require the workspace to be inside a Git repository.',
+      );
+    }
+    return workspaceFolder;
+  }
+
+  /**
+   * Local branch names, in the order the Git extension reports them.
+   *
+   * `Ref.name` is optional and remote heads are not branches of this
+   * repository, so both are filtered out: the CLI compares the entries of this
+   * array directly against the current branch name.
+   */
+  private async collectBranchNames(
+    repository: GitRepository,
+  ): Promise<string[]> {
+    const refs = await repository.getBranches({});
+
+    return refs
+      .filter((ref) => ref.type === GIT_REF_TYPE_HEAD)
+      .map((ref) => ref.name)
+      .filter(
+        (name): name is string => typeof name === 'string' && name.length > 0,
+      );
+  }
+
+  /**
+   * The URL the workspace pushes to, preferring `origin` like
+   * `git remote get-url origin` does. Empty when the repository has no remote.
+   */
+  private getRemoteUrl(repository: GitRepository): string {
+    const remotes = repository.state.remotes;
+    const remote =
+      remotes.find((candidate) => candidate.name === 'origin') ?? remotes[0];
+
+    return remote?.fetchUrl ?? remote?.pushUrl ?? '';
+  }
+
+  /**
+   * Whether the working tree has anything to commit. Untracked files count, as
+   * they do for `git status --porcelain`.
+   */
+  private hasWorkingTreeChanges(repository: GitRepository): boolean {
+    const state = repository.state;
+
+    return (
+      state.workingTreeChanges.length +
+        state.indexChanges.length +
+        state.mergeChanges.length +
+        state.untrackedChanges.length >
+      0
+    );
+  }
+
+  /**
+   * Handle `getGitBranchInfo`: the repository's branch, commit and remote, plus
+   * the comparison state the CLI reports.
+   */
+  private async handleGetGitBranchInfo(): Promise<GitBranchInfoResult> {
+    const repository = await this.getGitRepository();
+    const head = repository.state.HEAD;
+
+    if (!head?.commit) {
+      throw new Error(
+        `Git repository at "${repository.rootUri.fsPath}" has no commits yet, so there is no current branch or commit hash to report. Create an initial commit first.`,
+      );
+    }
+
+    return {
+      // `head.name` is undefined while HEAD is detached; `git rev-parse
+      // --abbrev-ref HEAD` reports `HEAD` in that case, so match that.
+      currentBranch: head.name ?? 'HEAD',
+      commitHash: head.commit,
+      remoteUrl: this.getRemoteUrl(repository),
+      hasChanges: this.hasWorkingTreeChanges(repository),
+      branches: await this.collectBranchNames(repository),
+    };
+  }
+
+  /**
+   * Handle `listBranches`.
+   */
+  private async handleListBranches(): Promise<{ branches: string[] }> {
+    const repository = await this.getGitRepository();
+
+    return { branches: await this.collectBranchNames(repository) };
+  }
+
+  /**
+   * Handle `createBranch`.
+   */
+  private async handleCreateBranch(data: any): Promise<{
+    branch: string;
+    created: boolean;
+    checkout: boolean;
+  }> {
+    const name = this.requireNonEmptyString(data?.name, 'name');
+    const checkout = data?.checkout === true;
+    const repository = await this.getGitRepository();
+
+    try {
+      await repository.createBranch(name, checkout);
+    } catch (error) {
+      throw new Error(
+        `Failed to create branch "${name}": ${this.describeError(error)}`,
+      );
+    }
+
+    return { branch: name, created: true, checkout };
+  }
+
+  /**
+   * Handle `switchBranch`.
+   */
+  private async handleSwitchBranch(data: any): Promise<{
+    branch: string;
+    switched: boolean;
+  }> {
+    const name = this.requireNonEmptyString(data?.name, 'name');
+    const repository = await this.getGitRepository();
+
+    try {
+      await repository.checkout(name);
+    } catch (error) {
+      throw new Error(
+        `Failed to switch to branch "${name}": ${this.describeError(error)}`,
+      );
+    }
+
+    return { branch: name, switched: true };
+  }
+
+  /**
+   * Handle `deleteBranch`.
+   */
+  private async handleDeleteBranch(data: any): Promise<{
+    branch: string;
+    deleted: boolean;
+    force: boolean;
+  }> {
+    const name = this.requireNonEmptyString(data?.name, 'name');
+    const force = data?.force === true;
+    const repository = await this.getGitRepository();
+
+    try {
+      await repository.deleteBranch(name, force);
+    } catch (error) {
+      throw new Error(
+        `Failed to delete branch "${name}": ${this.describeError(error)}`,
+      );
+    }
+
+    return { branch: name, deleted: true, force };
+  }
+
+  /**
+   * Handle `createGitCommitFromSnapshot`: put a snapshot's files into the
+   * working tree, commit them, and report the commit git actually created.
+   */
+  private async handleCreateGitCommitFromSnapshot(
+    data: any,
+  ): Promise<GitCommitFromSnapshotResult> {
+    const snapshotId = this.requireNonEmptyString(
+      data?.snapshotId,
+      'snapshotId',
+    );
+    const includeUntracked = data?.includeUntracked === true;
+    const push = data?.push === true;
+    const branchToCreate =
+      data?.createBranch === undefined ||
+      data?.createBranch === null ||
+      data?.createBranch === ''
+        ? undefined
+        : this.requireNonEmptyString(data.createBranch, 'createBranch');
+
+    const repository = await this.getGitRepository();
+    const workspaceRoot = this.getWorkspaceFolder().uri.fsPath;
+
+    const snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+    if (!snapshot) {
+      throw new Error(
+        `Snapshot ${snapshotId} not found; there is nothing to commit.`,
+      );
+    }
+
+    // Create (and check out) the branch before touching the working tree, so a
+    // dirty tree cannot make the checkout fail halfway through the operation.
+    if (branchToCreate) {
+      try {
+        await repository.createBranch(branchToCreate, true);
+      } catch (error) {
+        throw new Error(
+          `Failed to create branch "${branchToCreate}": ${this.describeError(
+            error,
+          )}`,
+        );
+      }
+    }
+
+    // Put the snapshot's files into the working tree. Restoring via the same
+    // snapshot service the rest of this class uses also removes the files the
+    // snapshot records as deleted, so the commit represents the snapshot rather
+    // than whatever the workspace happened to contain.
+    const restore = await this.terminalApiService.restoreSnapshot(snapshotId, {
+      silent: true,
+    });
+    if (!restore.success) {
+      throw new Error(
+        `Failed to restore snapshot ${snapshotId} into the working tree: ${
+          restore.error ?? 'unknown error'
+        }`,
+      );
+    }
+
+    // Stage exactly the files the snapshot contains. `add([])` runs
+    // `git add --` and stages nothing, so pass explicit paths and skip the call
+    // entirely when the snapshot has no committable files.
+    const pathsToStage = this.resolveSnapshotPaths(
+      repository,
+      workspaceRoot,
+      snapshot.files,
+      includeUntracked,
+    );
+    if (pathsToStage.length > 0) {
+      await repository.add(pathsToStage);
+    }
+
+    const message = this.buildCommitMessage(snapshot, data?.commitMessage);
+
+    try {
+      await repository.commit(message);
+    } catch (error) {
+      throw new Error(
+        `Failed to commit snapshot ${snapshotId}: ${this.describeError(error)}`,
+      );
+    }
+
+    if (push) {
+      const branchToPush = branchToCreate ?? repository.state.HEAD?.name;
+      try {
+        await repository.push(undefined, branchToPush, true);
+      } catch (error) {
+        throw new Error(
+          `Committed ${snapshotId} but failed to push${
+            branchToPush ? ` branch "${branchToPush}"` : ''
+          }: ${this.describeError(error)}`,
+        );
+      }
+    }
+
+    // Read the result back from git: `repository.state` can lag behind the
+    // commit that was just created, and the CLI prints these values verbatim.
+    // The branch we checked out is known exactly, so it wins over cached state.
+    const commit = await repository.getCommit('HEAD');
+    const branch = branchToCreate ?? repository.state.HEAD?.name ?? 'HEAD';
+
+    if (!commit.hash) {
+      throw new Error(
+        `Git did not report a commit hash after committing snapshot ${snapshotId}.`,
+      );
+    }
+
+    return { commitHash: commit.hash, branch, message };
+  }
+
+  /**
+   * Handle `autoSnapshotBeforeGitOperation`: snapshot the workspace before a
+   * git operation and report the snapshot that was created.
+   */
+  private async handleAutoSnapshotBeforeGitOperation(
+    data: any,
+  ): Promise<{ snapshot: { id: string; description: string } }> {
+    const operation = this.requireNonEmptyString(data?.operation, 'operation');
+    const includeUntracked = data?.includeUntracked === true;
+    const description =
+      typeof data?.description === 'string' &&
+      data.description.trim().length > 0
+        ? data.description
+        : `Auto-snapshot before ${operation}`;
+
+    const response = await this.terminalApiService.takeSnapshot({
+      description,
+      // 'auto-snapshot' is not in treeView.isAutoSnapshot's list, so every
+      // snapshot this path created was filed under Manual. 'auto' is the tag
+      // the classifier reads, and both modes use the same set so they cannot
+      // drift apart again.
+      tags: ['auto', 'git'],
+      notes: `Created automatically before the git operation "${operation}" (includeUntracked: ${includeUntracked}).`,
+      silent: true,
+    });
+
+    if (!response.success || !response.snapshot) {
+      throw new Error(
+        `Failed to take a snapshot before "${operation}": ${
+          response.error ?? 'unknown error'
+        }`,
+      );
+    }
+
+    // The CLI prints both fields, so an incomplete snapshot is an error rather
+    // than something to paper over.
+    const { id, description: createdDescription } = response.snapshot;
+    if (!id || !createdDescription) {
+      throw new Error(
+        `The snapshot service returned a snapshot without an id or description after "${operation}"; refusing to report an incomplete snapshot.`,
+      );
+    }
+
+    return { snapshot: { id, description: createdDescription } };
+  }
+
+  /**
+   * Handle `compareSnapshotWithGitCommit`: compare the snapshot's file contents
+   * with the tree of a commit.
+   *
+   * The Git API exposes no tree listing, so the comparison walks the paths the
+   * snapshot records. Files that exist in the commit but are absent from the
+   * snapshot entirely cannot be seen; files that were deleted at snapshot time
+   * are recorded explicitly by the snapshot service (as `deleted`), so those
+   * are still reported.
+   */
+  private async handleCompareSnapshotWithGitCommit(
+    data: any,
+  ): Promise<GitComparisonResult> {
+    const snapshotId = this.requireNonEmptyString(
+      data?.snapshotId,
+      'snapshotId',
+    );
+    const commitHash = this.requireCommitHash(data?.commitHash);
+    const includeFileList = data?.includeFileList === true;
+
+    const repository = await this.getGitRepository();
+    const workspaceRoot = this.getWorkspaceFolder().uri.fsPath;
+    const snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+
+    if (!snapshot) {
+      throw new Error(`Snapshot ${snapshotId} not found.`);
+    }
+
+    const differences: GitFileDifference[] = [];
+    const fileChanges = {
+      added: [] as string[],
+      modified: [] as string[],
+      deleted: [] as string[],
+    };
+
+    const record = (
+      file: string,
+      changeType: GitFileChangeType,
+      counts?: { linesAdded: number; linesRemoved: number },
+    ): void => {
+      differences.push(
+        includeFileList && counts
+          ? { file, changeType, ...counts }
+          : { file, changeType },
+      );
+      fileChanges[changeType].push(file);
+    };
+
+    for (const [snapshotPath, fileData] of Object.entries(snapshot.files)) {
+      const repositoryPath = this.toRepositoryPath(
+        repository,
+        workspaceRoot,
+        snapshotPath,
+      );
+      if (!repositoryPath) {
+        continue;
+      }
+
+      // `show` rejects when the path is not in that commit's tree, which is how
+      // a file is recognised as added or deleted. A ref that matches the hash
+      // format but does not resolve in the repository fails the same way, so
+      // such a ref reads as "every snapshot file was added" — the CLI's
+      // standalone mode, which shells out to `git show`, behaves identically.
+      const committed = await this.readCommittedFile(
+        repository,
+        commitHash,
+        repositoryPath,
+      );
+
+      if (fileData.deleted) {
+        if (committed !== null) {
+          record(repositoryPath, 'deleted', {
+            linesAdded: 0,
+            linesRemoved: this.countLines(committed),
+          });
+        }
+        continue;
+      }
+
+      if (fileData.isBinary) {
+        // Binary content is not comparable through the text-based Git API, so
+        // only the file's presence can be compared.
+        if (committed === null) {
+          record(repositoryPath, 'added');
+        }
+        continue;
+      }
+
+      const content = await this.terminalApiService.getSnapshotFileContent(
+        snapshotId,
+        snapshotPath,
+      );
+      if (content === null) {
+        // The file cannot be reconstructed from the snapshot (for example an
+        // unresolved diff), so there is nothing to compare it against.
+        continue;
+      }
+
+      if (committed === null) {
+        record(repositoryPath, 'added', {
+          linesAdded: this.countLines(content),
+          linesRemoved: 0,
+        });
+      } else if (content !== committed) {
+        record(
+          repositoryPath,
+          'modified',
+          this.countChangedLines(committed, content),
+        );
+      }
+    }
+
+    differences.sort((a, b) => a.file.localeCompare(b.file));
+
+    return includeFileList ? { differences, fileChanges } : { differences };
+  }
+
+  /**
+   * Map the files a snapshot records to repository-relative paths git can
+   * stage.
+   *
+   * Files recorded as deleted are skipped (the snapshot stores their removal,
+   * not their content) and untracked files are only staged when the caller
+   * asked for untracked files to be included.
+   */
+  private resolveSnapshotPaths(
+    repository: GitRepository,
+    workspaceRoot: string,
+    files: Snapshot['files'],
+    includeUntracked: boolean,
+  ): string[] {
+    const untracked = includeUntracked
+      ? undefined
+      : this.collectUntrackedPaths(repository);
+    const stageable = new Set<string>();
+
+    for (const [snapshotPath, fileData] of Object.entries(files)) {
+      if (fileData.deleted) {
+        continue;
+      }
+
+      const repositoryPath = this.toRepositoryPath(
+        repository,
+        workspaceRoot,
+        snapshotPath,
+      );
+      if (!repositoryPath || untracked?.has(repositoryPath)) {
+        continue;
+      }
+
+      stageable.add(repositoryPath);
+    }
+
+    return Array.from(stageable).sort();
+  }
+
+  /**
+   * The paths git currently reports as untracked, repository-relative.
+   */
+  private collectUntrackedPaths(repository: GitRepository): Set<string> {
+    const repositoryRoot = repository.rootUri.fsPath;
+
+    return new Set(
+      repository.state.untrackedChanges
+        .map((change) =>
+          this.toRepositoryPath(repository, repositoryRoot, change.uri.fsPath),
+        )
+        .filter((filePath): filePath is string => typeof filePath === 'string'),
+    );
+  }
+
+  /**
+   * Translate a snapshot path (workspace-relative, native separators) into a
+   * repository-relative path with POSIX separators.
+   *
+   * Returns undefined for anything outside the repository root, which git
+   * cannot stage — the workspace can be a subdirectory of the repository, or
+   * contain files the repository does not track at all.
+   */
+  private toRepositoryPath(
+    repository: GitRepository,
+    workspaceRoot: string,
+    filePath: string,
+  ): string | undefined {
+    const absolutePath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(workspaceRoot, filePath);
+    const relativePath = path.relative(repository.rootUri.fsPath, absolutePath);
+
+    if (
+      !relativePath ||
+      relativePath === '..' ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      return undefined;
+    }
+
+    return relativePath.split(path.sep).join('/');
+  }
+
+  /**
+   * The commit message for a snapshot: the caller's when given, otherwise one
+   * derived from the snapshot's description and id.
+   */
+  private buildCommitMessage(snapshot: Snapshot, requested?: unknown): string {
+    if (typeof requested === 'string' && requested.trim().length > 0) {
+      return requested;
+    }
+
+    const description = snapshot.description?.trim();
+
+    return description
+      ? `Snapshot: ${description} [${snapshot.id}]`
+      : `Snapshot ${snapshot.id}`;
+  }
+
+  /**
+   * Read a file from a commit's tree, or null when that commit does not contain
+   * the path (`git show <commit>:<path>` fails).
+   */
+  private async readCommittedFile(
+    repository: GitRepository,
+    commitHash: string,
+    repositoryPath: string,
+  ): Promise<string | null> {
+    try {
+      return await repository.show(commitHash, repositoryPath);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Count the lines of a file, ignoring a trailing newline.
+   */
+  private countLines(content: string): number {
+    if (content.length === 0) {
+      return 0;
+    }
+
+    const lines = content.split(/\r\n|\r|\n/);
+    if (lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+
+    return lines.length;
+  }
+
+  /**
+   * Count the lines a change adds and removes.
+   */
+  private countChangedLines(
+    previous: string,
+    current: string,
+  ): { linesAdded: number; linesRemoved: number } {
+    let linesAdded = 0;
+    let linesRemoved = 0;
+
+    for (const change of diff.diffLines(previous, current)) {
+      const count = change.count ?? this.countLines(change.value);
+      if (change.added) {
+        linesAdded += count;
+      } else if (change.removed) {
+        linesRemoved += count;
+      }
+    }
+
+    return { linesAdded, linesRemoved };
+  }
+
+  /**
+   * Validate a required string field of an IPC payload.
+   */
+  private requireNonEmptyString(value: unknown, field: string): string {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(
+        `Missing or invalid "${field}": expected a non-empty string.`,
+      );
+    }
+    return value;
+  }
+
+  /**
+   * Validate a commit hash before it reaches git. Mirrors the validation
+   * `codelapse-core`'s GitIntegration applies to the same input.
+   */
+  private requireCommitHash(value: unknown): string {
+    if (typeof value !== 'string' || !/^[a-fA-F0-9]{4,40}$/.test(value)) {
+      throw new Error(`Invalid commit hash: "${String(value)}"`);
+    }
+    return value;
+  }
+
+  /**
+   * Best-effort message for anything that was thrown.
+   */
+  private describeError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   /**
@@ -297,6 +1559,7 @@ export class CliConnectorService implements vscode.Disposable {
         workspaceRoot,
         extensionVersion: this.context.extension.packageJSON.version,
         apiVersion: '1.0.0',
+        authToken: this.authToken,
         created: new Date().toISOString(),
       };
 
@@ -312,7 +1575,20 @@ export class CliConnectorService implements vscode.Disposable {
         fs.mkdirSync(vsCodeDir, { recursive: true });
       }
 
-      fs.writeFileSync(connectionFile, JSON.stringify(connectionInfo, null, 2));
+      // The file carries a live credential. `writeFileSync`'s default mode
+      // follows the umask, which is typically world-readable on Unix; an
+      // existing file keeps whatever mode it already had, so tighten it too.
+      if (process.platform !== 'win32' && fs.existsSync(connectionFile)) {
+        fs.chmodSync(connectionFile, 0o600);
+      }
+      fs.writeFileSync(
+        connectionFile,
+        JSON.stringify(connectionInfo, null, 2),
+        {
+          encoding: 'utf8',
+          mode: 0o600,
+        },
+      );
       log(`Created connection file: ${connectionFile}`);
     } catch (error) {
       log(`Failed to create connection file: ${error}`);
@@ -323,17 +1599,7 @@ export class CliConnectorService implements vscode.Disposable {
    * Get unique workspace identifier
    */
   private getWorkspaceId(): string {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (workspaceRoot) {
-      return crypto
-        .createHash('md5')
-        .update(workspaceRoot)
-        .digest('hex')
-        .substring(0, 8);
-    }
-
-    // Fallback to random identifier
-    return Math.random().toString(36).substring(2, 10);
+    return getWorkspaceId(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
   }
 
   /**
@@ -502,40 +1768,117 @@ export class CliConnectorService implements vscode.Disposable {
   }
 
   /**
+   * Resolve one chunk of a snapshot file, or throw.
+   *
+   * Every handler below used to return a well-formed payload with fabricated
+   * values regardless of what was asked for, so a caller could not tell a real
+   * answer from a placeholder.
+   */
+  private async resolveChunk(
+    snapshotId: string,
+    filePath: string,
+    chunkId: string,
+  ): Promise<EnhancedCodeChunk> {
+    const content = await this.terminalApiService.getSnapshotFileContent(
+      snapshotId,
+      filePath,
+    );
+    if (content === null) {
+      throw new Error(`File not found in snapshot ${snapshotId}: ${filePath}`);
+    }
+
+    const chunks = await this.enhancedCodeChunker.chunkFileEnhanced(
+      filePath,
+      content,
+      snapshotId,
+    );
+    const chunk = chunks.find((candidate) => candidate.id === chunkId);
+    if (!chunk) {
+      throw new Error(`Chunk not found: ${chunkId}`);
+    }
+    return chunk;
+  }
+
+  /**
+   * Snapshot ids are the prefix before the first `_` in a strategy chunk id.
+   */
+  private extractSnapshotIdFromChunkId(chunkId: string): string | undefined {
+    const separator = chunkId.indexOf('_');
+    return separator > 0 ? chunkId.slice(0, separator) : undefined;
+  }
+
+  /**
+   * Resolve a chunk either against the payload's file path or, when the caller
+   * only has a chunk id, by walking the snapshot's files until one produces it.
+   */
+  private async resolveChunkInSnapshot(
+    snapshotId: string,
+    chunkId: string,
+    filePath?: string,
+  ): Promise<{ filePath: string; chunk: EnhancedCodeChunk }> {
+    if (filePath) {
+      return {
+        filePath,
+        chunk: await this.resolveChunk(snapshotId, filePath, chunkId),
+      };
+    }
+
+    const snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+    if (!snapshot) {
+      throw new Error(`Snapshot not found: ${snapshotId}`);
+    }
+
+    for (const candidate of Object.keys(snapshot.files)) {
+      const file = snapshot.files[candidate];
+      if (file.deleted || file.isBinary) {
+        continue;
+      }
+      try {
+        return {
+          filePath: candidate,
+          chunk: await this.resolveChunk(snapshotId, candidate, chunkId),
+        };
+      } catch {
+        // This file does not contain the requested chunk; try the next one.
+      }
+    }
+
+    throw new Error(`Chunk not found: ${chunkId}`);
+  }
+
+  /**
    * Handle chunk analysis request
    */
   private async handleAnalyzeChunk(data: any): Promise<any> {
     try {
-      const { chunkId, snapshotId, analysisType = 'full' } = data;
+      const { chunkId, analysisType = 'full' } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
       if (!chunkId || !snapshotId) {
         throw new Error('chunkId and snapshotId are required');
       }
 
-      // This would need to be implemented with actual chunk storage/retrieval
-      // For now, return a structured response format
+      const { filePath, chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+
       return {
         success: true,
         chunkId,
         snapshotId,
+        filePath,
         analysisType,
         analysis: {
           qualityMetrics: {
-            overallScore: 75,
-            readabilityScore: 0.8,
-            maintainabilityScore: 70,
-            complexityScore: 15,
+            ...chunk.qualityMetrics,
+            complexityScore: chunk.enhancedMetadata.complexityScore,
           },
-          relationships: [],
-          securityConcerns: [],
-          suggestions: [
-            {
-              type: 'improvement',
-              description: 'Consider adding more documentation',
-              priority: 'medium',
-              effort: 'minimal',
-            },
-          ],
+          relationships: chunk.relationships,
+          securityConcerns:
+            (chunk.enhancedMetadata as any).securityConcerns ?? [],
         },
         metadata: {
           analysisTime: Date.now(),
@@ -627,41 +1970,111 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async handleAnalyzeQuality(data: any): Promise<any> {
     try {
-      const { target, snapshotId, metrics = ['all'] } = data;
+      const { target, snapshotId } = data;
 
       if (!target || !snapshotId) {
         throw new Error('target and snapshotId are required');
       }
 
-      // Quality analysis implementation would go here
-      // For now, return structured response
+      let chunks: EnhancedCodeChunk[] = [];
+      const content = await this.terminalApiService.getSnapshotFileContent(
+        snapshotId,
+        target,
+      );
+      if (content !== null) {
+        chunks = await this.enhancedCodeChunker.chunkFileEnhanced(
+          target,
+          content,
+          snapshotId,
+        );
+      } else {
+        const resolved = await this.resolveChunkInSnapshot(
+          snapshotId,
+          target,
+          data.filePath,
+        );
+        chunks = [resolved.chunk];
+      }
+
+      if (chunks.length === 0) {
+        throw new Error(`No chunks found for target: ${target}`);
+      }
+
+      const average = (
+        read: (chunk: EnhancedCodeChunk) => number | undefined,
+      ): number | undefined => {
+        const values = chunks
+          .map(read)
+          .filter((value): value is number => typeof value === 'number');
+        return values.length === 0
+          ? undefined
+          : values.reduce((sum, value) => sum + value, 0) / values.length;
+      };
+
+      const metricReaders: Record<
+        string,
+        (chunk: EnhancedCodeChunk) => number | undefined
+      > = {
+        readability: (chunk) => chunk.qualityMetrics.readabilityScore,
+        maintainability: (chunk) => chunk.qualityMetrics.maintainabilityScore,
+        testCoverage: (chunk) => chunk.qualityMetrics.testCoverage,
+        documentation: (chunk) => chunk.qualityMetrics.documentationRatio,
+        complexity: (chunk) => (chunk.enhancedMetadata as any).complexityScore,
+        duplication: (chunk) => chunk.qualityMetrics.duplicationRisk,
+      };
+
+      const requested =
+        Array.isArray(data.metrics) &&
+        data.metrics.length > 0 &&
+        !data.metrics.includes('all')
+          ? data.metrics
+          : Object.keys(metricReaders);
+      const metrics: Record<string, number> = {};
+      for (const metric of requested) {
+        const reader = metricReaders[metric];
+        if (!reader) {
+          continue;
+        }
+        const value = average(reader);
+        if (value !== undefined) {
+          metrics[metric] = value;
+        }
+      }
+
+      const overallScore =
+        average((chunk) => chunk.qualityMetrics.overallScore) ?? 0;
+      const recommendations: Array<Record<string, unknown>> = [];
+      if (metrics.documentation !== undefined && metrics.documentation < 0.3) {
+        recommendations.push({
+          category: 'documentation',
+          priority: 'high',
+          description: 'Increase documentation coverage',
+        });
+      }
+      if (
+        metrics.maintainability !== undefined &&
+        metrics.maintainability < 70
+      ) {
+        recommendations.push({
+          category: 'maintainability',
+          priority: 'medium',
+          description: 'Simplify complex sections reported by the chunker',
+        });
+      }
+
       return {
         success: true,
         target,
         snapshotId,
         qualityAnalysis: {
-          overallScore: 78,
-          metrics: {
-            readability: 0.82,
-            maintainability: 75,
-            testCoverage: 0.65,
-            documentation: 0.58,
-            complexity: 18,
-            duplication: 0.12,
-          },
+          overallScore,
+          metrics,
           trends: {
-            improving: ['readability', 'testCoverage'],
-            declining: ['documentation'],
-            stable: ['maintainability', 'complexity'],
+            improving: [],
+            declining: [],
+            stable: Object.keys(metrics),
           },
-          recommendations: [
-            {
-              category: 'documentation',
-              priority: 'high',
-              description: 'Increase documentation coverage',
-              estimatedEffort: '2-4 hours',
-            },
-          ],
+          recommendations,
         },
         metadata: {
           analysisTime: Date.now(),
@@ -679,18 +2092,12 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle enhanced file chunking request
    */
   private async handleEnhancedChunkFile(data: any): Promise<any> {
     try {
-      const {
-        filePath,
-        snapshotId,
-        strategy = 'semantic',
-        options = {},
-      } = data;
+      const { filePath, snapshotId, strategy = 'semantic' } = data;
 
       if (!filePath || !snapshotId) {
         throw new Error('filePath and snapshotId are required');
@@ -761,12 +2168,7 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async handleChunkSnapshot(data: any): Promise<any> {
     try {
-      const {
-        snapshotId,
-        strategy = 'semantic',
-        filePatterns,
-        options = {},
-      } = data;
+      const { snapshotId, strategy = 'semantic', filePatterns } = data;
 
       if (!snapshotId) {
         throw new Error('snapshotId is required');
@@ -853,35 +2255,133 @@ export class CliConnectorService implements vscode.Disposable {
    */
   private async handleListChunks(data: any): Promise<any> {
     try {
-      const { snapshotId, filePath, filters = {} } = data;
+      const { snapshotId, filePath } = data;
 
       if (!snapshotId) {
         throw new Error('snapshotId is required');
       }
 
-      // This would need actual chunk storage implementation
-      // For now, return mock data structure
+      const filePaths: string[] = [];
+      let snapshot: Snapshot | null = null;
+      if (filePath) {
+        filePaths.push(filePath);
+      } else {
+        snapshot = await this.terminalApiService.getSnapshot(snapshotId);
+        if (!snapshot) {
+          throw new Error(`Snapshot not found: ${snapshotId}`);
+        }
+        filePaths.push(
+          ...Object.keys(snapshot.files).filter((candidate) => {
+            const file = snapshot!.files[candidate];
+            return !file.deleted && !file.isBinary;
+          }),
+        );
+      }
+
+      const collected: EnhancedCodeChunk[] = [];
+      for (const candidate of filePaths) {
+        const content = await this.terminalApiService.getSnapshotFileContent(
+          snapshotId,
+          candidate,
+        );
+        if (content === null) {
+          continue;
+        }
+        collected.push(
+          ...(await this.enhancedCodeChunker.chunkFileEnhanced(
+            candidate,
+            content,
+            snapshotId,
+          )),
+        );
+      }
+
+      const filters = data.filters ?? {};
+      let filtered = collected;
+      if (
+        Array.isArray(filters.semanticTypes) &&
+        filters.semanticTypes.length > 0
+      ) {
+        filtered = filtered.filter((chunk) =>
+          filters.semanticTypes.includes(chunk.enhancedMetadata.semanticType),
+        );
+      }
+      if (typeof filters.qualityThreshold === 'number') {
+        filtered = filtered.filter(
+          (chunk) =>
+            toRatio(chunk.qualityMetrics.overallScore) >=
+            filters.qualityThreshold,
+        );
+      }
+      if (Array.isArray(filters.complexityRange)) {
+        const [min, max] = filters.complexityRange;
+        filtered = filtered.filter((chunk) => {
+          const complexity = (chunk.enhancedMetadata as any).complexityScore;
+          return complexity >= min && complexity <= max;
+        });
+      }
+      if (
+        Array.isArray(filters.hasPatterns) &&
+        filters.hasPatterns.length > 0
+      ) {
+        filtered = filtered.filter((chunk) =>
+          filters.hasPatterns.some((pattern: string) =>
+            (chunk.enhancedMetadata.designPatterns ?? []).includes(pattern),
+          ),
+        );
+      }
+      if (
+        Array.isArray(filters.excludeSmells) &&
+        filters.excludeSmells.length > 0
+      ) {
+        filtered = filtered.filter(
+          (chunk) =>
+            !filters.excludeSmells.some((smell: string) =>
+              (chunk.enhancedMetadata.codeSmells ?? []).includes(smell),
+            ),
+        );
+      }
+
+      const sortBy = data.sortBy || 'startLine';
+      const sortOrder = data.sortOrder === 'desc' ? -1 : 1;
+      filtered = [...filtered].sort((a, b) => {
+        const read = (chunk: EnhancedCodeChunk): number => {
+          switch (sortBy) {
+            case 'qualityScore':
+              return toRatio(chunk.qualityMetrics.overallScore);
+            case 'complexityScore':
+              return (chunk.enhancedMetadata as any).complexityScore ?? 0;
+            case 'endLine':
+              return chunk.endLine;
+            default:
+              return chunk.startLine;
+          }
+        };
+        return (read(a) - read(b)) * sortOrder;
+      });
+
+      const page = Math.max(1, data.pagination?.page ?? 1);
+      const limit = Math.max(1, data.pagination?.limit ?? 50);
+      const total = filtered.length;
+      const chunks = filtered
+        .slice((page - 1) * limit, page * limit)
+        .map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          semanticType: chunk.enhancedMetadata.semanticType,
+          qualityScore: chunk.qualityMetrics.overallScore,
+          complexityScore: (chunk.enhancedMetadata as any).complexityScore,
+          lastModified: snapshot?.timestamp ?? 0,
+        }));
+
       return {
         success: true,
         snapshotId,
-        filePath,
-        chunks: [
-          {
-            id: 'chunk-1',
-            filePath: filePath || 'example.ts',
-            startLine: 1,
-            endLine: 25,
-            semanticType: 'function',
-            qualityScore: 85,
-            complexityScore: 12,
-            lastModified: Date.now(),
-          },
-        ],
-        pagination: {
-          total: 1,
-          page: 1,
-          limit: 50,
-        },
+        ...(filePath ? { filePath } : {}),
+        chunks,
+        pagination: { total, page, limit },
         metadata: {
           queryTime: Date.now(),
           version: '1.0.0',
@@ -895,7 +2395,6 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle get chunk metadata request
    */
@@ -906,38 +2405,47 @@ export class CliConnectorService implements vscode.Disposable {
         includeRelationships = true,
         includeQuality = true,
       } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
-      if (!chunkId) {
-        throw new Error('chunkId is required');
+      if (!chunkId || !snapshotId) {
+        throw new Error('chunkId and snapshotId are required');
       }
 
-      // Mock metadata response
+      const { chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+      const lines = chunk.content.split('\n');
+      const blank = lines.filter((line) => line.trim().length === 0).length;
+      const comments = lines.filter((line) =>
+        /^\s*(\/\/|\/\*|\*|#)/.test(line),
+      ).length;
+
       return {
         success: true,
         chunkId,
+        snapshotId,
         metadata: {
-          semanticType: 'function',
-          complexityScore: 15,
-          maintainabilityIndex: 78,
-          dependencies: ['lodash', 'express'],
-          designPatterns: ['Factory'],
-          codeSmells: [],
-          securityConcerns: [],
+          semanticType: chunk.enhancedMetadata.semanticType,
+          complexityScore: (chunk.enhancedMetadata as any).complexityScore,
+          maintainabilityIndex: (chunk.enhancedMetadata as any)
+            .maintainabilityIndex,
+          dependencies: chunk.enhancedMetadata.dependencies ?? [],
+          designPatterns: chunk.enhancedMetadata.designPatterns ?? [],
+          codeSmells: chunk.enhancedMetadata.codeSmells ?? [],
+          securityConcerns:
+            (chunk.enhancedMetadata as any).securityConcerns ?? [],
           linesOfCode: {
-            total: 24,
-            code: 18,
-            comments: 4,
-            blank: 2,
+            total: lines.length,
+            code: lines.length - blank - comments,
+            comments,
+            blank,
           },
         },
-        relationships: includeRelationships ? [] : undefined,
-        qualityMetrics: includeQuality
-          ? {
-              overallScore: 82,
-              readabilityScore: 0.85,
-              maintainabilityScore: 78,
-            }
-          : undefined,
+        relationships: includeRelationships ? chunk.relationships : undefined,
+        qualityMetrics: includeQuality ? chunk.qualityMetrics : undefined,
         responseMetadata: {
           retrievalTime: Date.now(),
           version: '1.0.0',
@@ -951,36 +2459,56 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle get chunk context request
    */
   private async handleGetChunkContext(data: any): Promise<any> {
     try {
-      const { chunkId, contextRadius = 5 } = data;
+      const { chunkId, contextRadius = data.radius ?? 5 } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
-      if (!chunkId) {
-        throw new Error('chunkId is required');
+      if (!chunkId || !snapshotId) {
+        throw new Error('chunkId and snapshotId are required');
       }
 
-      // Mock context response
+      const { filePath, chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+      const content =
+        (await this.terminalApiService.getSnapshotFileContent(
+          snapshotId,
+          filePath,
+        )) ?? chunk.content;
+      const lines = content.split('\n');
+      const radius = Math.max(0, Number(contextRadius) || 0);
+      const surroundingContext = lines
+        .slice(
+          Math.max(0, chunk.startLine - radius),
+          Math.min(lines.length, chunk.endLine + radius + 1),
+        )
+        .join('\n');
+      const contextInfo = chunk.contextInfo;
+      const fileContext = contextInfo?.fileContext ?? {
+        totalLines: lines.length,
+        fileSize: content.length,
+      };
+
       return {
         success: true,
         chunkId,
+        snapshotId,
+        filePath,
         context: {
-          surroundingContext: '// Context lines would be here',
-          architecturalLayer: 'service',
-          frameworkContext: ['express', 'typescript'],
-          businessContext: 'User authentication service',
-          fileContext: {
-            totalLines: 150,
-            fileSize: 4500,
-            lastModified: new Date(),
-            siblingChunks: ['chunk-2', 'chunk-3'],
-          },
+          surroundingContext,
+          architecturalLayer: contextInfo?.architecturalLayer,
+          frameworkContext: contextInfo?.frameworkContext ?? [],
+          fileContext,
         },
         metadata: {
-          contextRadius,
+          contextRadius: radius,
           retrievalTime: Date.now(),
           version: '1.0.0',
         },
@@ -996,41 +2524,53 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle get chunk dependencies request
    */
   private async handleGetChunkDependencies(data: any): Promise<any> {
     try {
       const { chunkId, includeTransitive = false, maxDepth = 3 } = data;
+      const snapshotId =
+        data.snapshotId || this.extractSnapshotIdFromChunkId(chunkId);
 
-      if (!chunkId) {
-        throw new Error('chunkId is required');
+      if (!chunkId || !snapshotId) {
+        throw new Error('chunkId and snapshotId are required');
       }
 
-      // Mock dependencies response
+      const { chunk } = await this.resolveChunkInSnapshot(
+        snapshotId,
+        chunkId,
+        data.filePath,
+      );
+      const relationships = chunk.relationships ?? [];
+      const direct = relationships
+        .filter((relationship) => relationship.direction !== 'incoming')
+        .map((relationship) => ({
+          chunkId: relationship.targetChunkId,
+          type: relationship.type,
+          strength: relationship.strength,
+          description: relationship.description,
+          direction: relationship.direction,
+        }));
+      const dependents = relationships
+        .filter((relationship) => relationship.direction === 'incoming')
+        .map((relationship) => ({
+          chunkId: relationship.targetChunkId,
+          type: relationship.type,
+          strength: relationship.strength,
+          description: relationship.description,
+          direction: relationship.direction,
+        }));
+
       return {
         success: true,
         chunkId,
+        snapshotId,
         dependencies: {
-          direct: [
-            {
-              chunkId: 'chunk-2',
-              type: 'imports',
-              strength: 0.9,
-              description: 'Imports utility functions',
-            },
-          ],
-          transitive: includeTransitive ? [] : undefined,
+          direct,
+          ...(includeTransitive ? { transitive: [] } : {}),
         },
-        dependents: [
-          {
-            chunkId: 'chunk-4',
-            type: 'calls',
-            strength: 0.8,
-            description: 'Called by main handler',
-          },
-        ],
+        dependents,
         metadata: {
           includeTransitive,
           maxDepth,
@@ -1046,7 +2586,6 @@ export class CliConnectorService implements vscode.Disposable {
       };
     }
   }
-
   /**
    * Handle batch analyze request with enhanced error handling and progress tracking
    */
@@ -1064,6 +2603,25 @@ export class CliConnectorService implements vscode.Disposable {
         retryFailedOperations = false,
         maxRetries = 2,
       } = data;
+
+      // Rejected before chunking: a stride of 0 or less never advances the loop.
+      const maxConcurrencyError = assertValidMaxConcurrency(maxConcurrency);
+      if (maxConcurrencyError) {
+        throw new Error(maxConcurrencyError);
+      }
+
+      // Rejected before the retry helper: `Infinity` runs its loop forever.
+      const maxRetriesError = assertValidMaxRetries(maxRetries);
+      if (maxRetriesError) {
+        throw new Error(maxRetriesError);
+      }
+
+      // Rejected before any timer is armed: `setTimeout` turns the invalid
+      // delays into an immediate, fabricated timeout.
+      const timeoutError = assertValidTimeout(timeout);
+      if (timeoutError) {
+        throw new Error(timeoutError);
+      }
 
       if (!operations || !Array.isArray(operations)) {
         throw new Error('operations array is required');
@@ -1110,7 +2668,6 @@ export class CliConnectorService implements vscode.Disposable {
 
       if (parallel) {
         // Enhanced parallel processing with better concurrency control
-        const semaphore = new Array(maxConcurrency).fill(null);
         const chunks = [];
 
         for (let i = 0; i < operations.length; i += maxConcurrency) {
@@ -1123,19 +2680,11 @@ export class CliConnectorService implements vscode.Disposable {
 
             try {
               // Add timeout wrapper
-              const operationPromise = this.executeAnalysisOperation(op);
-              const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                  () =>
-                    reject(new Error(`Operation timeout after ${timeout}ms`)),
-                  timeout,
-                );
-              });
-
-              const result = await Promise.race([
-                operationPromise,
-                timeoutPromise,
-              ]);
+              const result = await withTimeout(
+                this.executeAnalysisOperation(op),
+                timeout,
+                `Operation timeout after ${timeout}ms`,
+              );
 
               // Check if the operation result indicates failure
               if (
@@ -1195,12 +2744,10 @@ export class CliConnectorService implements vscode.Disposable {
 
           const chunkResults = await Promise.allSettled(chunkPromises);
 
-          let hasFailures = false;
           chunkResults.forEach((result, index) => {
             if (result.status === 'fulfilled') {
               results.push(result.value);
             } else {
-              hasFailures = true;
               results.push({
                 operationId: chunk[index].id || `op-${results.length}`,
                 operationType: chunk[index].type,
@@ -1219,8 +2766,15 @@ export class CliConnectorService implements vscode.Disposable {
             updateProgress();
           });
 
-          // Stop processing if continueOnError is false and we have failures
-          if (!continueOnError && hasFailures) {
+          // Stop processing if continueOnError is false and we have failures.
+          // The predicate reads the results that were recorded rather than the
+          // settlements: `allSettled` reports a rejected promise, but a handler
+          // that answers `{ success: false }` fulfils its promise, so a
+          // settlement-only check missed every handler-level failure and the
+          // flag was inert in this path. The sequential branch treats that
+          // answer as the failure it is; so does the search handler's parallel
+          // branch, which uses this same predicate.
+          if (!continueOnError && results.some((r) => !r.success)) {
             break;
           }
         }
@@ -1230,18 +2784,11 @@ export class CliConnectorService implements vscode.Disposable {
           const operationId = operation.id || `op-${results.length}`;
 
           try {
-            const operationPromise = this.executeAnalysisOperation(operation);
-            const timeoutPromise = new Promise((_, reject) => {
-              setTimeout(
-                () => reject(new Error(`Operation timeout after ${timeout}ms`)),
-                timeout,
-              );
-            });
-
-            const result = await Promise.race([
-              operationPromise,
-              timeoutPromise,
-            ]);
+            const result = await withTimeout(
+              this.executeAnalysisOperation(operation),
+              timeout,
+              `Operation timeout after ${timeout}ms`,
+            );
 
             // Check if the operation result indicates failure
             if (
@@ -1325,7 +2872,12 @@ export class CliConnectorService implements vscode.Disposable {
       const failedOperationsCount = results.filter((r) => !r.success).length;
 
       return {
-        success: true,
+        // A batch in which every item failed is a failure. The counts already
+        // disclose a partial failure, so a partial batch stays true -- and an
+        // empty batch never reaches here (it returns above).
+        success: !(
+          results.length > 0 && failedOperationsCount === results.length
+        ),
         totalOperations: operations.length,
         successfulOperations,
         failedOperations: failedOperationsCount,
@@ -1398,6 +2950,25 @@ export class CliConnectorService implements vscode.Disposable {
         deduplicateQueries = true,
       } = data;
 
+      // Rejected before chunking: a stride of 0 or less never advances the loop.
+      const maxConcurrencyError = assertValidMaxConcurrency(maxConcurrency);
+      if (maxConcurrencyError) {
+        throw new Error(maxConcurrencyError);
+      }
+
+      // Rejected before the retry helper: `Infinity` runs its loop forever.
+      const maxRetriesError = assertValidMaxRetries(maxRetries);
+      if (maxRetriesError) {
+        throw new Error(maxRetriesError);
+      }
+
+      // Rejected before any timer is armed: `setTimeout` turns the invalid
+      // delays into an immediate, fabricated timeout.
+      const timeoutError = assertValidTimeout(timeout);
+      if (timeoutError) {
+        throw new Error(timeoutError);
+      }
+
       if (!queries || !Array.isArray(queries)) {
         throw new Error('queries array is required');
       }
@@ -1461,18 +3032,11 @@ export class CliConnectorService implements vscode.Disposable {
 
             try {
               // Add timeout wrapper
-              const searchPromise = this.handleEnhancedSearch(query);
-              const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                  () => reject(new Error(`Query timeout after ${timeout}ms`)),
-                  timeout,
-                );
-              });
-
-              const result = await Promise.race([
-                searchPromise,
-                timeoutPromise,
-              ]);
+              const result = await withTimeout(
+                this.handleEnhancedSearch(query),
+                timeout,
+                `Query timeout after ${timeout}ms`,
+              );
 
               // Check if the search result indicates failure
               if (
@@ -1565,15 +3129,11 @@ export class CliConnectorService implements vscode.Disposable {
           const queryId = query.id || `query-${results.length}`;
 
           try {
-            const searchPromise = this.handleEnhancedSearch(query);
-            const timeoutPromise = new Promise((_, reject) => {
-              setTimeout(
-                () => reject(new Error(`Query timeout after ${timeout}ms`)),
-                timeout,
-              );
-            });
-
-            const result = await Promise.race([searchPromise, timeoutPromise]);
+            const result = await withTimeout(
+              this.handleEnhancedSearch(query),
+              timeout,
+              `Query timeout after ${timeout}ms`,
+            );
 
             // Check if the search result indicates failure
             if (
@@ -1657,7 +3217,11 @@ export class CliConnectorService implements vscode.Disposable {
       const failedQueriesCount = results.filter((r) => !r.success).length;
 
       return {
-        success: true,
+        // Same contract as handleBatchAnalyze. The verdict comes from the
+        // results that were actually recorded, not from the requested count:
+        // with continueOnError false the loop stops early, and "1 of 1 failed"
+        // must not read as success just because 3 were requested.
+        success: !(results.length > 0 && failedQueriesCount === results.length),
         totalQueries: processedQueries.length,
         originalQueryCount: queries.length,
         deduplicatedCount: queries.length - processedQueries.length,
@@ -2105,6 +3669,12 @@ export class CliConnectorService implements vscode.Disposable {
    */
   dispose(): void {
     log('Disposing CLI connector service...');
+
+    this.logUnsubscribe?.();
+    this.logUnsubscribe = undefined;
+    this.chunkerConfigSubscription?.dispose();
+    this.chunkerConfigSubscription = undefined;
+    this.logStreaming = false;
 
     // Close all connections
     this.connections.forEach((socket) => {

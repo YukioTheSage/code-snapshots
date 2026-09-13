@@ -1,7 +1,7 @@
 {
   "name": "codelapse-cli",
-  "version": "1.0.1",
-  "description": "Command-line interface for CodeLapse VSCode extension",
+  "version": "2.0.0",
+  "description": "Comprehensive command-line interface for CodeLapse VSCode extension with full feature parity",
   "main": "dist/cli.js",
   "bin": {
     "codelapse": "dist/cli.js",
@@ -10,10 +10,17 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "check-types": "tsc --noEmit",
+    "check-types:test": "tsc -p tsconfig.test.json --noEmit",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "test": "jest",
+    "test:ci": "jest --runInBand --forceExit --ci",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "prepublish": "npm run build"
+    "prepack": "npm run build"
   },
   "keywords": [
     "vscode",
@@ -26,7 +33,12 @@
     "github",
     "codelapse",
     "codelapse-cli",
-    "codelapse cli"
+    "code-analysis",
+    "semantic-search",
+    "diagnostics",
+    "configuration",
+    "automation",
+    "developer-tools"
   ],
   "homepage": "https://github.com/YukioTheSage/code-snapshots",
   "bugs": {
@@ -43,6 +55,7 @@
   "author": "YukioTheSage",
   "license": "MIT",
   "dependencies": {
+    "codelapse-core": "file:../shared",
     "commander": "^11.0.0",
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
@@ -59,10 +72,13 @@
     "@types/jest": "^29.0.0"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.15.0"
   },
   "files": [
     "dist/**/*",
-    "README.md"
+    "README.md",
+    "HELP.md",
+    "API.md",
+    "AI_GUIDE.md"
   ]
 }

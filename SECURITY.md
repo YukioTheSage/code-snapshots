@@ -74,8 +74,9 @@ When reporting a security vulnerability, please include:
 
 **Extension Permissions:**
 - CodeLapse requires file system access to create snapshots
-- Access is limited to workspace directories
+- Access is strictly limited to workspace directories using robust path traversal validation
 - No system-wide file access required
+- Symbolic links are explicitly rejected to prevent link-based path escaping
 
 ### Network security
 
@@ -108,6 +109,9 @@ When reporting a security vulnerability, please include:
 - **Opt-in External Services**: All external integrations require explicit consent
 - **Clear Warnings**: Experimental features include security warnings
 - **Minimal Permissions**: Extension requests only necessary permissions
+- **Path Traversal Prevention**: Strict validation ensures all file operations stay within trusted directory boundaries
+- **Resource Limits**: File size constraints and available disk space checks prevent Denial of Service (DoS) attacks
+- **Artifact Quarantine**: Invalid, corrupted, or misconfigured snapshots are automatically isolated into a quarantine directory
 
 ### Privacy protection
 

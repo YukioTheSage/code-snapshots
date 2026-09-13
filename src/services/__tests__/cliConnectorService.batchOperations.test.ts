@@ -7,11 +7,173 @@ import * as vscode from 'vscode';
 jest.mock('vscode');
 jest.mock('../terminalApiService');
 jest.mock('../semanticSearchService');
-jest.mock('../enhancedCodeChunker');
+jest.mock('../enhancedCodeChunker', () => {
+  return {
+    EnhancedCodeChunker: jest.fn().mockImplementation(() => ({
+      chunkFileEnhanced: jest.fn().mockResolvedValue([
+        {
+          id: 'chunk1',
+          startLine: 1,
+          endLine: 10,
+          qualityMetrics: { overallScore: 80 },
+          enhancedMetadata: {
+            semanticType: 'function',
+            complexityScore: 10,
+            securityConcerns: [],
+            designPatterns: [],
+          },
+          relationships: [],
+        },
+      ]),
+    })),
+  };
+});
 jest.mock('../queryProcessor');
 jest.mock('../resultManager');
 jest.mock('../qualityMetricsCalculator');
-jest.mock('../relationshipAnalyzer');
+
+/**
+ * A stride of 0 or a negative value never advances the batch handlers' chunking
+ * loop (`i += maxConcurrency`), and that loop runs synchronously — so an
+ * unguarded handler spins forever and no assertion ever gets to run. This proxy
+ * caps how many times the loop may slice: an unguarded handler aborts with
+ * "chunking loop did not advance" (a fast, bounded test failure), while a
+ * handler that validates its stride never reaches the loop. `Array.isArray`
+ * still reports true for the proxy, so the handler's own input check is
+ * unaffected.
+ */
+function capChunkingIterations<T>(items: T[], cap: number): T[] {
+  let sliceCalls = 0;
+
+  return new Proxy(items, {
+    get(target, property, receiver) {
+      if (property === 'slice') {
+        return (start?: number, end?: number) => {
+          sliceCalls += 1;
+          if (sliceCalls > cap) {
+            throw new Error(
+              'chunking loop did not advance: aborted to keep the suite bounded',
+            );
+          }
+          return target.slice(start, end);
+        };
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+/**
+ * The defect is a hang, so an assertion alone cannot bound the call: it is
+ * raced against a timeout that fails the test instead of wedging the suite. The
+ * timer is cleared on the way out so a passing test does not linger.
+ */
+async function withHandlerTimeout(
+  invocation: Promise<any>,
+  reason: string,
+): Promise<any> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      invocation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`handler did not return: ${reason}`)),
+          2000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** The `{success, error}` envelope both batch handlers answer with. */
+interface BatchEnvelope {
+  success: boolean;
+  error?: { message?: string };
+}
+
+/**
+ * Bounds a hang-shaped call on the fake clock. `withHandlerTimeout` bounds the
+ * *test*, but not the defect: a retry loop parked on a real backoff timer would
+ * keep running after the race gave up and outlive the jest worker. With fake
+ * timers nothing can leak, so each round fires whatever retry timer is pending
+ * at that moment (and awaits the async work behind it): a value that reaches the
+ * loop is observed still retrying after `rounds` attempts, while a value the
+ * handler rejects is seen settling straight away. The caller installs the fake
+ * timers, so the abandoned loop is discarded with the fake clock.
+ */
+async function settleAfterRetryRounds(
+  invocation: Promise<BatchEnvelope>,
+  rounds: number,
+): Promise<{ settled: boolean; result: BatchEnvelope | undefined }> {
+  let settled = false;
+  let result: BatchEnvelope | undefined;
+
+  // The handlers report failure as an envelope rather than by rejecting, so an
+  // unexpected rejection is normalised the same way and reported by the
+  // assertion instead of becoming an unhandled rejection.
+  void invocation.then(
+    (value) => {
+      settled = true;
+      result = value;
+    },
+    (error) => {
+      settled = true;
+      result = {
+        success: false,
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    },
+  );
+
+  for (let round = 0; round < rounds && !settled; round += 1) {
+    await jest.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+  }
+
+  return { settled, result };
+}
+
+/** An `analyzeFile` operation whose data resolves against the mocked snapshot. */
+function analyzeFileOperation(id = 'op1'): {
+  id: string;
+  type: string;
+  data: { filePath: string; snapshotId: string };
+} {
+  return {
+    id,
+    type: 'analyzeFile',
+    data: { filePath: 'test.ts', snapshotId: 'snap1' },
+  };
+}
+
+/** What the batch-analyze envelope is read for, without an `any` cast. */
+interface BatchAnalyzeEnvelope {
+  success: boolean;
+  results: Array<{ success: boolean }>;
+}
+
+/**
+ * The private `handleBatchAnalyze`, reached through a typed seam. The rest of
+ * this file calls the handler through an `any` cast, and the lint ceiling is
+ * exact, so this test — the newest — adds no warning of its own.
+ */
+function batchAnalyzeHandler(
+  service: CliConnectorService,
+): (data: unknown) => Promise<BatchAnalyzeEnvelope> {
+  return (
+    service as unknown as {
+      handleBatchAnalyze: (data: unknown) => Promise<BatchAnalyzeEnvelope>;
+    }
+  ).handleBatchAnalyze.bind(service);
+}
 
 describe('CliConnectorService - Batch Operations', () => {
   let cliConnectorService: CliConnectorService;
@@ -51,6 +213,9 @@ describe('CliConnectorService - Batch Operations', () => {
           uri: { fsPath: '/test/workspace' },
         },
       ],
+      // The constructor stores a chunker-settings listener; a wholesale
+      // workspace replacement must expose the API it registers.
+      onDidChangeConfiguration: jest.fn(() => ({ dispose: jest.fn() })),
     };
 
     cliConnectorService = new CliConnectorService(
@@ -152,11 +317,330 @@ describe('CliConnectorService - Batch Operations', () => {
         data,
       );
 
-      expect(result.success).toBe(true);
+      // Every analyzeChunk operation fails here (the snapshot lookup is not
+      // stubbed in this test), so the batch verdict is false. What this test
+      // pins is the chunking stride and the metadata, asserted below. The count
+      // pins the premise: if a later setup change let an operation succeed, the
+      // verdict would flip and this test must say so through the counts.
+      expect(result.success).toBe(false);
       expect(result.totalOperations).toBe(10);
+      expect(result.failedOperations).toBe(10);
       expect(result.results).toHaveLength(10);
       expect(result.metadata.parallel).toBe(true);
       expect(result.metadata.maxConcurrency).toBe(3);
+    });
+
+    it('should reject maxConcurrency 0 instead of looping forever', async () => {
+      // A stride of 0 makes the chunking loop spin, so the operations array is
+      // capped and the call is bounded: without the guard this test fails fast
+      // ("chunking loop did not advance") instead of hanging the worker.
+      const data = {
+        operations: capChunkingIterations(
+          [
+            {
+              id: 'op1',
+              type: 'analyzeChunk',
+              data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+            },
+          ],
+          1,
+        ),
+        parallel: true,
+        maxConcurrency: 0,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze(data),
+        'maxConcurrency 0 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/maxConcurrency/i);
+      expect(result.error.message).toContain('0');
+    });
+
+    it('should reject a negative maxConcurrency', async () => {
+      const data = {
+        operations: capChunkingIterations(
+          [
+            {
+              id: 'op1',
+              type: 'analyzeChunk',
+              data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+            },
+          ],
+          1,
+        ),
+        parallel: true,
+        maxConcurrency: -1,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze(data),
+        'maxConcurrency -1 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/maxConcurrency/i);
+      expect(result.error.message).toContain('-1');
+    });
+
+    it('should reject a non-finite maxConcurrency', async () => {
+      // Neither value can spin the loop (i becomes NaN/Infinity and the loop
+      // stops immediately), but both are invalid strides and reach the chunker.
+      for (const maxConcurrency of [Number.NaN, Number.POSITIVE_INFINITY]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [
+              {
+                id: 'op1',
+                type: 'analyzeChunk',
+                data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+              },
+            ],
+            parallel: true,
+            maxConcurrency,
+          }),
+          `maxConcurrency ${String(maxConcurrency)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/maxConcurrency/i);
+      }
+    });
+
+    it('should reject a non-numeric maxConcurrency', async () => {
+      // A destructuring default only covers `undefined`, so JSON null (and any
+      // other non-number) reaches the stride: `0 + null`, `0 + ''` and
+      // `0 + false` all stay 0, which is the same freeze as an explicit 0 — the
+      // capped array keeps that from wedging the worker here.
+      for (const maxConcurrency of ['3', null, '', false]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: capChunkingIterations(
+              [
+                {
+                  id: 'op1',
+                  type: 'analyzeChunk',
+                  data: { chunkId: 'chunk1', snapshotId: 'snap1' },
+                },
+              ],
+              1,
+            ),
+            parallel: true,
+            maxConcurrency,
+          }),
+          `maxConcurrency ${JSON.stringify(maxConcurrency)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/maxConcurrency/i);
+      }
+    });
+
+    it('should still process a valid maxConcurrency', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      const data = {
+        operations: Array.from({ length: 5 }, (_, i) => ({
+          id: `op${i}`,
+          type: 'analyzeChunk',
+          data: { chunkId: `chunk${i}`, snapshotId: 'snap1' },
+        })),
+        parallel: true,
+        maxConcurrency: 2,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze(data),
+        'valid maxConcurrency 2 never returned',
+      );
+
+      // As above: the operations themselves fail, so the batch is a failure.
+      // The count pins that premise; the assertions below are about the stride
+      // covering each entry once.
+      expect(result.success).toBe(false);
+      expect(result.totalOperations).toBe(5);
+      expect(result.failedOperations).toBe(5);
+      expect(result.metadata.maxConcurrency).toBe(2);
+
+      // Every operation is processed exactly once: the chunk stride still
+      // covers the whole array without repeating or dropping an entry.
+      const processedIds = result.results.map(
+        (entry: any) => entry.operationId,
+      );
+      expect(processedIds).toHaveLength(5);
+      expect(new Set(processedIds).size).toBe(5);
+      expect([...processedIds].sort()).toEqual([
+        'op0',
+        'op1',
+        'op2',
+        'op3',
+        'op4',
+      ]);
+    });
+
+    it('should reject a non-finite maxRetries instead of retrying forever', async () => {
+      // JSON `1e999` parses to Infinity, and `retryFailedOperations`'s
+      // `while (retryCount < maxRetries && !success)` never terminates for it:
+      // the loop only leaves an attempt behind by succeeding, so an attempt that
+      // throws is retried forever — a socket client could wedge the host. The
+      // loop cannot be bounded from outside (it parks on a backoff timer between
+      // attempts), so it runs on the fake clock: the invalid value has to be
+      // rejected before the loop is reached, while a value that does reach it is
+      // still retrying after eight rounds and fails the assertion below instead
+      // of hanging the run.
+      const executeAnalysisOperation = jest
+        .spyOn(cliConnectorService as any, 'executeAnalysisOperation')
+        .mockRejectedValue(new Error('Temporary failure'));
+
+      jest.useFakeTimers();
+      try {
+        const outcome = await settleAfterRetryRounds(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [analyzeFileOperation()],
+            parallel: false,
+            retryFailedOperations: true,
+            maxRetries: Number.POSITIVE_INFINITY,
+          }),
+          8,
+        );
+
+        expect(outcome.settled).toBe(true);
+        expect(outcome.result?.success).toBe(false);
+        expect(String(outcome.result?.error?.message)).toMatch(/maxRetries/i);
+        // Rejected up front: before the guard this seam was hit once per
+        // attempt, forever.
+        expect(executeAnalysisOperation).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should reject a maxRetries that is not a non-negative integer', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      for (const maxRetries of [-1, 1.5, '2', Number.NaN]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [analyzeFileOperation()],
+            parallel: false,
+            maxRetries,
+          }),
+          `maxRetries ${String(maxRetries)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/maxRetries/i);
+      }
+    });
+
+    it('should accept maxRetries 0 as "do not retry"', async () => {
+      // 0 is a legitimate value — "do not retry" — so the guard must not reject
+      // it, and it must still reach the retry helper, which then does nothing.
+      mockTerminalApiService.getSnapshotFileContent.mockRejectedValue(
+        new Error('Temporary failure'),
+      );
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+          retryFailedOperations: true,
+          maxRetries: 0,
+        }),
+        'maxRetries 0 was rejected',
+      );
+
+      // The single operation was rejected, so the batch is a failure; that
+      // maxRetries 0 was accepted is asserted by the call count below.
+      expect(result.success).toBe(false);
+      expect(result.failedOperations).toBe(1);
+      // The operation ran once and was never re-executed.
+      expect(
+        mockTerminalApiService.getSnapshotFileContent,
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('should reject an invalid timeout instead of faking a timeout failure', async () => {
+      // `setTimeout` coerces a null, NaN, zero or negative delay to 0 and
+      // overflows Infinity to 1ms, so the race reported a timeout on operations
+      // that had not timed out at all.
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      for (const timeout of [
+        null,
+        Number.NaN,
+        0,
+        -1,
+        Number.POSITIVE_INFINITY,
+        '300000',
+      ]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchAnalyze({
+            operations: [analyzeFileOperation()],
+            parallel: false,
+            timeout,
+          }),
+          `timeout ${String(timeout)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/timeout/i);
+      }
+    });
+
+    it('should reject a timeout above the setTimeout ceiling instead of faking a timeout failure', async () => {
+      // A finite value is not enough: Node clamps a delay above 2147483647ms to
+      // 1ms, so `3e9` passes an "is it a positive finite number" check and still
+      // arms an immediate timer — the same fabricated timeout failure the
+      // validator exists to prevent.
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+          timeout: 3e9,
+        }),
+        'timeout 3e9 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/timeout/i);
+      // The message names the ceiling, so the caller learns what the limit is.
+      expect(result.error.message).toContain('2147483647');
+      // Rejected before any work: an accepted value reaches the operation.
+      expect(
+        mockTerminalApiService.getSnapshotFileContent,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('should still process a positive finite timeout', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+          timeout: 50,
+        }),
+        'valid timeout 50 never returned',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.metadata.timeout).toBe(50);
+      expect(result.results[0].success).toBe(true);
     });
 
     it('should handle operation failures with continueOnError=true', async () => {
@@ -219,10 +703,59 @@ describe('CliConnectorService - Batch Operations', () => {
         data,
       );
 
-      expect(result.success).toBe(true);
+      // The only recorded operation failed and the loop stopped, so the batch
+      // is a failure: "1 of 1 failed" must not read as success just because two
+      // were requested.
+      expect(result.success).toBe(false);
       expect(result.totalOperations).toBe(2);
       expect(result.results).toHaveLength(1); // Should stop after first failure
       expect(result.results[0].success).toBe(false);
+    });
+
+    it('should stop on a handler-level failure when continueOnError=false in the parallel path', async () => {
+      // The parallel twin of the test above. These operations reject at the
+      // handler, but the parallel branch wraps each one in a try/catch and
+      // answers a fulfilled `{ success: false }` instead — so the failure lives
+      // in the settled *value*, not in the settlement. Tracking failures through
+      // `Promise.allSettled`'s rejected branch alone therefore misses every
+      // handler-level failure, and `continueOnError: false` must stop on it
+      // exactly as the sequential branch does.
+      mockTerminalApiService.getSnapshotFileContent
+        .mockRejectedValueOnce(new Error('File not found'))
+        .mockResolvedValue('test content');
+
+      const data = {
+        operations: [
+          {
+            id: 'op1',
+            type: 'analyzeFile',
+            data: { filePath: 'test1.ts', snapshotId: 'snap1' },
+          },
+          {
+            id: 'op2',
+            type: 'analyzeFile',
+            data: { filePath: 'test2.ts', snapshotId: 'snap1' },
+          },
+          {
+            id: 'op3',
+            type: 'analyzeFile',
+            data: { filePath: 'test3.ts', snapshotId: 'snap1' },
+          },
+        ],
+        continueOnError: false,
+        parallel: true,
+        // One operation per chunk: the flag is honoured between chunks, so a
+        // single chunk would run every operation regardless of this change.
+        maxConcurrency: 1,
+      };
+
+      const result = await batchAnalyzeHandler(cliConnectorService)(data);
+
+      // Stopped after the first failure, and the batch reads as a failure:
+      // "1 of 1 failed" must not be dressed up with the successes it never ran.
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].success).toBe(false);
+      expect(result.success).toBe(false);
     });
 
     it('should include performance metrics', async () => {
@@ -241,7 +774,10 @@ describe('CliConnectorService - Batch Operations', () => {
       );
 
       expect(result.performance).toBeDefined();
-      expect(result.performance.totalTime).toBeGreaterThan(0);
+      // See the note on processingTime below: a duration can be 0.
+      expect(typeof result.performance.totalTime).toBe('number');
+      expect(Number.isFinite(result.performance.totalTime)).toBe(true);
+      expect(result.performance.totalTime).toBeGreaterThanOrEqual(0);
       expect(result.performance.averageTimePerOperation).toBeGreaterThan(0);
       expect(result.performance.throughput).toBeGreaterThan(0);
       expect(result.performance.memoryUsage).toBeDefined();
@@ -269,7 +805,8 @@ describe('CliConnectorService - Batch Operations', () => {
         data,
       );
 
-      expect(result.success).toBe(true);
+      // The single operation timed out, so the batch is a failure.
+      expect(result.success).toBe(false);
       expect(result.results[0].success).toBe(false);
       expect(result.results[0].error.message).toContain('timeout');
     });
@@ -426,6 +963,104 @@ describe('CliConnectorService - Batch Operations', () => {
       expect(result.metadata.maxConcurrency).toBe(3);
     });
 
+    it('should reject maxConcurrency 0 instead of looping forever', async () => {
+      // `deduplicateQueries` rebuilds the array before chunking, so the cap has
+      // to be applied to the array the handler actually walks: dedup is off.
+      const data = {
+        queries: capChunkingIterations(
+          [{ id: 'q1', query: 'test query 1' }],
+          1,
+        ),
+        parallel: true,
+        maxConcurrency: 0,
+        deduplicateQueries: false,
+      };
+
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchSearch(data),
+        'maxConcurrency 0 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/maxConcurrency/i);
+      expect(result.error.message).toContain('0');
+    });
+
+    it('should reject a non-finite maxRetries instead of retrying forever', async () => {
+      // Same wedge as the analyze handler: `retryFailedQueries`'s
+      // `while (retryCount < maxRetries && !success)` cannot terminate for
+      // Infinity while the query keeps throwing, so the guard has to reject the
+      // value before that loop is reached.
+      const handleEnhancedSearch = jest
+        .spyOn(cliConnectorService as any, 'handleEnhancedSearch')
+        .mockRejectedValue(new Error('Temporary search failure'));
+
+      jest.useFakeTimers();
+      try {
+        const outcome = await settleAfterRetryRounds(
+          (cliConnectorService as any).handleBatchSearch({
+            queries: [{ id: 'q1', query: 'test query' }],
+            parallel: false,
+            retryFailedQueries: true,
+            maxRetries: Number.POSITIVE_INFINITY,
+          }),
+          8,
+        );
+
+        expect(outcome.settled).toBe(true);
+        expect(outcome.result?.success).toBe(false);
+        expect(String(outcome.result?.error?.message)).toMatch(/maxRetries/i);
+        expect(handleEnhancedSearch).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should reject an invalid timeout instead of faking a timeout failure', async () => {
+      for (const timeout of [
+        null,
+        Number.NaN,
+        0,
+        -1,
+        Number.POSITIVE_INFINITY,
+        '300000',
+      ]) {
+        const result = await withHandlerTimeout(
+          (cliConnectorService as any).handleBatchSearch({
+            queries: [{ id: 'q1', query: 'test query' }],
+            parallel: false,
+            timeout,
+          }),
+          `timeout ${String(timeout)} was not rejected`,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error.message).toMatch(/timeout/i);
+      }
+    });
+
+    it('should reject a timeout above the setTimeout ceiling instead of faking a timeout failure', async () => {
+      // Same ceiling as the analyze handler: the value is finite and positive,
+      // but Node clamps a delay above 2147483647ms to 1ms, so accepting it arms
+      // an immediate timer and fabricates the timeout failure.
+      const result = await withHandlerTimeout(
+        (cliConnectorService as any).handleBatchSearch({
+          queries: [{ id: 'q1', query: 'test query' }],
+          parallel: false,
+          timeout: 3e9,
+        }),
+        'timeout 3e9 was not rejected',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error.message).toMatch(/timeout/i);
+      expect(result.error.message).toContain('2147483647');
+      // Rejected before any search: an accepted value reaches the service.
+      expect(
+        mockSemanticSearchService.searchCodeEnhanced,
+      ).not.toHaveBeenCalled();
+    });
+
     it('should deduplicate queries when enabled', async () => {
       const data = {
         queries: [
@@ -473,7 +1108,10 @@ describe('CliConnectorService - Batch Operations', () => {
       const result = await (cliConnectorService as any).handleBatchSearch(data);
 
       expect(result.performance).toBeDefined();
-      expect(result.performance.totalTime).toBeGreaterThan(0);
+      // See the note on processingTime below: a duration can be 0.
+      expect(typeof result.performance.totalTime).toBe('number');
+      expect(Number.isFinite(result.performance.totalTime)).toBe(true);
+      expect(result.performance.totalTime).toBeGreaterThanOrEqual(0);
       expect(result.performance.averageTimePerQuery).toBeGreaterThan(0);
       expect(result.performance.throughput).toBeGreaterThan(0);
       expect(result.performance.memoryUsage).toBeDefined();
@@ -492,9 +1130,59 @@ describe('CliConnectorService - Batch Operations', () => {
 
       const result = await (cliConnectorService as any).handleBatchSearch(data);
 
-      expect(result.success).toBe(true);
+      // The single query timed out, so the batch is a failure.
+      expect(result.success).toBe(false);
       expect(result.results[0].success).toBe(false);
       expect(result.results[0].error.message).toContain('timeout');
+    });
+  });
+
+  describe('timeout timer cleanup', () => {
+    beforeEach(() => {
+      mockTerminalApiService.getSnapshotFileContent.mockResolvedValue(
+        'test content',
+      );
+      mockSemanticSearchService.searchCodeEnhanced.mockResolvedValue([]);
+    });
+
+    /**
+     * Each of the four timeout races armed a timer and dropped the handle as
+     * soon as the raced work won, so a batch of N operations left N timers
+     * pending — the leak that kept the jest worker alive until it was force
+     * exited. The fake clock makes the count observable: it has to be back to
+     * zero after every call, in the parallel and the sequential path of both
+     * handlers, with the operation resolving immediately (so the timeout never
+     * fires and only the cleanup can retire the timer).
+     */
+    it('should clear the timeout timer once the raced operation settles', async () => {
+      jest.useFakeTimers();
+      try {
+        await (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: true,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+
+        await (cliConnectorService as any).handleBatchAnalyze({
+          operations: [analyzeFileOperation()],
+          parallel: false,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+
+        await (cliConnectorService as any).handleBatchSearch({
+          queries: [{ id: 'q1', query: 'test query' }],
+          parallel: true,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+
+        await (cliConnectorService as any).handleBatchSearch({
+          queries: [{ id: 'q1', query: 'test query' }],
+          parallel: false,
+        });
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 
@@ -663,6 +1351,59 @@ describe('CliConnectorService - Batch Operations', () => {
         percentage: 50,
         timestamp: expect.any(Number),
       });
+    });
+  });
+
+  describe('getStatus', () => {
+    /**
+     * `status.currentSnapshot` is the snapshot's *identity*: the standalone
+     * client sends `getCurrentSnapshot()?.id`, and `cli/src/client.ts` types the
+     * field `string | null`. The IPC payload has to send the same thing, or one
+     * field of one command means two different things depending on whether an
+     * extension happens to be connected. Descriptions are display text (empty or
+     * duplicated is normal), so a caller cannot branch on them.
+     */
+    it('reports the snapshot id, not its description, over IPC', async () => {
+      mockTerminalApiService.getWorkspaceInfo.mockResolvedValue({
+        workspaceRoot: '/test/workspace',
+        totalSnapshots: 3,
+        currentSnapshotIndex: 2,
+        currentSnapshot: {
+          id: 'snapshot-123',
+          description: 'before refactor',
+          timestamp: 1,
+          files: {},
+        },
+      });
+
+      // Drive the request dispatcher, exactly as the CLI's IPC client does.
+      const response = await (cliConnectorService as any).handleCliRequest({
+        id: 'status-request',
+        method: 'getStatus',
+        data: {},
+      });
+
+      expect(response.success).toBe(true);
+      expect(response.result.currentSnapshot).toBe('snapshot-123');
+      expect(response.result.currentSnapshot).not.toBe('before refactor');
+    });
+
+    it('reports null when the workspace has no current snapshot', async () => {
+      mockTerminalApiService.getWorkspaceInfo.mockResolvedValue({
+        workspaceRoot: '/test/workspace',
+        totalSnapshots: 0,
+        currentSnapshotIndex: -1,
+        currentSnapshot: undefined,
+      });
+
+      const response = await (cliConnectorService as any).handleCliRequest({
+        id: 'status-request',
+        method: 'getStatus',
+        data: {},
+      });
+
+      expect(response.success).toBe(true);
+      expect(response.result.currentSnapshot).toBeNull();
     });
   });
 });

@@ -1,8 +1,44 @@
-import * as vscode from 'vscode';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import * as javaParser from 'java-parser';
 import * as Parser from 'web-tree-sitter'; // Added tree-sitter for better parsing
 import { log, logVerbose } from '../logger';
+import {
+  getSemanticSearchChunkOverlap,
+  getSemanticSearchChunkSize,
+} from '../config';
+
+/**
+ * Builds a vector-store record key for a chunk.
+ *
+ * Includes the full workspace-relative path and a content hash. The previous
+ * scheme used `path.basename` only, so `src/a/util.js` and `src/b/util.js`
+ * produced the same key and the second silently overwrote the first in the
+ * vector store, while the embedding cache served the first one's vector for
+ * the second one's content.
+ *
+ * `relativePath` must be workspace-relative, not absolute: an absolute path
+ * would make the key machine-specific and would write the user's directory
+ * layout into a remote vector store.
+ */
+export function buildChunkId(
+  snapshotId: string,
+  relativePath: string,
+  startLine: number,
+  endLine: number,
+  content: string,
+): string {
+  const normalizedPath = relativePath.replace(/\\/g, '/');
+  const contentHash = crypto
+    .createHash('sha1')
+    .update(content, 'utf8')
+    .digest('hex')
+    .slice(0, 12);
+  return `${snapshotId}_${normalizedPath}_${startLine}-${endLine}_${contentHash}`.replace(
+    /[^a-zA-Z0-9_.-]/g,
+    '_',
+  );
+}
 
 export interface CodeChunk {
   id: string;
@@ -36,24 +72,17 @@ interface AstNode {
 }
 
 export class CodeChunker {
-  private readonly chunkSize: number;
-  private readonly chunkOverlap: number;
+  // Not readonly: `refreshConfig` re-reads both when the setting changes, which
+  // is what removes the Reload Window requirement.
+  private chunkSize = 0;
+  private chunkOverlap = 0;
   private treeSitterParsers: Map<string, Parser.Parser> = new Map();
   private parserInitialized = false;
 
   constructor() {
-    const config = vscode.workspace.getConfiguration(
-      'vscode-snapshots.semanticSearch',
-    );
-
-    // Increase default chunk size for better context
-    this.chunkSize = Math.max(10, config.get<number>('chunkSize', 250));
-
-    // Increase default overlap for better continuity
-    this.chunkOverlap = Math.max(
-      0,
-      Math.min(config.get<number>('chunkOverlap', 100), this.chunkSize - 5),
-    );
+    // Resolution lives in `refreshConfig`, which the owning services also call
+    // from their configuration listener; one path for both reads.
+    this.refreshConfig();
 
     // Only log in non-test environment
     if (process.env.NODE_ENV !== 'test') {
@@ -68,6 +97,24 @@ export class CodeChunker {
         log(`Parser initialization error: ${error}`);
       });
     }
+  }
+
+  /**
+   * Re-read the chunker's line-count settings.
+   *
+   * Both values are captured in fields rather than read per chunking run, so
+   * without this a changed setting only applied after a Reload Window. The
+   * services that own a chunker call it from a
+   * `workspace.onDidChangeConfiguration` listener.
+   */
+  public refreshConfig(): void {
+    // The clamps are the constructor's: at least ten lines per chunk, and an
+    // overlap that leaves at least five lines of progress.
+    this.chunkSize = Math.max(10, getSemanticSearchChunkSize());
+    this.chunkOverlap = Math.max(
+      0,
+      Math.min(getSemanticSearchChunkOverlap(), this.chunkSize - 5),
+    );
   }
 
   /**
@@ -798,10 +845,7 @@ export class CodeChunker {
     const ELine = Math.max(SLine, endLine);
 
     return {
-      id: `${snapshotId}_${path.basename(filePath)}_${SLine}-${ELine}`.replace(
-        /[^a-zA-Z0-9_.-]/g,
-        '_',
-      ),
+      id: buildChunkId(snapshotId, filePath, SLine, ELine, content),
       content,
       filePath,
       startLine: SLine,
@@ -1634,13 +1678,23 @@ export class CodeChunker {
             ),
           ].join('\n');
 
-          // Add the chunk with context
+          // Add the chunk with context. The reported range covers the text that
+          // was embedded, not just the current chunk: the first line of
+          // `overlapContent` is `fileLines[prevContextStartLine]` and its last is
+          // `fileLines[currentChunk.endLine]`. Reporting only the current chunk
+          // pointed every consumer of the range -- the CLI snippet, a search
+          // result's startLine, and the range that names the chunk id -- at lines
+          // that had not been ranked. The `// ...` line stands for the elided
+          // middle, so the reported range is a superset of the embedded text.
+          // The range cannot represent the embedded text exactly: the separator is
+          // not a line of the file, and the elided middle it stands for lies
+          // inside the range but is absent from the content.
           finalChunks.push(
             this.createChunk(
               currentChunk.filePath,
               overlapContent,
               currentChunk.snapshotId,
-              currentChunk.startLine,
+              prevContextStartLine,
               currentChunk.endLine,
               currentChunk.metadata.language,
               currentChunk.metadata.symbols || [],
@@ -1684,18 +1738,27 @@ export class CodeChunker {
       let chunkStartLine = 0;
 
       for (const breakpoint of logicalBreakpoints) {
-        // Skip invalid breakpoints
-        if (breakpoint <= chunkStartLine || breakpoint >= lines.length) {
+        // `breakpoint >= lines.length` must NOT be skipped: findFileBreakpoints
+        // always appends lineCount as its final breakpoint, so skipping it
+        // discarded every line after the last section marker -- and for a file
+        // with no interior breakpoints (every .json) it discarded the whole
+        // file, producing zero chunks. The clamp below keeps the slice in range.
+        if (breakpoint <= chunkStartLine) {
+          continue;
+        }
+
+        const effectiveEnd = Math.min(breakpoint, lines.length);
+        if (effectiveEnd <= chunkStartLine) {
           continue;
         }
 
         // Get the chunk content
-        const chunkLines = lines.slice(chunkStartLine, breakpoint);
+        const chunkLines = lines.slice(chunkStartLine, effectiveEnd);
         const chunkContent = chunkLines.join('\n');
 
         // Skip empty chunks
         if (chunkContent.trim() === '') {
-          chunkStartLine = breakpoint;
+          chunkStartLine = effectiveEnd;
           continue;
         }
 
@@ -1709,7 +1772,7 @@ export class CodeChunker {
             chunkContent,
             snapshotId,
             chunkStartLine,
-            breakpoint - 1,
+            effectiveEnd - 1,
             language,
             symbols,
             imports,
@@ -1717,21 +1780,13 @@ export class CodeChunker {
         );
 
         // Move to the next chunk
-        chunkStartLine = breakpoint;
+        chunkStartLine = effectiveEnd;
       }
-    } else {
-      // Create fixed-size chunks with overlap if no logical breakpoints found
-      const fixedChunks = this.createFixedSizeChunks(
-        filePath,
-        lines,
-        snapshotId,
-        language,
-        imports,
-      );
-      fixedChunks.forEach((chunk) => {
-        chunks.push(chunk);
-      });
     }
+    // The former `else` branch called createFixedSizeChunks. It was
+    // unreachable: findFileBreakpoints seeds its result with 0 and appends
+    // lineCount, so logicalBreakpoints always holds at least [0, lineCount]
+    // for a non-empty file, and the caller rejects empty content.
 
     // Apply overlap with improved context preservation
     const finalChunks = this.applyChunkOverlapping(
@@ -1748,6 +1803,11 @@ export class CodeChunker {
 
   /**
    * Create fixed-size chunks with overlap
+   *
+   * Currently unused: its only caller was a branch in `chunkByLines` that
+   * could not be reached, because `findFileBreakpoints` always returns at
+   * least [0, lineCount]. Kept as a genuine fixed-window fallback for a future
+   * caller rather than deleted.
    */
   private createFixedSizeChunks(
     filePath: string,

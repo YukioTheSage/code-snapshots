@@ -9,6 +9,54 @@ import { pathMatchesPattern } from '../utils';
 // --- Helper Functions for Grouping ---
 
 /**
+ * Builds a tree item label.
+ *
+ * `TreeItemLabel` carries no `supportThemeIcons` flag, so `$(name)` sequences
+ * are rendered as literal text in labels and descriptions -- the user saw
+ * "$(star-full) 16:04:22". Icons belong in `TreeItem.iconPath`, which is
+ * already set for every item here (star-full for favorites, filter for
+ * selective), so `favorite` is accepted but deliberately not rendered.
+ */
+export function formatTreeLabel(parts: {
+  favorite?: boolean;
+  selective?: boolean;
+  time: string;
+}): string {
+  let label = parts.time;
+  if (parts.selective) {
+    label += ' (Selective)';
+  }
+  return label;
+}
+
+const CHANGE_TYPE_SUFFIX: Record<string, string> = {
+  added: 'A',
+  modified: 'M',
+  deleted: 'D',
+};
+
+/**
+ * Builds a tree item description.
+ *
+ * Same constraint as `formatTreeLabel`: no codicon rendering here either. The
+ * change type is spelled with a letter rather than `$(diff-modified)`, and the
+ * matching ThemeIcon is still set on the item.
+ */
+export function formatTreeDescription(parts: {
+  directory: string;
+  changeType?: string;
+}): string {
+  const suffix = parts.changeType
+    ? CHANGE_TYPE_SUFFIX[parts.changeType]
+    : undefined;
+  const directory = parts.directory === '.' ? '' : parts.directory;
+  if (!suffix) {
+    return directory;
+  }
+  return directory ? `${directory}  ${suffix}` : suffix;
+}
+
+/**
  * Determines the relative date group (Today, Yesterday, etc.) for a timestamp.
  * @param timestamp The timestamp to group.
  * @returns The name of the date group.
@@ -41,6 +89,41 @@ function getRelativeDateGroup(timestamp: number): string {
 const GROUP_ORDER = ['Today', 'Yesterday', 'This Week', 'Last Week', 'Older'];
 
 /**
+ * A non-interactive row explaining an empty view.
+ *
+ * `getChildren` previously returned an empty array whenever the filters
+ * excluded everything, so both views rendered blank with no indication of
+ * whether the store was empty, the filters were too narrow, or the extension
+ * was broken. `contextValue` is 'emptyState', which matches no menu entry, and
+ * no command is attached, so clicking the row does nothing.
+ */
+function createEmptyStateItem(label: string, detail: string): SnapshotTreeItem {
+  const item = new SnapshotTreeItem(
+    undefined,
+    false,
+    undefined as unknown as SnapshotManager,
+    undefined,
+    label,
+    [],
+    detail,
+  );
+  item.contextValue = 'emptyState';
+  item.command = undefined;
+  item.iconPath = new vscode.ThemeIcon('info');
+  item.collapsibleState = vscode.TreeItemCollapsibleState.None;
+  // The group branch is skipped for an empty group list, so the label and
+  // tooltip are set here rather than through the constructor's group path.
+  item.label = label;
+  item.tooltip = detail;
+  item.description = undefined;
+  item.accessibilityInformation = {
+    label: `${label}. ${detail}`,
+    role: 'treeitem',
+  };
+  return item;
+}
+
+/**
  * Enum defining the types of snapshots a view can display.
  */
 export enum SnapshotType {
@@ -56,7 +139,7 @@ export enum SnapshotType {
  * Manages filtering and grouping of snapshots.
  */
 export class SnapshotTreeDataProvider
-  implements vscode.TreeDataProvider<SnapshotTreeItem>
+  implements vscode.TreeDataProvider<SnapshotTreeItem>, vscode.Disposable
 {
   private _onDidChangeTreeData: vscode.EventEmitter<
     SnapshotTreeItem | undefined | null | void
@@ -75,6 +158,14 @@ export class SnapshotTreeDataProvider
 
   private snapshotTypeFilter: SnapshotType; // Type of snapshots this provider shows (MANUAL or AUTO)
   private viewName: string; // For logging ("Manual" or "Auto")
+
+  /**
+   * Every subscription this provider registers. Both listeners below were
+   * previously registered and dropped on the floor: the configuration listener's
+   * return value was discarded, and the class had no `dispose()` at all, so the
+   * listeners outlived the provider and kept firing into a dead tree.
+   */
+  private disposables: vscode.Disposable[] = [];
 
   /**
    * Creates an instance of SnapshotTreeDataProvider.
@@ -102,27 +193,44 @@ export class SnapshotTreeDataProvider
     log(`Initializing TreeDataProvider for ${this.viewName} view.`);
 
     // Listen for changes in the snapshot manager to refresh the tree
-    snapshotManager.onDidChangeSnapshots(() => {
-      logVerbose(
-        `(${this.viewName} View) Snapshots changed event received, refreshing tree.`,
-      );
-      this.refresh();
-    });
-
-    // Listen for configuration changes relevant to this view
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('vscode-snapshots.showOnlyChangedFiles')) {
-        this.showOnlyChangedFiles = getShowOnlyChangedFiles();
+    this.disposables.push(
+      snapshotManager.onDidChangeSnapshots(() => {
         logVerbose(
-          `(${this.viewName} View) showOnlyChangedFiles config changed to ${this.showOnlyChangedFiles}, refreshing tree.`,
+          `(${this.viewName} View) Snapshots changed event received, refreshing tree.`,
         );
         this.refresh();
-      }
-      // Add listener for other config changes if needed in the future
-    });
+      }),
+    );
+
+    // Listen for configuration changes relevant to this view
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('vscode-snapshots.showOnlyChangedFiles')) {
+          this.showOnlyChangedFiles = getShowOnlyChangedFiles();
+          logVerbose(
+            `(${this.viewName} View) showOnlyChangedFiles config changed to ${this.showOnlyChangedFiles}, refreshing tree.`,
+          );
+          this.refresh();
+        }
+        // Add listener for other config changes if needed in the future
+      }),
+    );
 
     // Initialize with current configuration value
     this.showOnlyChangedFiles = getShowOnlyChangedFiles();
+  }
+
+  /**
+   * Releases every subscription this provider holds, including the tree-data
+   * event emitter. Without this the provider stays referenced by the workspace
+   * and the snapshot manager after its view is gone.
+   */
+  dispose(): void {
+    for (const d of this.disposables) {
+      d.dispose();
+    }
+    this.disposables = [];
+    this._onDidChangeTreeData.dispose();
   }
 
   /**
@@ -138,8 +246,15 @@ export class SnapshotTreeDataProvider
    * @param snapshot The snapshot to check.
    * @returns True if it's an auto snapshot, false otherwise.
    */
+  /**
+   * Whether a snapshot was made by the extension rather than by hand.
+   *
+   * Tags only. A description substring used to decide this as well, which meant
+   * `"Fix auto-snapshot rule bug"` moved a hand-made snapshot out of the Manual
+   * view. Every machine-made snapshot already carries a tag naming its trigger,
+   * so the fallback only ever misfiled.
+   */
   private isAutoSnapshot(snapshot: Snapshot): boolean {
-    // Check for specific tags used by auto-snapshot features
     const autoTags = [
       'auto',
       'timed',
@@ -148,14 +263,7 @@ export class SnapshotTreeDataProvider
       'time-triggered',
       'save-triggered',
     ];
-    if (snapshot.tags?.some((tag) => autoTags.includes(tag))) {
-      return true;
-    }
-    // Fallback check on description (less reliable)
-    if (snapshot.description?.toLowerCase().includes('auto-snapshot')) {
-      return true;
-    }
-    return false;
+    return snapshot.tags?.some((tag) => autoTags.includes(tag)) ?? false;
   }
 
   /**
@@ -267,7 +375,9 @@ export class SnapshotTreeDataProvider
       activeFilters.push('Date');
     }
     if (this.filterTags.length > 0) {
-      activeFilters.push(`Tags (${this.filterTags.length})`);
+      // Named, not counted: "Tags (1)" does not tell the user which tag is
+      // hiding their snapshots, which is the only thing they need to know.
+      activeFilters.push(`Tags: ${this.filterTags.join(', ')}`);
     }
     if (this.filterFavoritesOnly) {
       activeFilters.push('Favorites');
@@ -442,19 +552,17 @@ export class SnapshotTreeDataProvider
 
       // --- Get Children of a Group Item (Snapshots) ---
       if (element.contextValue === 'snapshotGroup' && element.groupSnapshots) {
-        const currentIndex = this.snapshotManager.getCurrentSnapshotIndex();
         // Snapshots within the group are already filtered, just need to sort and map
         const sortedSnapshots = [...element.groupSnapshots].sort(
           (a, b) => b.timestamp - a.timestamp, // Newest first within group
         );
 
         const snapshotItems = sortedSnapshots.map((snapshot) => {
-          const index = this.snapshotManager
-            .getSnapshots()
-            .findIndex((s) => s.id === snapshot.id);
           return new SnapshotTreeItem(
             snapshot,
-            index === currentIndex, // Check if this snapshot is the globally current one
+            // Identity, not position: the list is pruned and re-sorted, so an
+            // index captured earlier can name a different snapshot later.
+            this.snapshotManager.isSnapshotActive(snapshot.id),
             this.snapshotManager,
           );
         });
@@ -563,6 +671,31 @@ export class SnapshotTreeDataProvider
       logVerbose(
         `${currentLogPrefix} Returning ${groupItems.length} top-level group items.`,
       );
+
+      if (groupItems.length === 0) {
+        // `countBeforeUserFilters` is the count after the manual/auto split, so
+        // a non-zero value here means the user's filters are what emptied the
+        // view -- not that the view has nothing of its own kind to show.
+        if (countBeforeUserFilters > 0) {
+          return Promise.resolve([
+            createEmptyStateItem(
+              'No snapshots match the active filters',
+              `${this.getActiveFiltersDescription()}. Use "Snapshots: Clear All Filters" to reset.`,
+            ),
+          ]);
+        }
+
+        const isAutoView = this.snapshotTypeFilter === SnapshotType.AUTO;
+        return Promise.resolve([
+          createEmptyStateItem(
+            isAutoView ? 'No auto snapshots yet' : 'No snapshots yet',
+            isAutoView
+              ? 'Auto snapshots come from the autoSnapshotInterval setting and from auto-snapshot rules.'
+              : 'Take a snapshot with Ctrl+Alt+S.',
+          ),
+        ]);
+      }
+
       return Promise.resolve(groupItems);
     }
   }
@@ -673,19 +806,28 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       // Set icon and description based on the calculated changeType
       switch (changeType) {
         case 'added':
-          description = `${dirDisplay} $(diff-added)`; // Use standard icons
+          description = formatTreeDescription({
+            directory: dirDisplay,
+            changeType,
+          });
           iconPath = new vscode.ThemeIcon('diff-added');
           break;
         case 'modified':
-          description = `${dirDisplay} $(diff-modified)`;
+          description = formatTreeDescription({
+            directory: dirDisplay,
+            changeType,
+          });
           iconPath = new vscode.ThemeIcon('diff-modified');
           break;
         case 'deleted':
-          description = `${dirDisplay} $(diff-removed)`;
+          description = formatTreeDescription({
+            directory: dirDisplay,
+            changeType,
+          });
           iconPath = new vscode.ThemeIcon('diff-removed');
           break;
         default: // Undefined changeType means unchanged relative to previous
-          description = dirDisplay;
+          description = formatTreeDescription({ directory: dirDisplay });
           iconPath = vscode.ThemeIcon.File;
       }
 
@@ -776,11 +918,14 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       contextValue = 'snapshotItem';
       id = snapshot.id; // Use snapshot ID as the tree item ID
 
-      // Build label with favorite and selective indicators
-      let labelPrefix = '';
-      if (snapshot.isFavorite) labelPrefix += '$(star-full) ';
-      label = `${labelPrefix}${formattedTime}`;
-      if (snapshot.isSelective) label += ' (Selective)';
+      // Build label with the selective indicator as text; the favorite and
+      // current markers are icons (see the icon logic below), so repeating
+      // them as $(name) here would only render as literal text.
+      label = formatTreeLabel({
+        favorite: snapshot.isFavorite,
+        selective: snapshot.isSelective,
+        time: formattedTime,
+      });
 
       // Build description string with various context pieces
       const descParts: string[] = [];
@@ -790,10 +935,22 @@ export class SnapshotTreeItem extends vscode.TreeItem {
         baseDescription = `[${snapshot.taskReference}] ${baseDescription}`;
       descParts.push(baseDescription);
       if (snapshot.tags && snapshot.tags.length > 0) {
-        descParts.push(`$(tag) ${snapshot.tags.length}`); // Show tag count
+        descParts.push(
+          `${snapshot.tags.length} tag${snapshot.tags.length === 1 ? '' : 's'}`,
+        );
       }
       if (snapshot.gitBranch) {
-        descParts.push(`$(git-branch) ${snapshot.gitBranch}`);
+        descParts.push(`on ${snapshot.gitBranch}`);
+      }
+      // Detection is worthless if it stays in the log: mark snapshots whose
+      // history is incomplete so the state is visible before a restore is
+      // attempted, not discovered afterwards. Plain text, because a description
+      // renders $(warning) literally.
+      const unrecoverable = snapshotManager.getUnrecoverableFilesFor(
+        snapshot.id,
+      );
+      if (unrecoverable.length > 0) {
+        descParts.push(`${unrecoverable.length} unreadable`);
       }
       // Join parts with a separator for readability
       description = descParts.join('  |  ');
@@ -845,6 +1002,11 @@ export class SnapshotTreeItem extends vscode.TreeItem {
       } else {
         snapshotTooltip.appendMarkdown(
           `**Changes:** None detected relative to previous snapshot.\n\n`,
+        );
+      }
+      if (unrecoverable.length > 0) {
+        snapshotTooltip.appendMarkdown(
+          `\n$(warning) **${unrecoverable.length} file(s) in this snapshot cannot be restored** — their history is incomplete. Affected paths are listed when you restore or compare.\n\n`,
         );
       }
       snapshotTooltip.appendMarkdown(
@@ -953,11 +1115,22 @@ export class SnapshotTreeItem extends vscode.TreeItem {
         role: 'treeitem',
       };
     } else if (snapshot && relativePath) {
-      // File item
+      // File item. The change type was carried only by a theme icon and a
+      // hover-only tooltip, so a screen-reader user could not tell an added
+      // file from a deleted one.
+      const changeWord =
+        changeType === 'added'
+          ? 'added'
+          : changeType === 'modified'
+          ? 'modified'
+          : changeType === 'deleted'
+          ? 'deleted'
+          : 'unchanged';
+      const dir = path.dirname(relativePath);
       this.accessibilityInformation = {
-        label: `${changeType || 'File'} ${path.basename(
-          relativePath,
-        )} in directory ${path.dirname(relativePath)} from snapshot ${
+        label: `${changeWord} file ${path.basename(relativePath)}${
+          dir === '.' ? '' : ` in directory ${dir}`
+        }, from snapshot ${
           snapshot.description || snapshot.id.substring(0, 8)
         }`,
         role: 'treeitem',

@@ -32,7 +32,7 @@ CodeLapse and Git serve different but complementary purposes in your development
 - **Experimenting with code** - Take quick snapshots as you try different approaches (`Ctrl+Alt+S`).
 - **Between Git commits** - Create frequent checkpoints as you work toward your next commit.
 - **Learning or exploring unfamiliar code** - Snapshot before making changes to understand behavior.
-- **Before risky operations** - **Strongly Recommended**: Snapshot _before_ Git operations like `merge`, `rebase`, or `pull` (see automatic option below).
+- **Before risky operations** - **Strongly Recommended**: Snapshot _before_ Git operations like `merge`, `rebase`, or `pull`. Do it by hand with `Ctrl+Alt+S`; there is no automatic option (see the note under *Tips for Integration*).
 - **During debugging sessions** - Capture states as you track down bugs.
 - **When you need a quick safety net** - One keystroke for peace of mind.
 - **For personal "save points"** - Create personal checkpoints that don't belong in the formal Git history.
@@ -123,7 +123,7 @@ Sometimes, a snapshot represents a stable state you want to formally add to your
 1. **Use meaningful descriptions** for snapshots that reference Git context (e.g., "Before merging PR #42", "Clean state after pull").
 2. **Take snapshots _before_ Git operations** that modify your working directory (pull, merge, rebase, stash apply, checkout with changes).
 
-- **Automate This!** Enable the setting `vscode-snapshots.git.autoSnapshotBeforeOperation` (default is `false`). When enabled, the extension will automatically take a snapshot (with a description like "Auto-snapshot before git.pull") _before_ you run `git pull`, `git merge`, or `git rebase` using the VS Code Git UI or commands. This provides a crucial safety net. If the snapshot fails, a warning is shown, but the Git operation proceeds.
+- **There is no automatic "before Git operation" snapshot.** An earlier version of this guide described the setting `git.autoSnapshotBeforeOperation` as a safety net. It was not one: the extension registered interception handlers under private command ids that nothing ever invoked, and re-registering a command id in another extension does not take over the built-in Git extension's execution path. Both the setting and the dead registration have been removed. Take the snapshot explicitly instead — `Ctrl+Alt+S` before the operation, or `codelapse git auto-commit pull`, which works in either mode, with or without the extension running. See the [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 3. **Use Rule-Based Auto-Snapshots**: Configure rules (via `vscode-snapshots.autoSnapshot.rules` setting or the "Manage Auto-Snapshot Rules" command) to automatically snapshot important files (e.g., configuration files, core modules) at specific intervals when they change.
 4. **Clean up old snapshots** periodically after related changes are safely committed to Git to save space (Right-click -> Delete in Tree View).

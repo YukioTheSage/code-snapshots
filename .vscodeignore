@@ -19,6 +19,8 @@ gg.py
 scripts/**
 .github/**
 node_modules/**
+**/node_modules/**
+shared/**
 dist/**/*.map
 cli/**
 .cursor/**

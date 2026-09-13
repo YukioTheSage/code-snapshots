@@ -24,7 +24,14 @@ import {
   ResponseSuggestion,
 } from '../types/enhancedSearch';
 import { SemanticSearchResult } from './semanticSearchService';
-import { QualityMetrics, ContextInfo } from '../types/enhancedChunking';
+import {
+  QualityMetrics,
+  ContextInfo,
+  ArchitecturalLayer,
+} from '../types/enhancedChunking';
+import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
+import { filePathMatchesPattern } from '../utils/pathMatching';
+import { classifyArchitecturalLayer } from './architecturalLayer';
 
 /**
  * Ranking configuration for multi-criteria ranking
@@ -247,24 +254,41 @@ export class ResultManager {
       ),
     }));
 
-    // Sort by composite score (descending)
-    scoredResults.sort((a, b) => b.compositeScore - a.compositeScore);
-
     // Apply boost and penalty factors
     const adjustedResults = this.applyBoostAndPenaltyFactors(
       scoredResults,
       rankingConfig,
     );
 
-    // Normalize scores if requested
-    if (rankingConfig.normalizeScores) {
-      this.normalizeScores(adjustedResults);
-    }
+    // Sort by composite score (descending). This belongs *after* the factors:
+    // a boost or a penalty changes a result's composite, so sorting first
+    // returned results ordered by a composite they no longer had. It was
+    // already reachable under the old arithmetic, which multiplied each
+    // multiplier by its own weight: `find_examples`' `hasTests` boost was
+    // 1.3 x 0.8 = 1.04 and `debug_issue`'s `hasErrorHandling` boost
+    // 1.4 x 0.9 = 1.26, and both conditions fire on ordinary source text.
+    // (`analyze_quality`'s 1.5x is *not* further evidence: its
+    // `highQualityScore` condition reads `toRatio(readabilityScore) > 0.8`
+    // against the constant `70` every result carries, so it cannot fire while
+    // the metrics are constant -- and it never has.)
+    adjustedResults.sort((a, b) => b.compositeScore - a.compositeScore);
 
-    // Filter by minimum threshold
+    // Filter by the minimum threshold FIRST, on the un-normalized composite.
+    // The composite is an absolute [0, 1] score -- a weighted sum whose weights
+    // total 1 -- so a floor of 0.1 is a real floor. Filtering after
+    // normalization was not: normalization maps the lowest score to exactly 0,
+    // so `0 >= 0.1` is false and the last result was discarded on every search
+    // no matter how good it was.
     const thresholdResults = adjustedResults.filter(
       (item) => item.compositeScore >= rankingConfig.minScoreThreshold,
     );
+
+    // Normalize the survivors. Normalization is a ranking device -- it makes
+    // rankingScore comparable across a result set -- and it is monotone, so it
+    // cannot change the order the sort above established.
+    if (rankingConfig.normalizeScores) {
+      this.normalizeScores(thresholdResults);
+    }
 
     logVerbose(
       `Ranked ${results.length} results, ${thresholdResults.length} passed threshold`,
@@ -272,7 +296,10 @@ export class ResultManager {
 
     return thresholdResults.map((item) => ({
       ...item.result,
-      score: item.compositeScore, // Update the score with composite score
+      // Normalization is a ranking device: it makes composite scores
+      // comparable across a result set and must not overwrite `score`, which
+      // is surfaced to the user and to API consumers as a similarity.
+      rankingScore: item.compositeScore,
     }));
   }
 
@@ -436,24 +463,12 @@ export class ResultManager {
   ): Promise<EnhancedSemanticSearchResult[]> {
     return Promise.all(
       results.map(async (result) => {
-        // Create default quality metrics
-        const qualityMetrics: QualityMetrics = {
-          overallScore: 70,
-          readabilityScore: 0.7,
-          testCoverage: undefined,
-          documentationRatio: 0.5,
-          duplicationRisk: 0.3,
-          performanceRisk: 0.2,
-          securityRisk: 0.15,
-          maintainabilityScore: 75,
-          technicalDebt: {
-            estimatedFixTime: 2,
-            severity: 'low',
-            categories: [],
-            issues: [],
-          },
-          styleComplianceScore: 80,
-        };
+        // A result that carries metrics of its own is ranked on them; the
+        // constant remains only as the fallback for results that carry none,
+        // which is what it was always meant to be.
+        const qualityMetrics: QualityMetrics = result.qualityMetrics
+          ? { ...result.qualityMetrics }
+          : { ...DEFAULT_QUALITY_METRICS };
 
         // Create default context info
         const contextInfo: ContextInfo = {
@@ -569,7 +584,8 @@ export class ResultManager {
       // Quality threshold filter
       if (
         criteria.qualityThreshold &&
-        result.qualityMetrics.readabilityScore < criteria.qualityThreshold
+        toRatio(result.qualityMetrics.readabilityScore) <
+          criteria.qualityThreshold
       ) {
         return false;
       }
@@ -608,6 +624,32 @@ export class ResultManager {
       if (criteria.excludeCodeSmells && criteria.excludeCodeSmells.length > 0) {
         // This would need to be implemented with actual code smell detection
         // For now, we'll skip this filter
+      }
+
+      // File path patterns. The producer is
+      // `QueryProcessor.determineFilters`, which sets `includeFilePatterns` from
+      // the language context and `excludeFilePatterns` for
+      // `find_implementation`; before this both were written and read nowhere,
+      // so "exclude test files for implementation searches" was configuration
+      // reading as a working rule.
+      if (
+        criteria.includeFilePatterns &&
+        criteria.includeFilePatterns.length > 0 &&
+        !criteria.includeFilePatterns.some((pattern: string) =>
+          filePathMatchesPattern(result.filePath, pattern),
+        )
+      ) {
+        return false;
+      }
+
+      if (
+        criteria.excludeFilePatterns &&
+        criteria.excludeFilePatterns.length > 0 &&
+        criteria.excludeFilePatterns.some((pattern: string) =>
+          filePathMatchesPattern(result.filePath, pattern),
+        )
+      ) {
+        return false;
       }
 
       return true;
@@ -692,14 +734,21 @@ export class ResultManager {
   private createDiversificationOptions(
     options: EnhancedSemanticSearchOptions,
   ): DiversificationOptions {
+    // One flag, every diversification device. `enableDiversification: false`
+    // previously flipped only the three `preferDifferent*` options while
+    // `enableTemporalDiversification` stayed true in the defaults, so the
+    // quarterly re-rank still ran and still dropped results: on seven results
+    // from one quarter plus one from another it returned five of the eight.
+    const enabled = options.enableDiversification !== false;
     return {
       ...this.defaultDiversificationOptions,
       maxResultsPerFile:
         options.maxResultsPerFile ||
         this.defaultDiversificationOptions.maxResultsPerFile,
-      preferDifferentPatterns: options.enableDiversification !== false,
-      preferDifferentComplexity: options.enableDiversification !== false,
-      preferDifferentLayers: options.enableDiversification !== false,
+      preferDifferentPatterns: enabled,
+      preferDifferentComplexity: enabled,
+      preferDifferentLayers: enabled,
+      enableTemporalDiversification: enabled,
     };
   }
 
@@ -753,25 +802,26 @@ export class ResultManager {
     let score = 0;
     let factors = 0;
 
-    // Readability score
-    score += metrics.readabilityScore;
+    // Readability score (0-100 in the contract, ratio internally)
+    score += toRatio(metrics.readabilityScore);
     factors++;
 
     // Test coverage (if available)
     if (metrics.testCoverage !== undefined) {
-      score += metrics.testCoverage;
+      score += toRatio(metrics.testCoverage);
       factors++;
     }
 
-    // Documentation ratio
+    // Documentation ratio (already a ratio)
     score += metrics.documentationRatio;
     factors++;
 
-    // Invert risk scores (lower risk = higher quality)
-    score += 1 - metrics.duplicationRisk;
+    // Invert risk scores (lower risk = higher quality). Both are 0-100 in the
+    // contract, so they must be converted before inversion -- `1 - 30` is -29.
+    score += 1 - toRatio(metrics.duplicationRisk);
     factors++;
 
-    score += 1 - metrics.performanceRisk;
+    score += 1 - toRatio(metrics.performanceRisk);
     factors++;
 
     return factors > 0 ? score / factors : 0.5;
@@ -843,22 +893,39 @@ export class ResultManager {
     return scoredResults.map((item) => {
       let adjustedScore = item.compositeScore;
 
-      // Apply boost factors
+      // A factor is "how strong the effect is" (multiplier) and "how much of it
+      // applies" (weight), so the effect is interpolated: a 1.3x boost at
+      // weight 0.8 is 1 + 0.3 * 0.8 = 1.24. Multiplying the two together made
+      // the weight a second, hidden multiplier -- 1.3 * 0.8 = 1.04 -- so every
+      // configured boost was silently diluted and every penalty likewise.
       for (const boost of config.boostFactors) {
         if (this.evaluateCondition(boost.condition, item.result)) {
-          adjustedScore *= boost.multiplier * boost.weight;
+          adjustedScore *= 1 + (boost.multiplier - 1) * boost.weight;
         }
       }
 
-      // Apply penalty factors
       for (const penalty of config.penaltyFactors) {
         if (this.evaluateCondition(penalty.condition, item.result)) {
-          adjustedScore *= penalty.multiplier * penalty.weight;
+          adjustedScore *= 1 + (penalty.multiplier - 1) * penalty.weight;
         }
       }
 
       return {
         ...item,
+        // The clamp is deliberate, and it has a consequence worth recording: a
+        // factor above 1 saturates here instead of renormalizing, so the top
+        // results of a boosting intent tie at exactly 1 and the sort in
+        // `rankResults` -- stable, and running on equal keys -- leaves them in
+        // input order rather than relevance order. With `DEFAULT_QUALITY_METRICS`
+        // and the 'relevance' weights a result's composite is roughly
+        // `0.6 * similarity + 0.275`, so `find_examples`' `hasTests` factor
+        // (1 + 0.3 * 0.8 = 1.24) saturates anything above `1 / 1.24 = 0.806`
+        // and `debug_issue`'s `hasErrorHandling` factor (1 + 0.4 * 0.9 = 1.36)
+        // anything above `1 / 1.36 = 0.735`. Renormalizing instead would keep a
+        // strict order up there, at the cost of making every score relative to
+        // the best result in the set -- which is what `normalizeScores` already
+        // does, once, after this. Clamp-versus-renormalize is a decision, not an
+        // accident; `rankingHeuristics.test.ts` pins the tie.
         compositeScore: Math.max(0, Math.min(1, adjustedScore)),
       };
     });
@@ -879,17 +946,15 @@ export class ResultManager {
           result.content.includes('spec')
         );
       case 'highQualityScore':
-        return result.qualityMetrics.readabilityScore > 0.8;
+        return toRatio(result.qualityMetrics.readabilityScore) > 0.8;
       case 'hasErrorHandling':
         return (
           result.content.includes('try') ||
           result.content.includes('catch') ||
           result.content.includes('error')
         );
-      case 'hasCodeSmells':
-        // Placeholder - would need actual code smell detection
-        return false;
       case 'noDocumentation':
+        // documentationRatio is the one ratio field: no conversion.
         return result.qualityMetrics.documentationRatio < 0.2;
       default:
         return false;
@@ -944,7 +1009,9 @@ export class ResultManager {
         factor: 'Quality Score',
         weight: 0.3,
         description: 'Code quality metrics',
-        value: result.qualityMetrics.readabilityScore,
+        // The other factors in this array are 0-1 (score, documentationRatio),
+        // so the metric is converted to match.
+        value: toRatio(result.qualityMetrics.readabilityScore),
       },
       {
         factor: 'Relevance Rank',
@@ -993,7 +1060,7 @@ export class ResultManager {
     const suggestions: ActionableSuggestion[] = [];
 
     // Quality improvement suggestions
-    if (result.qualityMetrics.readabilityScore < 0.6) {
+    if (toRatio(result.qualityMetrics.readabilityScore) < 0.6) {
       suggestions.push({
         type: 'improvement',
         description: 'Consider refactoring for better readability',
@@ -1061,7 +1128,14 @@ export class ResultManager {
       if (other === result) continue;
 
       const similarity = this.calculateSimilarity(result, other);
-      if (similarity > 0.6 && similarity < 0.9) {
+      // Expressed against the achievable range, not against 1. The lower bound
+      // is half of it: below that the two chunks share little. The upper bound
+      // is nine tenths, which excludes two functions in the same file whose
+      // scores are close -- those approach the ceiling, and one is not an
+      // alternative implementation of the other.
+      const tooDifferent = ResultManager.MAX_SIMILARITY * 0.5;
+      const tooSimilar = ResultManager.MAX_SIMILARITY * 0.9;
+      if (similarity > tooDifferent && similarity < tooSimilar) {
         const differences = this.identifyDifferences(result, other);
 
         alternatives.push({
@@ -1093,7 +1167,7 @@ export class ResultManager {
   }
 
   private getComplexityLevel(qualityMetrics: QualityMetrics): string {
-    const readability = qualityMetrics.readabilityScore;
+    const readability = toRatio(qualityMetrics.readabilityScore);
     if (readability > 0.8) return 'simple';
     if (readability > 0.6) return 'moderate';
     if (readability > 0.4) return 'complex';
@@ -1129,7 +1203,12 @@ export class ResultManager {
       diversifiedResults.push(...groupResults.slice(0, maxPerGroup));
     }
 
-    return diversifiedResults.sort((a, b) => b.score - a.score);
+    // Order by the ranking value, not by `score`, which is the raw similarity
+    // and is no longer the composite. Falls back to `score` for results that
+    // have not been through rankResults.
+    return diversifiedResults.sort(
+      (a, b) => (b.rankingScore ?? b.score) - (a.rankingScore ?? a.score),
+    );
   }
 
   private calculateDiversityScore(
@@ -1157,8 +1236,11 @@ export class ResultManager {
   ): number {
     if (results.length === 0) return 0;
 
+    // `overallScore` is a 0-100 field, and every other statistic on
+    // `ResultProcessingStats` is a 0-1 ratio (`diversityScore` included), so the
+    // average is reported as a ratio rather than next to them as a 0-100 number.
     const totalQuality = results.reduce(
-      (sum, result) => sum + result.qualityMetrics.overallScore,
+      (sum, result) => sum + toRatio(result.qualityMetrics.overallScore),
       0,
     );
     return totalQuality / results.length;
@@ -1224,33 +1306,8 @@ export class ResultManager {
     return patterns;
   }
 
-  private inferArchitecturalLayer(filePath: string): string {
-    const path = filePath.toLowerCase();
-
-    if (
-      path.includes('controller') ||
-      path.includes('api') ||
-      path.includes('route')
-    )
-      return 'presentation';
-    if (
-      path.includes('service') ||
-      path.includes('business') ||
-      path.includes('logic')
-    )
-      return 'business';
-    if (
-      path.includes('repository') ||
-      path.includes('dao') ||
-      path.includes('database')
-    )
-      return 'data';
-    if (path.includes('model') || path.includes('entity')) return 'domain';
-    if (path.includes('util') || path.includes('helper')) return 'utility';
-    if (path.includes('config') || path.includes('setting'))
-      return 'configuration';
-
-    return 'unknown';
+  private inferArchitecturalLayer(filePath: string): ArchitecturalLayer {
+    return classifyArchitecturalLayer(filePath);
   }
 
   private detectFrameworkContext(content: string): string[] {
@@ -1494,16 +1551,19 @@ export class ResultManager {
     const score = result.score;
     const enhancedQuery = processedQuery.enhancedQuery;
 
-    if (score > 0.8) {
+    // Describes a similarity, not a rank. These thresholds used to be applied
+    // to the min-max normalized score, so the top hit always crossed 0.8 and
+    // was reported as a strong match regardless of the query.
+    if (score >= 0.8) {
       return `Strong semantic match (${(score * 100).toFixed(
         1,
       )}%) with the enhanced query: "${enhancedQuery}"`;
-    } else if (score > 0.6) {
-      return `Good semantic match (${(score * 100).toFixed(
+    } else if (score >= 0.6) {
+      return `Moderate semantic match (${(score * 100).toFixed(
         1,
       )}%) with the enhanced query: "${enhancedQuery}"`;
     } else {
-      return `Moderate semantic match (${(score * 100).toFixed(
+      return `Weak semantic match (${(score * 100).toFixed(
         1,
       )}%) with the enhanced query: "${enhancedQuery}"`;
     }
@@ -1515,6 +1575,17 @@ export class ResultManager {
   ): string {
     return `Behavioral analysis indicates this code performs similar operations to what was requested in the query.`;
   }
+
+  /**
+   * Maximum value `calculateSimilarity` can return.
+   *
+   * The function averages three terms (file path 0.3, semantic type 0.2, score
+   * proximity 0.3) and divides by the factor count, so its ceiling is 0.2667.
+   * Thresholds must be expressed against this, not against 1: the previous
+   * 0.6 made `alternatives` permanently empty while the API kept advertising
+   * it.
+   */
+  private static readonly MAX_SIMILARITY = (0.3 + 0.2 + 0.3) / 3;
 
   private calculateSimilarity(
     result1: EnhancedSemanticSearchResult,
@@ -1573,8 +1644,8 @@ export class ResultManager {
       );
     }
 
-    const score1 = result1.qualityMetrics.readabilityScore;
-    const score2 = result2.qualityMetrics.readabilityScore;
+    const score1 = toRatio(result1.qualityMetrics.readabilityScore);
+    const score2 = toRatio(result2.qualityMetrics.readabilityScore);
     if (Math.abs(score1 - score2) > 0.2) {
       differences.push(
         `Different quality scores: ${score1.toFixed(2)} vs ${score2.toFixed(
@@ -1590,7 +1661,7 @@ export class ResultManager {
     result: EnhancedSemanticSearchResult,
   ): string {
     const type = result.enhancedMetadata?.semanticType || 'code';
-    const quality = result.qualityMetrics.readabilityScore;
+    const quality = toRatio(result.qualityMetrics.readabilityScore);
 
     let description = `Alternative ${type} implementation`;
 
@@ -1607,8 +1678,10 @@ export class ResultManager {
     original: EnhancedSemanticSearchResult,
     alternative: EnhancedSemanticSearchResult,
   ): string {
-    const originalQuality = original.qualityMetrics.readabilityScore;
-    const alternativeQuality = alternative.qualityMetrics.readabilityScore;
+    const originalQuality = toRatio(original.qualityMetrics.readabilityScore);
+    const alternativeQuality = toRatio(
+      alternative.qualityMetrics.readabilityScore,
+    );
 
     if (alternativeQuality > originalQuality + 0.1) {
       return 'When higher code quality is preferred';

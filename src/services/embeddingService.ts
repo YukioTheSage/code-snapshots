@@ -1,18 +1,78 @@
 import { GoogleGenAI } from '@google/genai';
+import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { log, logVerbose } from '../logger';
 import { CredentialsManager } from './credentialsManager';
 import { CodeChunk } from './codeChunker';
+import { isInteractiveUiDisabled } from '../headless';
 import path = require('path');
 
+/**
+ * A failure raised by this module about the provider's *response*, not by the
+ * provider itself: currently the empty-vector guard shared by both embedding
+ * loops.
+ *
+ * It has a type of its own because the retry decision must never read a
+ * message this module wrote. The guard interpolates `chunk.id`, and ids are
+ * `${snapshotId}_${path}_${startLine}-${endLine}_${sha1}` (`buildChunkId`),
+ * so a chunk starting on source line 429 produced a deterministic failure
+ * whose message contained "429" — which `errMsg.includes('429')` read as a
+ * rate limit and retried three times with backoff. A type cannot be forged by
+ * a chunk id.
+ *
+ * Module-private on purpose: the retry path is the only thing that classifies
+ * it, and both loops still surface the same `Failed to embed ...` message to
+ * callers they always did.
+ */
+class EmbeddingResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmbeddingResponseError';
+  }
+}
+
+/**
+ * Whether a failure thrown by the provider client is a rate limit.
+ *
+ * Only ever handed an error thrown by the `embedContent` call, and never one
+ * of this module's own {@link EmbeddingResponseError} failures: the provider
+ * is the only author whose message may be read here.
+ *
+ * The message is read because it is all the SDK offers. `@google/genai`
+ * 0.10.0 wraps every 4xx — 400, 401, 403, 404 and 429 alike — in a
+ * `ClientError` that carries no status field (probed: its own properties are
+ * `stack,message,cause,name`) and is not exported from the package, so a real
+ * 429 is only the text `got status: 429 Too Many Requests. {...}`. Matching
+ * the token `429` rather than the substring keeps a status apart from digits
+ * buried inside a longer number.
+ */
+function isProviderRateLimitError(error: unknown): boolean {
+  if (error instanceof EmbeddingResponseError) {
+    return false;
+  }
+  return error instanceof Error && /\b429\b/.test(error.message);
+}
+
 export class EmbeddingService {
-  private readonly EMBEDDING_MODEL = 'gemini-embedding-exp-03-07'; // Update as needed
+  /**
+   * Model ids are read through getModelId rather than captured in a field: a
+   * hardcoded id is what made the previous experimental model's retirement
+   * (2025-10-30) unrecoverable without shipping a new version.
+   *
+   * `gemini-embedding-2` is the current GA embedding model and Google's
+   * documented replacement for `gemini-embedding-exp-03-07`; see
+   * https://ai.google.dev/gemini-api/docs/deprecations
+   */
+  private static readonly DEFAULT_MODEL = 'gemini-embedding-2';
+  private static readonly DEFAULT_DIMENSION = 3072;
+
   private readonly MAX_BATCH_SIZE = 10; // Maximum number of chunks to embed at once
   private readonly MAX_RETRY_ATTEMPTS = 3;
+  private readonly MAX_INIT_ATTEMPTS = 3;
   private readonly RETRY_BACKOFF_BASE_MS = 10000;
-  private readonly THROTTLE_DELAY_MS = 5000;
+  private readonly EMBEDDING_CACHE_LIMIT = 1000;
   private credentialsManager: CredentialsManager;
   private aiClient: GoogleGenAI | null = null;
-  private embeddingDimension?: number = 3072;
 
   // Caching to avoid redundant embedding generation
   private embeddingCache: Map<string, number[]> = new Map();
@@ -23,75 +83,144 @@ export class EmbeddingService {
   }
 
   private async initialize(): Promise<void> {
-    try {
-      let apiKey = await this.credentialsManager.getGeminiApiKey();
+    for (let attempt = 1; attempt <= this.MAX_INIT_ATTEMPTS; attempt++) {
+      try {
+        let apiKey = await this.credentialsManager.getGeminiApiKey();
 
-      if (!apiKey) {
-        log('Gemini API key not found. Prompting for credentials.');
-        const got = await this.credentialsManager.promptForCredentials();
-        if (!got) throw new Error('Gemini API key required');
-        const newKey = await this.credentialsManager.getGeminiApiKey();
-        if (!newKey) throw new Error('Gemini API key required');
-        apiKey = newKey;
+        if (!apiKey) {
+          // Headless contexts (integration tests, CI) cannot answer an input
+          // box; fail fast instead of hanging on `showInputBox`. Shared
+          // predicate (src/headless.ts) so every prompt site agrees.
+          if (isInteractiveUiDisabled()) {
+            throw new Error('Gemini API key required');
+          }
+          log('Gemini API key not found. Prompting for credentials.');
+          const got = await this.credentialsManager.promptForCredentials();
+          if (!got) {
+            throw new Error('Gemini API key required');
+          }
+          const newKey = await this.credentialsManager.getGeminiApiKey();
+          if (!newKey) {
+            throw new Error('Gemini API key required');
+          }
+          apiKey = newKey;
+        }
+
+        this.aiClient = new GoogleGenAI({ apiKey });
+        log('GenAI Embedding service initialized successfully');
+        return;
+      } catch (error) {
+        const isAuthError =
+          error instanceof Error && /401|Unauthorized/i.test(error.message);
+        if (isAuthError && attempt < this.MAX_INIT_ATTEMPTS) {
+          log(
+            `Embedding initialization authentication failure (attempt ${attempt}/${this.MAX_INIT_ATTEMPTS}). Prompting for credentials.`,
+          );
+          const got = await this.credentialsManager.promptForCredentials();
+          if (!got) {
+            throw error;
+          }
+          continue;
+        }
+
+        log(`Error initializing GenAI Embedding service: ${error}`);
+        throw new Error(
+          `Failed to initialize GenAI Embedding service after ${attempt} attempt(s): ${error}`,
+        );
       }
-
-      const validKey = apiKey;
-      this.aiClient = new GoogleGenAI({ apiKey: validKey });
-
-      log('GenAI Embedding service initialized successfully');
-    } catch (error) {
-      if (error instanceof Error && /401|Unauthorized/.test(error.message)) {
-        const got = await this.credentialsManager.promptForCredentials();
-        if (!got) throw error;
-        return this.initialize();
-      }
-      log(`Error initializing GenAI Embedding service: ${error}`);
-      throw new Error(`Failed to initialize GenAI Embedding service: ${error}`);
     }
+
+    throw new Error(
+      `Failed to initialize GenAI Embedding service after ${this.MAX_INIT_ATTEMPTS} attempts`,
+    );
   }
 
   /**
-   * Set desired embedding output dimension. Results will be truncated or zero-padded.
+   * Read at call time rather than cached in the constructor so a settings
+   * change takes effect without reloading the window.
    */
-  public setEmbeddingDimension(dim: number): void {
-    this.embeddingDimension = dim;
+  private config(): vscode.WorkspaceConfiguration {
+    return vscode.workspace.getConfiguration('vscode-snapshots.semanticSearch');
+  }
+
+  /**
+   * The embedding model id, from `semanticSearch.embedding.model`.
+   */
+  public getModelId(): string {
+    return this.config().get<string>(
+      'embedding.model',
+      EmbeddingService.DEFAULT_MODEL,
+    );
+  }
+
+  /**
+   * The embedding output dimension, from
+   * `semanticSearch.embedding.dimension`.
+   *
+   * A non-numeric or non-positive value falls back to the default rather than
+   * reaching the API: the vector index is dimensioned when it is created, so a
+   * rejected or mismatched vector is worse than a predictable one.
+   */
+  public getDimension(): number {
+    const configured = this.config().get<number>(
+      'embedding.dimension',
+      EmbeddingService.DEFAULT_DIMENSION,
+    );
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : EmbeddingService.DEFAULT_DIMENSION;
   }
 
   /**
    * Embeds a single code chunk
    */
   async embedCodeChunk(chunk: CodeChunk): Promise<number[]> {
+    // Format once: this string is both the cache key's payload and the exact
+    // request body, so the cache can only ever return a vector that was
+    // produced for this request.
+    const formattedContent = this.formatChunkForEmbedding(chunk);
+    const cacheKey = this.embeddingCacheKey(formattedContent);
+
     // Check cache first
-    if (this.embeddingCache.has(chunk.id)) {
+    const cached = this.getCachedEmbedding(cacheKey);
+    if (cached) {
       logVerbose(`Using cached embedding for chunk ${chunk.id}`);
-      return this.embeddingCache.get(chunk.id) ?? [];
+      return cached;
     }
 
     const client = await this.ensureInitialized();
 
     for (let attempt = 1; attempt <= this.MAX_RETRY_ATTEMPTS; attempt++) {
       try {
-        // Format the content to include metadata for better embeddings
-        const formattedContent = this.formatChunkForEmbedding(chunk);
-
         const response = await client.models.embedContent({
-          model: this.EMBEDDING_MODEL,
+          model: this.getModelId(),
           contents: [formattedContent],
-          config:
-            this.embeddingDimension != null
-              ? { outputDimensionality: this.embeddingDimension }
-              : undefined,
+          config: { outputDimensionality: this.getDimension() },
         });
 
         const embedding = response.embeddings?.[0]?.values ?? [];
 
-        // Cache and throttle
-        this.embeddingCache.set(chunk.id, embedding);
-        await this.delay(this.THROTTLE_DELAY_MS);
+        // An empty response is a failure, not a vector. `?? []` used to be
+        // cached, and `getCachedEmbedding` returned it because an empty array
+        // is truthy, so this chunk was served the empty vector on every retry
+        // and `upsertVectors` threw "Embedding not found" for it permanently.
+        if (embedding.length === 0) {
+          throw new EmbeddingResponseError(
+            `Embedding provider returned an empty vector for chunk ${chunk.id}`,
+          );
+        }
+
+        // No fixed post-success delay: a five-second sleep after every response
+        // was the dominant cost of indexing and did nothing for a quota that
+        // was not being approached. The 429 branch below is the rate limiter.
+        this.setCachedEmbedding(cacheKey, embedding);
         return embedding;
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        if (attempt < this.MAX_RETRY_ATTEMPTS && errMsg.includes('429')) {
+        if (
+          attempt < this.MAX_RETRY_ATTEMPTS &&
+          isProviderRateLimitError(error)
+        ) {
           log(
             `Rate limit hit embedding chunk ${chunk.id}, retry #${attempt} after backoff`,
           );
@@ -118,8 +247,11 @@ export class EmbeddingService {
 
     // First check cache
     for (const chunk of chunks) {
-      if (this.embeddingCache.has(chunk.id)) {
-        results.set(chunk.id, this.embeddingCache.get(chunk.id) ?? []);
+      const cached = this.getCachedEmbedding(
+        this.embeddingCacheKey(this.formatChunkForEmbedding(chunk)),
+      );
+      if (cached) {
+        results.set(chunk.id, cached);
       } else {
         chunksToEmbed.push(chunk);
       }
@@ -163,23 +295,33 @@ export class EmbeddingService {
         const enhancedQuery = this.enhanceQueryForEmbedding(query, language);
 
         const response = await client.models.embedContent({
-          model: this.EMBEDDING_MODEL,
+          model: this.getModelId(),
           contents: [enhancedQuery],
-          config:
-            this.embeddingDimension != null
-              ? { outputDimensionality: this.embeddingDimension }
-              : undefined,
+          config: { outputDimensionality: this.getDimension() },
         });
 
         const embedding = response.embeddings?.[0]?.values ?? [];
 
-        // Throttle
-        await this.delay(this.THROTTLE_DELAY_MS);
+        // Same rule as `embedCodeChunk`: an empty vector is not a query
+        // vector, and returning it made the vector store query with zero
+        // dimensions and match nothing.
+        if (embedding.length === 0) {
+          throw new EmbeddingResponseError(
+            'Embedding provider returned an empty vector for the search query',
+          );
+        }
+
+        // No fixed post-success delay: a five-second sleep after every response
+        // was the dominant cost of a search and did nothing for a quota that
+        // was not being approached. The 429 branch below is the rate limiter.
         return embedding;
       } catch (error: unknown) {
         // Error handling as in original
         const errMsg = error instanceof Error ? error.message : String(error);
-        if (attempt < this.MAX_RETRY_ATTEMPTS && errMsg.includes('429')) {
+        if (
+          attempt < this.MAX_RETRY_ATTEMPTS &&
+          isProviderRateLimitError(error)
+        ) {
           log(
             `Rate limit hit for search query, retry #${attempt} after backoff`,
           );
@@ -286,6 +428,62 @@ export class EmbeddingService {
   clearCache(): void {
     this.embeddingCache.clear();
     log('Embedding cache cleared');
+  }
+
+  /**
+   * Cache key for an embedding request.
+   *
+   * Hashes the model id, the output dimension and the exact formatted content
+   * rather than `chunk.id`. Keying on `chunk.id` meant a re-chunked file with
+   * the same path and line span reused the previous content's vector.
+   *
+   * The model and dimension are part of the key because both are read from
+   * configuration on every call: without them, changing the model in settings
+   * would keep serving vectors produced by the previous one, which is the same
+   * class of silent wrongness this key exists to prevent.
+   *
+   * The NUL separator keeps the fields unambiguous.
+   */
+  private embeddingCacheKey(formattedContent: string): string {
+    return crypto
+      .createHash('sha1')
+      .update(this.getModelId(), 'utf8')
+      .update('\u0000')
+      .update(String(this.getDimension()), 'utf8')
+      .update('\u0000')
+      .update(formattedContent, 'utf8')
+      .digest('hex');
+  }
+
+  private getCachedEmbedding(key: string): number[] | undefined {
+    const value = this.embeddingCache.get(key);
+    // An empty array is truthy, so `!value` alone served a cached empty
+    // vector to every later attempt and the chunk could never be embedded
+    // again. Nothing writes one any more, and this drops one that was cached
+    // before the write side rejected it so the caller recomputes instead.
+    if (!value || value.length === 0) {
+      this.embeddingCache.delete(key);
+      return undefined;
+    }
+
+    // Refresh recency for LRU behavior.
+    this.embeddingCache.delete(key);
+    this.embeddingCache.set(key, value);
+    return value;
+  }
+
+  private setCachedEmbedding(key: string, embedding: number[]): void {
+    if (this.embeddingCache.has(key)) {
+      this.embeddingCache.delete(key);
+    }
+    this.embeddingCache.set(key, embedding);
+
+    if (this.embeddingCache.size > this.EMBEDDING_CACHE_LIMIT) {
+      const oldestKey = this.embeddingCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.embeddingCache.delete(oldestKey);
+      }
+    }
   }
 
   /**

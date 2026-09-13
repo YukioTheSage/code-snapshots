@@ -1,35 +1,49 @@
-import { CodeLapseClient } from '../client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { UnifiedClient } from '../unifiedClient';
+import { printResult } from './output';
 
 export class WorkspaceCommands {
-  constructor(private client: CodeLapseClient) {}
+  constructor(private client: UnifiedClient) {}
 
   async info(options: any): Promise<void> {
     try {
       const info = await this.client.callApi('getWorkspaceInfo', {});
-      console.log(JSON.stringify({
-        success: true,
-        workspace: info
-      }));
+      printResult(
+        {
+          success: true,
+          workspace: info,
+        },
+        options,
+      );
     } catch (error) {
-      console.log(JSON.stringify({
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      }));
+      printResult(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        options,
+      );
     }
   }
 
   async state(options: any): Promise<void> {
     try {
       const state = await this.client.callApi('getCurrentState', {});
-      console.log(JSON.stringify({
-        success: true,
-        state
-      }));
+      printResult(
+        {
+          success: true,
+          state,
+        },
+        options,
+      );
     } catch (error) {
-      console.log(JSON.stringify({
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      }));
+      printResult(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        options,
+      );
     }
   }
 
@@ -39,22 +53,28 @@ export class WorkspaceCommands {
       const result = {
         openFiles: state.openFiles || [],
         changedFiles: state.changedFiles || [],
-        activeFile: state.activeFile
+        activeFile: state.activeFile,
       };
 
       if (options.changed) {
         result.openFiles = result.changedFiles;
       }
 
-      console.log(JSON.stringify({
-        success: true,
-        files: result
-      }));
+      printResult(
+        {
+          success: true,
+          files: result,
+        },
+        options,
+      );
     } catch (error) {
-      console.log(JSON.stringify({
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      }));
+      printResult(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        options,
+      );
     }
   }
-} 
+}

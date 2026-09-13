@@ -1,8 +1,15 @@
 out
 dist
+# Compiled integration tests (tsc -p tsconfig.integration.json). Build output,
+# so it must not dirty the tree between runs.
+test-out
 node_modules
 .vscode-test/
 *.vsix
+# Runtime discovery file written by CliConnectorService on every activation.
+# It contains a live IPC auth token; committing it leaks the credential and
+# makes every checkout look permanently dirty.
+.vscode/codelapse-connection.json
 combine_*
 combined_*
 gg.py
@@ -11,3 +18,6 @@ scripts
 .cursor
 GEMINI.md
 .kiro
+.claude
+# CLI black-box test sandbox: its own git repository and snapshot store.
+cli-test-sandbox/

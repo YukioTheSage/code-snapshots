@@ -1,18 +1,23 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { AnalysisCommands } from '../commands/analysis';
-import { CodeLapseClient } from '../client';
+import { UnifiedClient } from '../unifiedClient';
+import { getFailure, resetFailure } from '../exitState';
 
 // Mock the client
-jest.mock('../client');
+jest.mock('../unifiedClient');
 
 describe('AnalysisCommands', () => {
-  let mockClient: jest.Mocked<CodeLapseClient>;
+  let mockClient: jest.Mocked<UnifiedClient>;
   let analysisCommands: AnalysisCommands;
   let consoleSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    mockClient = new CodeLapseClient() as jest.Mocked<CodeLapseClient>;
+    mockClient = new UnifiedClient() as unknown as jest.Mocked<UnifiedClient>;
     analysisCommands = new AnalysisCommands(mockClient);
     consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    // The failure flag is process-wide, so a test that reports a failure must
+    // not decide the next test's starting state.
+    resetFailure();
   });
 
   afterEach(() => {
@@ -32,10 +37,10 @@ describe('AnalysisCommands', () => {
             overallScore: 85,
             readabilityScore: 0.8,
             maintainabilityScore: 78,
-            complexityScore: 12
+            complexityScore: 12,
           },
           relationships: [
-            { type: 'calls', targetChunkId: 'chunk-124', strength: 0.9 }
+            { type: 'calls', targetChunkId: 'chunk-124', strength: 0.9 },
           ],
           securityConcerns: [],
           suggestions: [
@@ -43,10 +48,10 @@ describe('AnalysisCommands', () => {
               type: 'improvement',
               description: 'Consider adding more documentation',
               priority: 'medium',
-              effort: 'minimal'
-            }
-          ]
-        }
+              effort: 'minimal',
+            },
+          ],
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -59,20 +64,22 @@ describe('AnalysisCommands', () => {
         analysisType: 'full',
         includeRelationships: true,
         includeQuality: true,
-        includeContext: true
+        includeContext: true,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        chunkId: 'chunk-123',
-        analysis: mockResult,
-        summary: {
-          qualityScore: 85,
-          complexityScore: 12,
-          relationshipCount: 1,
-          securityConcerns: 0
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          chunkId: 'chunk-123',
+          analysis: mockResult,
+          summary: {
+            qualityScore: 85,
+            complexityScore: 12,
+            relationshipCount: 1,
+            securityConcerns: 0,
+          },
+        }),
+      );
     });
 
     it('should handle missing snapshot ID', async () => {
@@ -84,12 +91,15 @@ describe('AnalysisCommands', () => {
         analysisType: 'full',
         includeRelationships: true,
         includeQuality: true,
-        includeContext: true
+        includeContext: true,
       });
     });
 
     it('should handle analysis options', async () => {
-      const mockResult = { success: true, analysis: { qualityMetrics: { overallScore: 75 } } };
+      const mockResult = {
+        success: true,
+        analysis: { qualityMetrics: { overallScore: 75 } },
+      };
       mockClient.callApi.mockResolvedValue(mockResult);
 
       await analysisCommands.chunk('chunk-123', {
@@ -97,7 +107,7 @@ describe('AnalysisCommands', () => {
         type: 'quick',
         relationships: false,
         quality: false,
-        context: false
+        context: false,
       });
 
       expect(mockClient.callApi).toHaveBeenCalledWith('analyzeChunk', {
@@ -106,7 +116,7 @@ describe('AnalysisCommands', () => {
         analysisType: 'quick',
         includeRelationships: false,
         includeQuality: false,
-        includeContext: false
+        includeContext: false,
       });
     });
 
@@ -115,11 +125,17 @@ describe('AnalysisCommands', () => {
 
       await analysisCommands.chunk('invalid-chunk', { snapshot: 'snap-456' });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: false,
-        error: 'Chunk not found',
-        suggestions: ['Verify chunk ID exists', 'Check snapshot availability', 'Validate analysis type']
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: false,
+          error: 'Chunk not found',
+          suggestions: [
+            'Verify chunk ID exists',
+            'Check snapshot availability',
+            'Validate analysis type',
+          ],
+        }),
+      );
     });
   });
 
@@ -134,7 +150,7 @@ describe('AnalysisCommands', () => {
           totalLines: 150,
           averageQuality: 82,
           securityConcerns: ['sql-injection'],
-          designPatterns: ['Factory']
+          designPatterns: ['Factory'],
         },
         chunks: [
           {
@@ -142,9 +158,9 @@ describe('AnalysisCommands', () => {
             startLine: 1,
             endLine: 30,
             semanticType: 'function',
-            qualityScore: 85
-          }
-        ]
+            qualityScore: 85,
+          },
+        ],
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -157,32 +173,36 @@ describe('AnalysisCommands', () => {
         analysisType: 'full',
         includeChunks: true,
         includeMetrics: true,
-        includeSuggestions: true
+        includeSuggestions: true,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        filePath: 'src/test.ts',
-        snapshotId: 'snap-456',
-        analysis: mockResult,
-        summary: {
-          totalChunks: 5,
-          totalLines: 150,
-          averageQuality: 82,
-          securityConcerns: 1,
-          designPatterns: 1
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          filePath: 'src/test.ts',
+          snapshotId: 'snap-456',
+          analysis: mockResult,
+          summary: {
+            totalChunks: 5,
+            totalLines: 150,
+            averageQuality: 82,
+            securityConcerns: 1,
+            designPatterns: 1,
+          },
+        }),
+      );
     });
 
     it('should require snapshot ID', async () => {
       await analysisCommands.file('src/test.ts', {});
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: false,
-        error: 'Snapshot ID is required for file analysis',
-        suggestions: ['Use --snapshot <id> to specify snapshot']
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: false,
+          error: 'Snapshot ID is required for file analysis',
+          suggestions: ['Use --snapshot <id> to specify snapshot'],
+        }),
+      );
 
       expect(mockClient.callApi).not.toHaveBeenCalled();
     });
@@ -202,22 +222,22 @@ describe('AnalysisCommands', () => {
             testCoverage: 0.65,
             documentation: 0.58,
             complexity: 18,
-            duplication: 0.12
+            duplication: 0.12,
           },
           trends: {
             improving: ['readability', 'testCoverage'],
             declining: ['documentation'],
-            stable: ['maintainability', 'complexity']
+            stable: ['maintainability', 'complexity'],
           },
           recommendations: [
             {
               category: 'documentation',
               priority: 'high',
               description: 'Increase documentation coverage',
-              estimatedEffort: '2-4 hours'
-            }
-          ]
-        }
+              estimatedEffort: '2-4 hours',
+            },
+          ],
+        },
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -230,31 +250,35 @@ describe('AnalysisCommands', () => {
         metrics: ['all'],
         includeRecommendations: true,
         includeTrends: true,
-        threshold: 0.7
+        threshold: 0.7,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        target: 'src/module',
-        snapshotId: 'snap-456',
-        qualityAnalysis: mockResult.qualityAnalysis,
-        summary: {
-          overallScore: 78,
-          improvingMetrics: 2,
-          decliningMetrics: 1,
-          recommendations: 1
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          target: 'src/module',
+          snapshotId: 'snap-456',
+          qualityAnalysis: mockResult.qualityAnalysis,
+          summary: {
+            overallScore: 78,
+            improvingMetrics: 2,
+            decliningMetrics: 1,
+            recommendations: 1,
+          },
+        }),
+      );
     });
 
     it('should require snapshot ID', async () => {
       await analysisCommands.quality('src/module', {});
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: false,
-        error: 'Snapshot ID is required for quality analysis',
-        suggestions: ['Use --snapshot <id> to specify snapshot']
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: false,
+          error: 'Snapshot ID is required for quality analysis',
+          suggestions: ['Use --snapshot <id> to specify snapshot'],
+        }),
+      );
 
       expect(mockClient.callApi).not.toHaveBeenCalled();
     });
@@ -271,19 +295,19 @@ describe('AnalysisCommands', () => {
               chunkId: 'chunk-124',
               type: 'imports',
               strength: 0.9,
-              description: 'Imports utility functions'
-            }
+              description: 'Imports utility functions',
+            },
           ],
-          transitive: []
+          transitive: [],
         },
         dependents: [
           {
             chunkId: 'chunk-125',
             type: 'calls',
             strength: 0.8,
-            description: 'Called by main handler'
-          }
-        ]
+            description: 'Called by main handler',
+          },
+        ],
       };
 
       mockClient.callApi.mockResolvedValue(mockResult);
@@ -295,33 +319,43 @@ describe('AnalysisCommands', () => {
         includeTransitive: true,
         maxDepth: 3,
         relationshipTypes: undefined,
-        includeStrength: true
+        includeStrength: true,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        chunkId: 'chunk-123',
-        relationships: mockResult,
-        summary: {
-          directDependencies: 1,
-          transitiveDependencies: 0,
-          dependents: 1,
-          strongestRelationship: {
-            chunkId: 'chunk-124',
-            type: 'imports',
-            strength: 0.9,
-            description: 'Imports utility functions'
-          }
-        }
-      }));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          chunkId: 'chunk-123',
+          relationships: mockResult,
+          summary: {
+            directDependencies: 1,
+            transitiveDependencies: 0,
+            dependents: 1,
+            strongestRelationship: {
+              chunkId: 'chunk-124',
+              type: 'imports',
+              strength: 0.9,
+              description: 'Imports utility functions',
+            },
+          },
+        }),
+      );
     });
   });
 
   describe('batch', () => {
     it('should perform batch analysis', async () => {
       const mockOperations = [
-        { id: 'op1', type: 'analyzeChunk', data: { chunkId: 'chunk-1', snapshotId: 'snap-1' } },
-        { id: 'op2', type: 'analyzeFile', data: { filePath: 'test.ts', snapshotId: 'snap-1' } }
+        {
+          id: 'op1',
+          type: 'analyzeChunk',
+          data: { chunkId: 'chunk-1', snapshotId: 'snap-1' },
+        },
+        {
+          id: 'op2',
+          type: 'analyzeFile',
+          data: { filePath: 'test.ts', snapshotId: 'snap-1' },
+        },
       ];
 
       const mockResults = {
@@ -330,14 +364,14 @@ describe('AnalysisCommands', () => {
         failedOperations: 0,
         results: [
           { operationId: 'op1', success: true, result: { analysis: {} } },
-          { operationId: 'op2', success: true, result: { fileMetrics: {} } }
+          { operationId: 'op2', success: true, result: { fileMetrics: {} } },
         ],
-        metadata: { processingTime: Date.now() }
+        metadata: { processingTime: Date.now() },
       };
 
       // Mock fs.readFileSync
       const mockFs = {
-        readFileSync: jest.fn().mockReturnValue(JSON.stringify(mockOperations))
+        readFileSync: jest.fn().mockReturnValue(JSON.stringify(mockOperations)),
       };
       jest.doMock('fs', () => mockFs);
 
@@ -347,23 +381,82 @@ describe('AnalysisCommands', () => {
 
       expect(mockClient.callApi).toHaveBeenCalledWith('batchAnalyze', {
         operations: [
-          { id: 'op1', type: 'analyzeChunk', data: { chunkId: 'chunk-1', snapshotId: 'snap-1' } },
-          { id: 'op2', type: 'analyzeFile', data: { filePath: 'test.ts', snapshotId: 'snap-1' } }
+          {
+            id: 'op1',
+            type: 'analyzeChunk',
+            data: { chunkId: 'chunk-1', snapshotId: 'snap-1' },
+          },
+          {
+            id: 'op2',
+            type: 'analyzeFile',
+            data: { filePath: 'test.ts', snapshotId: 'snap-1' },
+          },
         ],
         parallel: true,
-        maxConcurrency: 5
+        maxConcurrency: 5,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({
-        success: true,
-        batchResults: mockResults,
-        summary: {
-          totalOperations: 2,
-          successfulOperations: 2,
-          failedOperations: 0,
-          processingTime: mockResults.metadata.processingTime
-        }
+      expect(consoleSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          success: true,
+          batchResults: mockResults,
+          summary: {
+            totalOperations: 2,
+            successfulOperations: 2,
+            failedOperations: 0,
+            processingTime: mockResults.metadata.processingTime,
+          },
+        }),
+      );
+    });
+
+    it('reports a rejected batch as a failure, not an empty success', async () => {
+      // The extension rejects an invalid batch by RETURNING a failed envelope
+      // rather than throwing: `handleBatchAnalyze` catches its own validation
+      // errors and answers `{success: false, error: {message, ...}}`
+      // (`cliConnectorService.ts`), which the client resolves like any other
+      // result. Hardcoding `success: true` in this command therefore printed a
+      // rejected batch as a successful run of zero operations and exited 0.
+      const rejected = {
+        success: false,
+        error: {
+          message: 'Invalid maxConcurrency: 0. Use a positive integer.',
+          code: 'BATCH_ANALYZE_ERROR',
+          category: 'batch_operation_error',
+          severity: 'high',
+          retryable: false,
+        },
+        totalOperations: 1,
+        successfulOperations: 0,
+        failedOperations: 1,
+        results: [],
+        suggestions: ['Verify operations array format and content'],
+      };
+
+      jest.doMock('fs', () => ({
+        readFileSync: jest.fn().mockReturnValue(
+          JSON.stringify([
+            {
+              id: 'op1',
+              type: 'analyzeChunk',
+              data: { chunkId: 'chunk-1', snapshotId: 'snap-1' },
+            },
+          ]),
+        ),
       }));
+
+      mockClient.callApi.mockResolvedValue(rejected);
+
+      await analysisCommands.batch('operations.json', {});
+
+      const payload = JSON.parse(String(consoleSpy.mock.calls[0][0]));
+
+      expect(payload.success).toBe(false);
+      // The extension's own message reaches the user rather than being buried
+      // in a payload the envelope claims succeeded.
+      expect(payload.error).toBe(rejected.error.message);
+      // ... and the process reports failure to its caller.
+      expect(getFailure()).toBe(true);
     });
   });
 
@@ -373,21 +466,23 @@ describe('AnalysisCommands', () => {
         dependencies: {
           direct: [
             { chunkId: 'chunk-1', strength: 0.7 },
-            { chunkId: 'chunk-2', strength: 0.9 }
-          ]
+            { chunkId: 'chunk-2', strength: 0.9 },
+          ],
         },
-        dependents: [
-          { chunkId: 'chunk-3', strength: 0.8 }
-        ]
+        dependents: [{ chunkId: 'chunk-3', strength: 0.8 }],
       };
 
-      const strongest = (analysisCommands as any).findStrongestRelationship(result);
+      const strongest = (analysisCommands as any).findStrongestRelationship(
+        result,
+      );
       expect(strongest).toEqual({ chunkId: 'chunk-2', strength: 0.9 });
     });
 
     it('should return null for empty relationships', () => {
       const result = { dependencies: { direct: [] }, dependents: [] };
-      const strongest = (analysisCommands as any).findStrongestRelationship(result);
+      const strongest = (analysisCommands as any).findStrongestRelationship(
+        result,
+      );
       expect(strongest).toBeNull();
     });
   });

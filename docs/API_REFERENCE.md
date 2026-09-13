@@ -20,7 +20,11 @@ Complete API reference for the CodeLapse CLI, designed for developers, automatio
 
 ## Overview
 
-The CodeLapse CLI provides a comprehensive API for interacting with the CodeLapse VSCode extension. All commands support JSON output for machine-readable responses, making it ideal for automation, CI/CD pipelines, and AI agent integration.
+## Overview
+
+The CodeLapse CLI provides a comprehensive API for managing code snapshots. It can operate in **Standalone Mode** (independent of VS Code) or **IPC Mode** (connected to the CodeLapse VSCode extension). All commands support JSON output for machine-readable responses, making it ideal for automation, CI/CD pipelines, and AI agent integration.
+
+Runtime requirement: Node.js `>=18.0.0`.
 
 ### Base Command Structure
 
@@ -492,7 +496,7 @@ interface IndexResponse {
 
 **Example:**
 ```bash
-codelapse search index --all --json --silent
+codelapse search index --json --silent
 ```
 
 ## Workspace API
@@ -629,6 +633,11 @@ Execute multiple commands from a JSON file for complex automation workflows.
 **Parameters:**
 - `file` (required): Path to JSON file containing batch commands
 
+Validation rules:
+- Batch payload must be an array of objects with shape `{ "method": string, "data"?: object }`
+- Each `method` must be on the CLI API allowlist
+- Unknown methods fail fast before execution
+
 **Batch File Format:**
 ```json
 [
@@ -680,6 +689,10 @@ codelapse batch batch-commands.json --json --silent
 
 Monitor real-time events from the CodeLapse extension.
 
+> **Requires a running extension.** Events are pushed over IPC. In standalone mode
+> there is no event source: the command prints its banner, receives nothing and
+> exits 0. See the [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
+
 ### `codelapse watch`
 
 **Parameters:**
@@ -724,8 +737,11 @@ Low-level API access for maximum flexibility.
 ### `codelapse api <method>`
 
 **Parameters:**
-- `method` (required): API method name
+- `method` (required): API method name (must be allowlisted)
 - `-d, --data <json>`: JSON data to send
+
+Security behavior:
+- Unknown/disallowed methods are rejected immediately
 
 **Available API Methods:**
 - `takeSnapshot`
@@ -770,7 +786,7 @@ codelapse api takeSnapshot --data '{"description": "Direct API call", "tags": ["
 | Error Code | Description | Solution |
 |------------|-------------|----------|
 | `API_KEY_MISSING` | Search API key not configured | Configure API key or disable search |
-| `INDEX_NOT_FOUND` | Search index not built | Run `search index --all` |
+| `INDEX_NOT_FOUND` | Search index not built | Run `search index` |
 | `SEARCH_SERVICE_ERROR` | External search service error | Check API key and network connectivity |
 
 ### Workspace Errors

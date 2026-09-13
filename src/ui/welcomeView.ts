@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { log } from '../logger';
+import { getUxSettings } from '../config';
 
 /**
  * Manages the welcome experience for first-time users
@@ -12,6 +13,13 @@ export class WelcomeView {
   public static async showWelcomeExperience(
     context: vscode.ExtensionContext,
   ): Promise<void> {
+    // Read at call time, so turning the setting off takes effect without a
+    // reload. `ux.showWelcomeOnStartup` was declared and documented but read by
+    // nothing, so unchecking it still showed this on the next activation.
+    if (!getUxSettings().showWelcomeOnStartup) {
+      return;
+    }
+
     // Check if we've shown the welcome before
     const hasShownWelcome = context.globalState.get<boolean>(
       'codeSnapshots.hasShownWelcome',

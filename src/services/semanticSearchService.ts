@@ -1,36 +1,28 @@
 import * as vscode from 'vscode';
+import { runWithConcurrencyLimit } from 'codelapse-core';
 import { log, logVerbose } from '../logger';
 import { SnapshotManager, Snapshot } from '../snapshotManager';
 import { CredentialsManager } from './credentialsManager';
 import { CodeChunker, CodeChunk } from './codeChunker';
 import { EmbeddingService } from './embeddingService';
-import { VectorDatabaseService, SearchResult } from './vectorDatabaseService';
+import { VectorDatabaseService } from './vectorDatabaseService';
 import {
   EnhancedSemanticSearchOptions,
   EnhancedSemanticSearchResult,
-  SearchMode,
   RankingStrategy,
   ProcessedQuery,
   QueryIntent,
-  SearchStrategy,
-  SearchResultExplanation,
-  ConfidenceFactor,
-  ActionableSuggestion,
-  AlternativeResult,
-  EnhancedResultMetadata,
-  ComplexityMetrics,
   SecurityConsideration,
-  AIAgentResponse,
-  ResponseMetadata,
-  ResponseSuggestion,
   PerformanceMetrics,
-  SearchQualityMetrics,
 } from '../types/enhancedSearch';
 import { EnhancedCodeChunker } from './enhancedCodeChunker';
-import { QualityMetricsCalculator } from './qualityMetricsCalculator';
-import { RelationshipAnalyzer } from './relationshipAnalyzer';
+import { QualityMetrics, ArchitecturalLayer } from '../types/enhancedChunking';
+import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
 import { QueryProcessor, QueryContext } from './queryProcessor';
 import { ResultManager } from './resultManager';
+import { classifyArchitecturalLayer } from './architecturalLayer';
+import { throwIfCancelled } from '../utils/cancellation';
+import { getWorkspaceId } from './workspaceIdentity';
 
 export interface SemanticSearchOptions {
   query: string;
@@ -40,15 +32,100 @@ export interface SemanticSearchOptions {
   scoreThreshold?: number;
 }
 
+/**
+ * What an indexing run actually did.
+ *
+ * `attempted` counts snapshots the run tried; `succeeded` counts the ones that
+ * were indexed. They differ whenever a snapshot failed, which the previous
+ * reporting hid.
+ */
+export interface IndexingOutcome {
+  attempted: number;
+  succeeded: number;
+  failed: Array<{ snapshotId: string; error: string }>;
+}
+
 export interface SemanticSearchResult {
   snapshotId: string;
   snapshot: Snapshot;
   filePath: string;
   startLine: number;
   endLine: number;
+  /**
+   * Raw cosine similarity from the vector store. Never a rescaled value:
+   * min-max normalization is a ranking device and lives in `rankingScore`.
+   */
   score: number;
+  /**
+   * Internally normalized score used to order results, set by ResultManager.
+   * Kept separate from `score` because `score` is shown to users as a
+   * similarity percentage and averaged into `averageRelevanceScore` for API
+   * consumers; overwriting it made the top hit always report 100%.
+   */
+  rankingScore?: number;
   content: string;
   timestamp: number;
+  /**
+   * Quality metrics for this chunk, computed from its own content.
+   *
+   * Optional because only the search path can produce them; `ResultManager`
+   * keeps its default for anything that arrives without them, so a caller that
+   * builds a `SemanticSearchResult` by hand is unaffected.
+   */
+  qualityMetrics?: QualityMetrics;
+}
+
+/**
+ * Returns the caller's score threshold unchanged, clamped to [0, 1].
+ *
+ * Previously the threshold was lowered twice -- by 0.15 in
+ * SemanticSearchService and by 0.2 in VectorDatabaseService -- giving an
+ * effective floor of max(0.5, requested - 0.35), which made a slider at 0.95
+ * admit 0.60-similarity code with no indication that the requested precision
+ * had been discarded.
+ */
+export function resolveScoreThreshold(requested: number): number {
+  if (!Number.isFinite(requested)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, requested));
+}
+
+/**
+ * Identity of a result inside one workspace: the same tuple the chunker uses to
+ * name a chunk.
+ */
+function resultIdentity(result: SemanticSearchResult): string {
+  return `${result.snapshotId}:${result.filePath}:${result.startLine}`;
+}
+
+/**
+ * Total order over search results: score descending, timestamp descending, then
+ * identity ascending.
+ *
+ * The previous comparator gave any pair of scores within 5% a timestamp
+ * tie-break and compared scores otherwise. That relation is not transitive, so
+ * it is not an order at all: with scores 1.00 / 0.96 / 0.92 and timestamps
+ * 1 / 3 / 2 it ranked 0.96 first, and it left exact ties to `Array#sort`'s input
+ * order, so the same result set could come back in two different orders. The
+ * identity tie-break is what makes the output independent of the input order.
+ */
+export function compareSearchResults(
+  a: SemanticSearchResult,
+  b: SemanticSearchResult,
+): number {
+  if (a.score !== b.score) {
+    return b.score - a.score;
+  }
+  if (a.timestamp !== b.timestamp) {
+    return b.timestamp - a.timestamp;
+  }
+  const aIdentity = resultIdentity(a);
+  const bIdentity = resultIdentity(b);
+  if (aIdentity === bIdentity) {
+    return 0;
+  }
+  return aIdentity < bIdentity ? -1 : 1;
 }
 
 export class SemanticSearchService implements vscode.Disposable {
@@ -61,14 +138,37 @@ export class SemanticSearchService implements vscode.Disposable {
 
   // Enhanced services for AI agent optimization
   private enhancedCodeChunker: EnhancedCodeChunker;
-  private qualityMetricsCalculator: QualityMetricsCalculator;
-  private relationshipAnalyzer: RelationshipAnalyzer;
   private queryProcessor: QueryProcessor;
   private resultManager: ResultManager;
 
   // Background processing
   private processingQueue: string[] = []; // Queue of snapshot IDs to process
   private isProcessing = false;
+  /**
+   * The id taken off the queue for the pass in progress. It is neither in the
+   * queue nor in `indexedSnapshots` yet, so the dedupe in
+   * `handleSnapshotChanges` has to know about it.
+   */
+  private inFlightSnapshotId: string | undefined;
+  /**
+   * How many result contents are read at once. Each read is one snapshot-file
+   * read plus one chunking pass, so the sequential loop made a forty-hit search
+   * pay forty read latencies in series; the bound keeps a large result set from
+   * opening every snapshot file at once.
+   */
+  private readonly MAX_CONTENT_READ_CONCURRENCY = 4;
+  /**
+   * How many query measurements are kept. The map is keyed by the query text,
+   * so without a cap every distinct search ever run stayed in memory until
+   * `dispose()` - and nothing but `dispose()` ever removed an entry.
+   */
+  private readonly PERFORMANCE_METRICS_LIMIT = 100;
+  /** Set by `dispose()`. Checked before any further work or state write. */
+  private disposed = false;
+  /** The snapshot-change subscription, released by `dispose()`. */
+  private snapshotChangeSubscription: vscode.Disposable | undefined;
+  /** Released by `dispose()`. Re-reads the chunker settings on a config change. */
+  private chunkerConfigSubscription: vscode.Disposable | undefined;
 
   // Cache of which snapshots have been indexed
   private indexedSnapshots: Set<string> = new Set();
@@ -86,21 +186,46 @@ export class SemanticSearchService implements vscode.Disposable {
     this.context = context;
     this.codeChunker = new CodeChunker();
     this.embeddingService = new EmbeddingService(credentialsManager);
-    this.vectorDatabaseService = new VectorDatabaseService(credentialsManager);
+    const workspaceRoot = this.snapshotManager.getWorkspaceRoot?.() ?? null;
+    this.vectorDatabaseService = new VectorDatabaseService(
+      credentialsManager,
+      getWorkspaceId(workspaceRoot),
+    );
 
     // Initialize enhanced services for AI agent optimization
     this.enhancedCodeChunker = new EnhancedCodeChunker();
-    this.qualityMetricsCalculator = new QualityMetricsCalculator();
-    this.relationshipAnalyzer = new RelationshipAnalyzer();
     this.queryProcessor = new QueryProcessor();
     this.resultManager = new ResultManager();
 
+    // Both chunkers capture their line-count settings at construction. Without
+    // this listener an edited chunkSize or chunkOverlap only applied after a
+    // Reload Window. One listener for both instances.
+    this.chunkerConfigSubscription = vscode.workspace.onDidChangeConfiguration(
+      (event) => {
+        if (
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkSize',
+          ) ||
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkOverlap',
+          )
+        ) {
+          this.codeChunker.refreshConfig();
+          this.enhancedCodeChunker.refreshConfig();
+        }
+      },
+    );
+
     this.initialize();
 
-    // Listen for snapshot changes
-    this.snapshotManager.onDidChangeSnapshots(() => {
-      this.handleSnapshotChanges();
-    });
+    // Listen for snapshot changes. The subscription is kept: without it
+    // `dispose()` could not release the listener, and the manager kept calling
+    // into a disposed service for the life of the host.
+    this.snapshotChangeSubscription = this.snapshotManager.onDidChangeSnapshots(
+      () => {
+        this.handleSnapshotChanges();
+      },
+    );
   }
 
   private async initialize(): Promise<void> {
@@ -169,19 +294,20 @@ export class SemanticSearchService implements vscode.Disposable {
       languages?.length === 1 ? languages[0] : undefined,
     );
 
-    // Determine which snapshots to search (use all if none specified)
-    const allIds = this.snapshotManager.getSnapshots().map((s) => s.id);
-    const snapshotIdsToSearch =
-      snapshotIds && snapshotIds.length > 0 ? snapshotIds : allIds;
-
-    // Search for similar code with improved parameters
+    // Search for similar code with improved parameters. The caller selection is
+    // passed through as given: when it is absent the query is not narrowed to an
+    // explicit id list, because every query already carries the workspace scope,
+    // so "every snapshot in this workspace" is the same set without a
+    // hundred-element `$in`. A vector whose snapshot no longer exists can now
+    // occupy an oversampling slot; the enrichment pass drops it when the
+    // snapshot lookup finds nothing.
     const searchResults = await this.vectorDatabaseService.searchSimilarCode(
       queryEmbedding,
       {
         limit: Math.min(100, limit * 2), // Request more results to allow for diverse filtering
-        snapshotIds: snapshotIdsToSearch,
+        snapshotIds,
         languages,
-        scoreThreshold: Math.max(0.5, scoreThreshold - 0.15), // Slightly lower threshold to get more candidates
+        scoreThreshold: resolveScoreThreshold(scoreThreshold),
       },
     );
 
@@ -196,75 +322,96 @@ export class SemanticSearchService implements vscode.Disposable {
     // Enhance results with actual content and snapshot info
     const enhancedResults: (SemanticSearchResult & { fileKey: string })[] = [];
 
-    // First pass: process all results and enrich with content
-    const processedResults: (SemanticSearchResult & { fileKey: string })[] = [];
+    // First pass: process all results and enrich with content. One read per
+    // result, with a fixed ceiling on how many are in flight, and the helper
+    // writes each result back at its input index so the array stays aligned
+    // with `searchResults`. The whole callback body is inside its own
+    // try/catch: a failed read returns `undefined` instead of rejecting, which
+    // matters because the helper propagates a rejection out of the pass and
+    // would fail the whole search rather than drop the one result whose read
+    // failed.
+    const processedResults = (
+      await runWithConcurrencyLimit(
+        searchResults,
+        this.MAX_CONTENT_READ_CONCURRENCY,
+        async (result) => {
+          try {
+            const snapshot = this.snapshotManager.getSnapshotById(
+              result.snapshotId,
+            );
 
-    for (const result of searchResults) {
-      try {
-        const snapshot = this.snapshotManager.getSnapshotById(
-          result.snapshotId,
-        );
+            if (!snapshot) {
+              logVerbose(
+                `Snapshot ${result.snapshotId} not found, skipping result`,
+              );
+              return undefined;
+            }
 
-        if (!snapshot) {
-          logVerbose(
-            `Snapshot ${result.snapshotId} not found, skipping result`,
-          );
-          continue;
-        }
+            const content =
+              await this.snapshotManager.getSnapshotFileContentPublic(
+                result.snapshotId,
+                result.filePath,
+              );
 
-        const content = await this.snapshotManager.getSnapshotFileContentPublic(
-          result.snapshotId,
-          result.filePath,
-        );
+            if (!content) {
+              logVerbose(
+                `Content not found for ${result.filePath} in snapshot ${result.snapshotId}`,
+              );
+              return undefined;
+            }
 
-        if (!content) {
-          logVerbose(
-            `Content not found for ${result.filePath} in snapshot ${result.snapshotId}`,
-          );
-          continue;
-        }
+            // Extract the specific chunk of content
+            const lines = content.split('\n');
+            const startLine = Math.max(0, result.metadata.startLine);
+            const endLine = Math.min(lines.length - 1, result.metadata.endLine);
 
-        // Extract the specific chunk of content
-        const lines = content.split('\n');
-        const startLine = Math.max(0, result.metadata.startLine);
-        const endLine = Math.min(lines.length - 1, result.metadata.endLine);
+            const chunkContent = lines.slice(startLine, endLine + 1).join('\n');
 
-        const chunkContent = lines.slice(startLine, endLine + 1).join('\n');
+            // Add context lines if needed for better understanding
+            let contentWithContext = chunkContent;
+            const contextLines = 5; // Add 5 lines of context if available
 
-        // Add context lines if needed for better understanding
-        let contentWithContext = chunkContent;
-        const contextLines = 5; // Add 5 lines of context if available
+            if (startLine > contextLines) {
+              // Add context before
+              const contextBefore = lines
+                .slice(Math.max(0, startLine - contextLines), startLine)
+                .join('\n');
+              if (contextBefore.trim()) {
+                contentWithContext = `// Context before:\n${contextBefore}\n\n${contentWithContext}`;
+              }
+            }
 
-        if (startLine > contextLines) {
-          // Add context before
-          const contextBefore = lines
-            .slice(Math.max(0, startLine - contextLines), startLine)
-            .join('\n');
-          if (contextBefore.trim()) {
-            contentWithContext = `// Context before:\n${contextBefore}\n\n${contentWithContext}`;
+            const fileKey = `${result.snapshotId}:${result.filePath}`;
+
+            const processedResult: SemanticSearchResult = {
+              snapshotId: result.snapshotId,
+              snapshot,
+              filePath: result.filePath,
+              startLine,
+              endLine,
+              score: result.score,
+              content: contentWithContext,
+              timestamp: snapshot.timestamp,
+            };
+            return {
+              ...(await this.attachQualityMetrics(processedResult)),
+              fileKey,
+            };
+          } catch (error) {
+            log(`Error enhancing search result: ${error}`);
+            return undefined;
           }
-        }
+        },
+      )
+    ).filter(
+      (result): result is SemanticSearchResult & { fileKey: string } =>
+        result !== undefined,
+    );
 
-        const fileKey = `${result.snapshotId}:${result.filePath}`;
-
-        processedResults.push({
-          snapshotId: result.snapshotId,
-          snapshot,
-          filePath: result.filePath,
-          startLine,
-          endLine,
-          score: result.score,
-          content: contentWithContext,
-          timestamp: snapshot.timestamp,
-          fileKey,
-        });
-      } catch (error) {
-        log(`Error enhancing search result: ${error}`);
-      }
-    }
-
-    // Sort all processed results by score for the initial ranking
-    processedResults.sort((a, b) => b.score - a.score);
+    // Sort all processed results for the initial ranking. The same total order
+    // as the final sort: which result is "first per file" in the diversity pass
+    // must not depend on the order the vector store happened to return.
+    processedResults.sort(compareSearchResults);
 
     // Second pass: apply diversity while maintaining quality
     // First take top results with diversity consideration (1 per file for top half)
@@ -306,17 +453,17 @@ export class SemanticSearchService implements vscode.Disposable {
       }
     }
 
-    // Final sort by score with timestamp as tiebreaker
-    enhancedResults.sort((a, b) => {
-      // If scores are very close (within 5%), sort by timestamp
-      if (Math.abs(a.score - b.score) < 0.05) {
-        return b.timestamp - a.timestamp;
-      }
-      return b.score - a.score;
-    });
+    // Final sort: a total order, so the output does not depend on the input.
+    enhancedResults.sort(compareSearchResults);
 
     // Remove the fileKey property that was used internally
-    const finalResults = enhancedResults.map(({ fileKey, ...rest }) => rest);
+    const finalResults = enhancedResults.map((result) => {
+      const { fileKey, ...rest } = result;
+      // Kept as an explicit read so the destructuring-only variable is not an
+      // unused-binding lint warning.
+      void fileKey;
+      return rest;
+    });
 
     log(
       `Search returned ${finalResults.length} results with diversity optimization`,
@@ -380,8 +527,7 @@ export class SemanticSearchService implements vscode.Disposable {
       vectorOperations: baseResults.length,
     };
 
-    // Store performance metrics for analysis
-    this.performanceMetrics.set(options.query, performanceMetrics);
+    this.recordPerformanceMetrics(options.query, performanceMetrics);
 
     log(
       `Enhanced search completed in ${totalTime}ms, returned ${enhancedResults.length} results`,
@@ -397,9 +543,13 @@ export class SemanticSearchService implements vscode.Disposable {
   ): Promise<ProcessedQuery> {
     const { query, languages, searchMode } = options;
 
-    // Create query context from options
+    // Create query context from options. Both forms are carried: `language`
+    // stays the primary language for the heuristics that want one, and
+    // `languages` is what the include filter needs so every requested language
+    // contributes its patterns.
     const context: QueryContext = {
       language: languages?.[0],
+      languages,
       availableSnapshots: this.snapshotManager.getSnapshots().map((s) => s.id),
     };
 
@@ -436,61 +586,6 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Classify the intent of a search query
    */
-  private classifyQueryIntent(query: string): QueryIntent {
-    const lowerQuery = query.toLowerCase();
-
-    // Analyze query patterns to determine intent
-    let primary: QueryIntent['primary'] = 'find_implementation';
-    const secondary: string[] = [];
-    const context: string[] = [];
-    let confidence = 0.7;
-
-    // Pattern matching for intent classification
-    if (/\b(how to|example|sample|demo)\b/i.test(query)) {
-      primary = 'find_examples';
-      confidence = 0.9;
-      context.push('examples', 'tutorials');
-    } else if (/\b(error|bug|issue|problem|fix|debug)\b/i.test(query)) {
-      primary = 'debug_issue';
-      confidence = 0.85;
-      context.push('debugging', 'error_handling');
-    } else if (/\b(test|testing|spec|assert|mock)\b/i.test(query)) {
-      primary = 'find_implementation';
-      secondary.push('testing');
-      context.push('testing', 'quality_assurance');
-    } else if (/\b(pattern|design|architecture)\b/i.test(query)) {
-      primary = 'find_patterns';
-      confidence = 0.8;
-      context.push('patterns', 'architecture');
-    } else if (/\b(usage|used|call|invoke)\b/i.test(query)) {
-      primary = 'find_usage';
-      confidence = 0.8;
-      context.push('usage', 'dependencies');
-    } else if (/\b(similar|like|equivalent)\b/i.test(query)) {
-      primary = 'find_similar';
-      confidence = 0.85;
-      context.push('similarity', 'alternatives');
-    } else if (/\b(quality|performance|optimize|improve)\b/i.test(query)) {
-      primary = 'analyze_quality';
-      confidence = 0.8;
-      context.push('quality', 'performance');
-    }
-
-    return {
-      primary,
-      secondary,
-      confidence,
-      context,
-      suggestedParameters: {
-        searchMode: primary === 'find_patterns' ? 'behavioral' : 'hybrid',
-        rankingStrategy:
-          primary === 'analyze_quality' ? 'quality' : 'relevance',
-        includeQualityMetrics: primary === 'analyze_quality',
-        includeRelationships:
-          primary === 'find_usage' || primary === 'find_similar',
-      },
-    };
-  }
 
   /**
    * Execute enhanced search based on processed query
@@ -540,6 +635,40 @@ export class SemanticSearchService implements vscode.Disposable {
   }
 
   /**
+   * Compute this result's quality metrics with the chunker already constructed
+   * for exactly this path. Computed once per result and cached on the result
+   * object because ranking reads the metrics several times.
+   */
+  private async attachQualityMetrics(
+    result: SemanticSearchResult,
+  ): Promise<SemanticSearchResult> {
+    if (result.qualityMetrics) {
+      return result;
+    }
+
+    try {
+      const chunks = await this.enhancedCodeChunker.chunkFileEnhanced(
+        result.filePath,
+        result.content,
+        result.snapshotId,
+      );
+      const chunk =
+        chunks.find(
+          (candidate) =>
+            candidate.startLine <= result.startLine &&
+            candidate.endLine >= result.endLine,
+        ) ?? chunks[0];
+      return chunk
+        ? { ...result, qualityMetrics: chunk.qualityMetrics }
+        : result;
+    } catch (error) {
+      // Metrics are an enhancement, not a precondition: a chunker failure must
+      // leave the result searchable with the default metrics.
+      log(`Unable to compute quality metrics for ${result.filePath}: ${error}`);
+      return result;
+    }
+  }
+  /**
    * Process and enhance search results with AI-specific metadata using ResultManager
    */
   private async processAndEnhanceResults(
@@ -573,6 +702,12 @@ export class SemanticSearchService implements vscode.Disposable {
    * Process snapshot changes
    */
   private handleSnapshotChanges(): void {
+    // Fully inert once disposed: a listener that outlived the subscription, or
+    // a direct call, must not repopulate the queue of a dead service.
+    if (this.disposed) {
+      return;
+    }
+
     // Check auto-index config and skip if disabled
     const autoIndexEnabled = vscode.workspace
       .getConfiguration('vscode-snapshots')
@@ -595,12 +730,26 @@ export class SemanticSearchService implements vscode.Disposable {
     if (pendingSnapshots.length > 0) {
       log(`Found ${pendingSnapshots.length} snapshots that need indexing`);
 
-      // Add to processing queue
-      this.processingQueue.push(...pendingSnapshots);
+      // Deduplicate: every change event re-lists the snapshots that are not
+      // indexed yet, so an undeduplicated push queued the same id once per
+      // saved file and indexed it that many times. The in-flight id is part of
+      // that set: it has left the queue but is not indexed yet, so a save
+      // landing mid-index would otherwise queue a second copy.
+      const alreadyQueued = new Set(this.processingQueue);
+      if (this.inFlightSnapshotId !== undefined) {
+        alreadyQueued.add(this.inFlightSnapshotId);
+      }
+      for (const snapshotId of pendingSnapshots) {
+        if (alreadyQueued.has(snapshotId)) {
+          continue;
+        }
+        this.processingQueue.push(snapshotId);
+        alreadyQueued.add(snapshotId);
+      }
 
       // Start processing if not already processing
       if (!this.isProcessing) {
-        this.processNextSnapshot();
+        void this.processNextSnapshot();
       }
     }
   }
@@ -672,6 +821,11 @@ export class SemanticSearchService implements vscode.Disposable {
    * Process the next snapshot in the queue
    */
   private async processNextSnapshot(): Promise<void> {
+    if (this.disposed) {
+      this.isProcessing = false;
+      return;
+    }
+
     if (this.processingQueue.length === 0) {
       this.isProcessing = false;
       return;
@@ -686,13 +840,24 @@ export class SemanticSearchService implements vscode.Disposable {
       return;
     }
 
+    // Off the queue but not indexed yet: record it for the duration of the
+    // pass so a change event cannot queue a second copy of it.
+    this.inFlightSnapshotId = snapshotId;
+
     try {
       log(`Processing snapshot ${snapshotId} for indexing`);
 
       // Check if credentials exist
       const hasCredentials = await this.credentialsManager.hasCredentials();
       if (!hasCredentials) {
-        log('Semantic search credentials not found. Deferring indexing.');
+        // Put the id back and stop the chain: credentials may be configured
+        // later, and every id behind this one would hit the same missing key.
+        // The previous code returned without re-queueing, so this snapshot was
+        // never indexed in the session and nothing said so.
+        this.processingQueue.unshift(snapshotId);
+        log(
+          `Semantic search credentials not found. Snapshot ${snapshotId} stays queued for a later attempt.`,
+        );
         this.isProcessing = false;
         return;
       }
@@ -700,54 +865,47 @@ export class SemanticSearchService implements vscode.Disposable {
       // Process the snapshot
       await this.indexSnapshot(snapshotId);
 
-      // Mark as indexed
+      // Mark as indexed only after `indexSnapshot` resolved: a failed upsert
+      // must leave the snapshot eligible for a retry.
       this.indexedSnapshots.add(snapshotId);
-      // Persist updated indexed snapshots
-      await this.context.workspaceState.update(
-        'semanticSearch.indexedSnapshots',
-        Array.from(this.indexedSnapshots),
-      );
+      await this.persistIndexedSnapshots();
 
       log(`Completed indexing snapshot ${snapshotId}`);
     } catch (error) {
       log(`Error processing snapshot ${snapshotId}: ${error}`);
+    } finally {
+      // Every exit from the pass -- including the missing-credentials return --
+      // releases the in-flight id.
+      this.inFlightSnapshotId = undefined;
+    }
+
+    if (this.disposed) {
+      this.isProcessing = false;
+      return;
     }
 
     // Process next
-    this.processNextSnapshot();
+    void this.processNextSnapshot();
+  }
+
+  /**
+   * Persist the indexed-snapshot set, unless the service is disposed. The
+   * writes are the part of an in-flight chain that changes state after
+   * `dispose()`, which an unloading extension must not be doing.
+   */
+  private async persistIndexedSnapshots(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    await this.context.workspaceState.update(
+      'semanticSearch.indexedSnapshots',
+      Array.from(this.indexedSnapshots),
+    );
   }
 
   /**
    * Make sure specified snapshots are indexed
    */
-  private async ensureSnapshotsIndexed(snapshotIds: string[]): Promise<void> {
-    const unindexedSnapshots = snapshotIds.filter(
-      (id) => !this.indexedSnapshots.has(id),
-    );
-
-    if (unindexedSnapshots.length === 0) {
-      return;
-    }
-
-    log(
-      `Ensuring ${unindexedSnapshots.length} snapshots are indexed before search`,
-    );
-
-    // Process each snapshot sequentially
-    for (const snapshotId of unindexedSnapshots) {
-      try {
-        await this.indexSnapshot(snapshotId);
-        this.indexedSnapshots.add(snapshotId);
-        // Persist updated indexed snapshots
-        await this.context.workspaceState.update(
-          'semanticSearch.indexedSnapshots',
-          Array.from(this.indexedSnapshots),
-        );
-      } catch (error) {
-        log(`Error indexing snapshot ${snapshotId}: ${error}`);
-      }
-    }
-  }
 
   /**
    * Process and index a snapshot
@@ -763,6 +921,16 @@ export class SemanticSearchService implements vscode.Disposable {
 
     // Gather all chunks
     const allChunks: CodeChunk[] = [];
+    // A file that cannot be read or chunked must not be dropped silently.
+    // `upsertVectors` purges the snapshot's vectors before writing the first
+    // batch (Task 11), so continuing past a file failure would delete the old
+    // vectors, write only the files that worked, and this method would still
+    // return -- which marks the snapshot indexed at the call site. Collect the
+    // failures and refuse the whole snapshot instead: the upsert, and the purge
+    // inside it, never run, and the snapshot stays unindexed so a later run
+    // retries it. A `--purge` re-index deletes the previous vectors before this
+    // method is called, so their survival is not promised here.
+    const failedFiles: Array<{ filePath: string; error: string }> = [];
 
     // Process each file
     for (const filePath of allFiles) {
@@ -786,7 +954,18 @@ export class SemanticSearchService implements vscode.Disposable {
           true, // Set forIndexing to true to prevent VS Code from showing the file
         );
 
-        if (!content) {
+        if (content === null) {
+          // `snapshotStorage` answers null for its own error states --
+          // resolution depth or a cycle, a missing base, a failed patch, an
+          // unexpected state -- so a null here is "could not reconstruct", not
+          // "empty". Skipping it would let the upsert's purge run and the
+          // snapshot be marked indexed while one of its files was never
+          // embedded.
+          throw new Error('content could not be reconstructed');
+        }
+
+        if (content === '') {
+          // An empty file is legitimate and has nothing to embed.
           logVerbose(`No content for ${filePath} in snapshot ${snapshotId}`);
           continue;
         }
@@ -800,8 +979,24 @@ export class SemanticSearchService implements vscode.Disposable {
 
         allChunks.push(...fileChunks);
       } catch (error) {
-        log(`Error processing file ${filePath} for indexing: ${error}`);
+        const message = error instanceof Error ? error.message : String(error);
+        failedFiles.push({ filePath, error: message });
+        log(`Error processing file ${filePath} for indexing: ${message}`);
       }
+    }
+
+    if (failedFiles.length > 0) {
+      const detail = failedFiles
+        .slice(0, 3)
+        .map((failure) => `${failure.filePath}: ${failure.error}`)
+        .join('; ');
+      throw new Error(
+        `Snapshot ${snapshotId} was not indexed: ${failedFiles.length} of ${
+          allFiles.length
+        } file(s) failed to read or chunk (${detail}${
+          failedFiles.length > 3 ? '; ...' : ''
+        }). Nothing was written to the vector store by this run, and the snapshot stays unmarked so a later run retries it. A purge-first re-index (--purge) deletes this snapshot's previous vectors before the files are read, so those may already be gone; a plain re-index leaves them untouched.`,
+      );
     }
 
     if (allChunks.length === 0) {
@@ -824,40 +1019,69 @@ export class SemanticSearchService implements vscode.Disposable {
 
   /**
    * Handle snapshot deletion
+   *
+   * Order matters: the vector store is cleared *first*. Purging the in-memory
+   * set first meant a failed store delete left the extension believing the
+   * snapshot was de-indexed while its vectors stayed searchable forever --
+   * consuming topK slots on hits that were then discarded. Failing before the
+   * bookkeeping leaves the snapshot marked as indexed so a later attempt can
+   * retry, and the error is propagated for the caller to report.
+   *
+   * A skipped purge is bookkeeping, not a failure: the vectors were never
+   * there, so the snapshot is removed from the index record and the skip is
+   * logged.
    */
   async deleteSnapshotIndexing(snapshotId: string): Promise<void> {
-    try {
-      // Remove from indexed set
-      this.indexedSnapshots.delete(snapshotId);
-      // Persist removal
-      await this.context.workspaceState.update(
-        'semanticSearch.indexedSnapshots',
-        Array.from(this.indexedSnapshots),
+    const purge = await this.vectorDatabaseService.deleteSnapshotVectors(
+      snapshotId,
+    );
+    if (!purge.purged) {
+      log(
+        `Snapshot ${snapshotId} removed from the search index bookkeeping without a vector purge (${purge.skippedReason}).`,
       );
-
-      // Remove from queue if present
-      const queueIndex = this.processingQueue.indexOf(snapshotId);
-      if (queueIndex !== -1) {
-        this.processingQueue.splice(queueIndex, 1);
-      }
-
-      // Delete from vector database
-      await this.vectorDatabaseService.deleteSnapshotVectors(snapshotId);
-
-      log(`Removed indexing for snapshot ${snapshotId}`);
-    } catch (error) {
-      log(`Error deleting snapshot indexing: ${error}`);
     }
+
+    // The cache holds whole vectors -- about 24 MB at 3072 dimensions -- keyed
+    // by content hash, and nothing else ever released them, so a purged
+    // snapshot stayed resident for the life of the window.
+    this.embeddingService.clearCache();
+
+    this.indexedSnapshots.delete(snapshotId);
+    // Persist removal
+    await this.persistIndexedSnapshots();
+
+    // Remove from queue if present
+    const queueIndex = this.processingQueue.indexOf(snapshotId);
+    if (queueIndex !== -1) {
+      this.processingQueue.splice(queueIndex, 1);
+    }
+
+    log(`Removed indexing for snapshot ${snapshotId}`);
   }
 
   /**
-   * Indexes all existing snapshots
+   * Index snapshots.
+   *
+   * With no options this means every snapshot that is not already recorded in
+   * indexedSnapshots -- the behaviour every existing caller relies on. An
+   * explicit snapshotIds list selects exactly those; force includes ones already
+   * indexed; purgeFirst clears a snapshot's vectors before upserting so a retry
+   * cannot mix old and new chunk ids.
    */
-  async indexAllSnapshots(): Promise<void> {
+  async indexAllSnapshots(
+    options: {
+      snapshotIds?: string[];
+      force?: boolean;
+      purgeFirst?: boolean;
+    } = {},
+  ): Promise<IndexingOutcome> {
     const snapshots = this.snapshotManager.getSnapshots();
+    const requested = (options.snapshotIds ?? []).filter(
+      (id): id is string => typeof id === 'string' && id.length > 0,
+    );
 
-    if (snapshots.length === 0) {
-      return;
+    if (snapshots.length === 0 && requested.length === 0) {
+      return { attempted: 0, succeeded: 0, failed: [] };
     }
 
     // Ensure credentials are set up
@@ -870,61 +1094,152 @@ export class SemanticSearchService implements vscode.Disposable {
       }
     }
 
-    return vscode.window.withProgress(
+    return vscode.window.withProgress<IndexingOutcome>(
       {
         location: vscode.ProgressLocation.Notification,
         title: 'Indexing snapshots for semantic search',
         cancellable: true,
       },
       async (progress, token) => {
-        // Set up cancellation handler
-        token.onCancellationRequested(() => {
-          this.processingQueue = [];
-          vscode.window.showInformationMessage('Indexing cancelled.');
-        });
+        const failed: Array<{ snapshotId: string; error: string }> = [];
+        const known = new Set(snapshots.map((snapshot) => snapshot.id));
 
-        // Filter to non-indexed snapshots
-        const unindexedSnapshots = snapshots
-          .filter((snapshot) => !this.indexedSnapshots.has(snapshot.id))
-          .map((snapshot) => snapshot.id);
-
-        if (unindexedSnapshots.length === 0) {
-          vscode.window.showInformationMessage(
-            'All snapshots are already indexed.',
-          );
-          return;
+        // Absent or empty ids mean every snapshot; explicit ids mean exactly
+        // those. An id that does not exist is reported, never dropped.
+        const selected =
+          requested.length > 0 ? requested : snapshots.map((s) => s.id);
+        const targets: string[] = [];
+        for (const snapshotId of selected) {
+          if (!known.has(snapshotId)) {
+            failed.push({
+              snapshotId,
+              error: 'Snapshot ' + snapshotId + ' not found',
+            });
+            continue;
+          }
+          if (options.force !== true && this.indexedSnapshots.has(snapshotId)) {
+            continue;
+          }
+          targets.push(snapshotId);
         }
 
-        const total = unindexedSnapshots.length;
-        let current = 0;
+        if (targets.length === 0 && failed.length === 0) {
+          vscode.window.showInformationMessage(
+            requested.length > 0
+              ? 'The requested snapshots are already indexed.'
+              : 'All snapshots are already indexed.',
+          );
+          return { attempted: 0, succeeded: 0, failed: [] };
+        }
 
-        // Process snapshots sequentially with cancellation support
-        for (const snapshotId of unindexedSnapshots) {
-          if (token.isCancellationRequested) {
-            throw new Error('Indexing cancelled by user');
-          }
+        const total = targets.length;
+        // `attempted` counts every snapshot the run tried, including requested
+        // ids that do not exist; `processed` counts only the snapshots the loop
+        // is actually working on, so the progress text cannot claim to be on
+        // snapshot 2 of 1 when a missing id is seeded into `attempted`.
+        let attempted = failed.length;
+        let processed = 0;
+        let succeeded = 0;
+
+        // Process snapshots sequentially, checking cancellation at each
+        // boundary. The previous implementation registered a listener that
+        // showed a toast but could not stop the loop, so a cancelled run still
+        // ran to completion.
+        for (const snapshotId of targets) {
+          throwIfCancelled(token);
+
           progress.report({
-            message: `Processing snapshot ${++current} of ${total}`,
+            message: 'Processing snapshot ' + (processed + 1) + ' of ' + total,
             increment: 100 / total,
           });
+          processed++;
+          attempted++;
+
+          // Whether this snapshot's vectors may already be gone if a later step
+          // of the same try block throws. Only entering `indexSnapshot` sets it:
+          // its upsert purges the snapshot's vectors before it writes any batch
+          // (plan 11), and that purge runs after `ensureInitialized`, which can
+          // create the index and obtain the credentials the explicit `--purge`
+          // below deliberately refuses to prompt for. A purge the explicit call
+          // *skipped* can therefore still have happened by the time
+          // `indexSnapshot` throws.
+          //
+          // The explicit purge is deliberately not part of this flag: if it
+          // throws, it never reached the store, the vectors are intact and the
+          // mark must survive. Its outcome is not consulted here any more
+          // either - `indexSnapshot` may purge after a skip just as it may
+          // after a delete, so the outcome cannot change the decision.
+          let vectorsMayBeGone = false;
           try {
+            if (options.purgeFirst === true) {
+              // A re-index without this mixes the old and the new chunk id sets
+              // for the same snapshot. Plan 11 also makes the upsert itself
+              // idempotent; this call stays correct either way.
+              await this.vectorDatabaseService.deleteSnapshotVectors(
+                snapshotId,
+              );
+            }
+
+            // Over-dropping is the safe direction: it costs one unnecessary
+            // re-index on the next run, where keeping the mark would let a later
+            // non-forced run report 'already indexed' over an empty store.
+            vectorsMayBeGone = true;
             await this.indexSnapshot(snapshotId);
             this.indexedSnapshots.add(snapshotId);
             // Persist updated indexed snapshots
-            await this.context.workspaceState.update(
-              'semanticSearch.indexedSnapshots',
-              Array.from(this.indexedSnapshots),
-            );
+            await this.persistIndexedSnapshots();
+            succeeded++;
           } catch (error) {
-            log(`Error indexing snapshot ${snapshotId}: ${error}`);
+            const message =
+              error instanceof Error ? error.message : String(error);
+            failed.push({ snapshotId, error: message });
+            if (vectorsMayBeGone) {
+              // The vectors may be gone but the snapshot was not re-indexed, so
+              // a persisted mark would make every later selection skip it and
+              // report it as already indexed over an empty store. Forget it so
+              // the next run retries. Guarded on the regions that can have
+              // deleted vectors, not on purgeFirst: if the explicit purge
+              // itself threw, it never reached the store and the mark stays.
+              this.indexedSnapshots.delete(snapshotId);
+              // The correction is best-effort: if the persist itself is what
+              // failed, a second throw here would escape the catch, abort every
+              // remaining snapshot and lose this run's failure report. The
+              // in-memory set is corrected either way.
+              try {
+                await this.persistIndexedSnapshots();
+              } catch (persistError) {
+                log(
+                  `Error persisting the corrected indexed set: ${
+                    persistError instanceof Error
+                      ? persistError.message
+                      : String(persistError)
+                  }`,
+                );
+              }
+            }
+            log(`Error indexing snapshot ${snapshotId}: ${message}`);
           }
         }
 
-        if (!token.isCancellationRequested) {
+        if (failed.length === 0) {
           vscode.window.showInformationMessage(
-            `Successfully indexed ${current} snapshots for semantic search.`,
+            `Indexed ${succeeded} snapshot(s) for semantic search.`,
+          );
+        } else if (succeeded === 0) {
+          vscode.window.showErrorMessage(
+            `Indexing failed for all ${failed.length} snapshot(s). See the CodeLapse output channel for details.`,
+          );
+        } else {
+          vscode.window.showWarningMessage(
+            `Indexed ${succeeded} of ${
+              failed.length + succeeded
+            } snapshot(s); ${
+              failed.length
+            } failed. See the CodeLapse output channel for details.`,
           );
         }
+
+        return { attempted, succeeded, failed };
       },
     );
   }
@@ -948,142 +1263,39 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Enhance query for behavioral search
    */
-  private enhanceForBehavioralSearch(query: string): string {
-    return `${query} behavior functionality what does this code do`;
-  }
 
   /**
    * Enhance query for syntactic search
    */
-  private enhanceForSyntacticSearch(query: string): string {
-    return `${query} syntax structure pattern`;
-  }
 
   /**
    * Get boost factors based on query intent
    */
-  private getBoostFactors(intent: QueryIntent) {
-    const factors = [];
-
-    if (intent.primary === 'find_examples') {
-      factors.push({
-        condition: 'hasTests',
-        multiplier: 1.3,
-        description: 'Boost code with tests for examples',
-        weight: 0.8,
-      });
-    }
-
-    if (intent.primary === 'analyze_quality') {
-      factors.push({
-        condition: 'highQuality',
-        multiplier: 1.5,
-        description: 'Boost high-quality code for quality analysis',
-        weight: 0.9,
-      });
-    }
-
-    return factors;
-  }
 
   /**
-   * Get penalty factors based on query intent
+   * Get penalty factors based on query intent.
+   *
+   * Returns none, deliberately. This method registered `hasCodeSmells` for
+   * `find_examples`, and nothing evaluates that condition: `evaluateCondition`
+   * on `ResultManager` has no case for it, so it fell through to its documented
+   * `default: false`. The registration was deleted from the live strategy
+   * builder (`queryProcessor.ts:getPenaltyFactors`) for the same reason -- a
+   * registration against a condition that cannot fire is configuration reading
+   * as a working safety net -- and this copy is not even reachable: no caller
+   * exists for this method. It can come back when a smell signal does.
    */
-  private getPenaltyFactors(intent: QueryIntent) {
-    const factors = [];
-
-    if (intent.primary === 'find_examples') {
-      factors.push({
-        condition: 'hasCodeSmells',
-        multiplier: 0.7,
-        description: 'Penalize code with smells for examples',
-        weight: 0.6,
-      });
-    }
-
-    return factors;
-  }
 
   /**
    * Get expected result types based on intent
    */
-  private getExpectedResultTypes(intent: QueryIntent): string[] {
-    switch (intent.primary) {
-      case 'find_implementation':
-        return ['function', 'class', 'method'];
-      case 'find_examples':
-        return ['function', 'class', 'test'];
-      case 'find_patterns':
-        return ['class', 'interface', 'module'];
-      case 'find_usage':
-        return ['function', 'method', 'call'];
-      case 'analyze_quality':
-        return ['function', 'class', 'module'];
-      default:
-        return ['function', 'class'];
-    }
-  }
 
   /**
    * Calculate query complexity score
    */
-  private calculateQueryComplexity(query: string): number {
-    let complexity = 0.5; // Base complexity
-
-    // Length factor
-    if (query.length > 100) complexity += 0.3;
-    else if (query.length > 50) complexity += 0.2;
-
-    // Technical terms
-    const technicalTerms =
-      /\b(algorithm|pattern|architecture|performance|optimization|security)\b/gi;
-    const matches = query.match(technicalTerms);
-    if (matches) complexity += matches.length * 0.1;
-
-    // Multiple conditions
-    if (query.includes(' AND ') || query.includes(' OR ')) complexity += 0.2;
-
-    return Math.min(1.0, complexity);
-  }
 
   /**
    * Generate result explanation
    */
-  private async generateResultExplanation(
-    result: SemanticSearchResult,
-    processedQuery: ProcessedQuery,
-  ): Promise<SearchResultExplanation> {
-    const keyFeatures = this.extractKeyFeatures(result.content);
-    const matchedConcepts = this.findMatchedConcepts(
-      result.content,
-      processedQuery.originalQuery,
-    );
-
-    return {
-      whyRelevant: `This code matches your query "${
-        processedQuery.originalQuery
-      }" with a confidence score of ${(result.score * 100).toFixed(1)}%`,
-      keyFeatures,
-      matchedConcepts,
-      confidenceFactors: [
-        {
-          factor: 'semantic_similarity',
-          weight: 0.7,
-          description: 'Semantic similarity to query',
-          value: result.score,
-        },
-        {
-          factor: 'keyword_match',
-          weight: 0.3,
-          description: 'Keyword matching',
-          value: matchedConcepts.length > 0 ? 0.8 : 0.3,
-        },
-      ],
-      semanticSimilarity: `High semantic similarity (${(
-        result.score * 100
-      ).toFixed(1)}%) based on code functionality and context`,
-    };
-  }
 
   /**
    * Extract key features from code content
@@ -1140,23 +1352,7 @@ export class SemanticSearchService implements vscode.Disposable {
    * Get default quality metrics
    */
   private getDefaultQualityMetrics() {
-    return {
-      overallScore: 70,
-      readabilityScore: 0.7,
-      testCoverage: 0,
-      documentationRatio: 0.5,
-      duplicationRisk: 0.3,
-      performanceRisk: 0.2,
-      securityRisk: 0.2,
-      maintainabilityScore: 70,
-      technicalDebt: {
-        estimatedFixTime: 0,
-        severity: 'low' as const,
-        categories: [],
-        issues: [],
-      },
-      styleComplianceScore: 80,
-    };
+    return { ...DEFAULT_QUALITY_METRICS };
   }
 
   /**
@@ -1167,7 +1363,6 @@ export class SemanticSearchService implements vscode.Disposable {
     contextRadius: number,
   ) {
     // Get surrounding context
-    const snapshot = result.snapshot;
     const content = await this.snapshotManager.getSnapshotFileContentPublic(
       result.snapshotId,
       result.filePath,
@@ -1193,7 +1388,7 @@ export class SemanticSearchService implements vscode.Disposable {
 
     return {
       surroundingContext,
-      architecturalLayer: this.detectArchitecturalLayer(result.filePath) as any,
+      architecturalLayer: this.detectArchitecturalLayer(result.filePath),
       frameworkContext: this.detectFrameworks(content),
       fileContext: {
         totalLines: content.split('\n').length,
@@ -1208,14 +1403,8 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Detect architectural layer from file path
    */
-  private detectArchitecturalLayer(filePath: string): string {
-    if (/\/(controller|api|endpoint)s?\//.test(filePath)) return 'presentation';
-    if (/\/(service|business|domain)s?\//.test(filePath)) return 'business';
-    if (/\/(repository|dao|data)s?\//.test(filePath)) return 'data';
-    if (/\/(model|entity)s?\//.test(filePath)) return 'model';
-    if (/\/(util|helper|common)s?\//.test(filePath)) return 'utility';
-    if (/\/(test|spec)s?\//.test(filePath)) return 'test';
-    return 'unknown';
+  private detectArchitecturalLayer(filePath: string): ArchitecturalLayer {
+    return classifyArchitecturalLayer(filePath);
   }
 
   /**
@@ -1240,100 +1429,14 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Generate actionable suggestions
    */
-  private async generateActionableSuggestions(
-    result: SemanticSearchResult,
-    qualityMetrics: any,
-  ): Promise<ActionableSuggestion[]> {
-    const suggestions: ActionableSuggestion[] = [];
-
-    // Quality-based suggestions
-    if (qualityMetrics.readabilityScore < 0.6) {
-      suggestions.push({
-        type: 'improvement',
-        description:
-          'Consider improving code readability with better variable names and comments',
-        priority: 'medium',
-        effort: 'moderate',
-        action: 'Refactor for readability',
-        expectedBenefit: 'Improved maintainability',
-      });
-    }
-
-    if (qualityMetrics.testCoverage === 0) {
-      suggestions.push({
-        type: 'testing',
-        description: 'Add unit tests to improve code reliability',
-        priority: 'high',
-        effort: 'moderate',
-        action: 'Write unit tests',
-        expectedBenefit: 'Better code reliability and regression prevention',
-      });
-    }
-
-    return suggestions;
-  }
 
   /**
    * Find alternative results
    */
-  private async findAlternativeResults(
-    result: SemanticSearchResult,
-    allResults: SemanticSearchResult[],
-  ): Promise<AlternativeResult[]> {
-    const alternatives: AlternativeResult[] = [];
-
-    // Find similar results from the same file or related files
-    for (const other of allResults) {
-      if (other === result) continue;
-
-      // Same file, different location
-      if (
-        other.filePath === result.filePath &&
-        Math.abs(other.startLine - result.startLine) > 10
-      ) {
-        alternatives.push({
-          chunkId: `${other.snapshotId}:${other.filePath}:${other.startLine}`,
-          similarityScore: 0.8,
-          description: 'Similar code in the same file',
-          differences: ['Different location in file'],
-          preferWhen: 'Looking for related functionality in the same module',
-        });
-      }
-
-      if (alternatives.length >= 3) break; // Limit alternatives
-    }
-
-    return alternatives;
-  }
 
   /**
    * Create enhanced metadata
    */
-  private async createEnhancedMetadata(
-    result: SemanticSearchResult,
-    qualityMetrics: any,
-  ): Promise<EnhancedResultMetadata> {
-    const content = result.content;
-
-    return {
-      semanticType: this.detectSemanticType(content),
-      designPatterns: this.detectDesignPatterns(content),
-      architecturalLayer: this.detectArchitecturalLayer(result.filePath),
-      businessDomain: this.detectBusinessDomain(result.filePath),
-      frameworkContext: this.detectFrameworks(content),
-      dependencies: this.extractDependencies(content),
-      usageFrequency: 1, // TODO: Implement usage tracking
-      lastModified: result.timestamp,
-      complexityMetrics: {
-        cyclomaticComplexity: this.calculateCyclomaticComplexity(content),
-        cognitiveComplexity: this.calculateCognitiveComplexity(content),
-        linesOfCode: content.split('\n').length,
-        nestingDepth: this.calculateNestingDepth(content),
-        maintainabilityIndex: qualityMetrics.readabilityScore * 100,
-      },
-      securityConsiderations: this.analyzeSecurityConsiderations(content),
-    };
-  }
 
   /**
    * Detect semantic type of code
@@ -1501,28 +1604,6 @@ export class SemanticSearchService implements vscode.Disposable {
   /**
    * Rank and filter enhanced results
    */
-  private rankAndFilterResults(
-    results: EnhancedSemanticSearchResult[],
-    processedQuery: ProcessedQuery,
-    options: EnhancedSemanticSearchOptions,
-  ): EnhancedSemanticSearchResult[] {
-    // Apply filters
-    let filteredResults = this.applyFilters(results, processedQuery.filters);
-
-    // Apply ranking strategy
-    filteredResults = this.applyRanking(
-      filteredResults,
-      processedQuery.searchStrategy.ranking,
-    );
-
-    // Apply diversification if enabled
-    if (processedQuery.searchStrategy.diversification) {
-      filteredResults = this.applyDiversification(filteredResults, options);
-    }
-
-    // Limit results
-    return filteredResults.slice(0, options.limit || 20);
-  }
 
   /**
    * Apply filters to results
@@ -1535,7 +1616,8 @@ export class SemanticSearchService implements vscode.Disposable {
       // Quality threshold filter
       if (
         filters.qualityThreshold &&
-        result.qualityMetrics.readabilityScore < filters.qualityThreshold
+        toRatio(result.qualityMetrics.readabilityScore) <
+          filters.qualityThreshold
       ) {
         return false;
       }
@@ -1566,6 +1648,9 @@ export class SemanticSearchService implements vscode.Disposable {
     return results.sort((a, b) => {
       switch (strategy) {
         case 'quality':
+          // Both operands are readabilityScore, both 0-100: this is a sort
+          // comparator, so only the sign matters and no conversion is involved.
+          // quality-scale: same-unit
           return (
             b.qualityMetrics.readabilityScore -
             a.qualityMetrics.readabilityScore
@@ -1607,75 +1692,49 @@ export class SemanticSearchService implements vscode.Disposable {
    * Dispose resources
    */
   dispose(): void {
-    // Any cleanup needed
+    // Set the flag first: anything already in flight checks it before its next
+    // write, and the queue is cleared so nothing new starts.
+    this.disposed = true;
+    this.snapshotChangeSubscription?.dispose();
+    this.snapshotChangeSubscription = undefined;
+    this.chunkerConfigSubscription?.dispose();
+    this.chunkerConfigSubscription = undefined;
     this.processingQueue = [];
     this.isProcessing = false;
     this.performanceMetrics.clear();
     log('Disposed semantic search service');
   }
 
+  private recordPerformanceMetrics(
+    query: string,
+    metrics: PerformanceMetrics,
+  ): void {
+    // Delete before set so a repeated query moves to the newest position and
+    // the eviction below really is least-recently-written.
+    if (this.performanceMetrics.has(query)) {
+      this.performanceMetrics.delete(query);
+    }
+    this.performanceMetrics.set(query, metrics);
+
+    if (this.performanceMetrics.size > this.PERFORMANCE_METRICS_LIMIT) {
+      const oldestQuery = this.performanceMetrics.keys().next().value;
+      if (oldestQuery !== undefined) {
+        this.performanceMetrics.delete(oldestQuery);
+      }
+    }
+  }
+
   /**
    * Calculate quality metrics for a search result
    */
-  private async calculateQualityMetricsForResult(result: SemanticSearchResult) {
-    try {
-      const language = this.detectLanguageFromFilePath(result.filePath);
-      const linesOfCode = this.calculateLinesOfCode(result.content);
-
-      return await this.qualityMetricsCalculator.calculateQualityMetrics(
-        result.content,
-        language,
-        linesOfCode,
-      );
-    } catch (error) {
-      log(`Error calculating quality metrics: ${error}`);
-      return this.getDefaultQualityMetrics();
-    }
-  }
 
   /**
    * Analyze relationships for a search result
    */
-  private async analyzeResultRelationships(
-    result: SemanticSearchResult,
-    allResults: SemanticSearchResult[],
-  ) {
-    try {
-      // Create a simplified chunk representation for relationship analysis
-      const enhancedChunk = this.createEnhancedChunkFromResult(result);
-      const allChunks = allResults.map((r) =>
-        this.createEnhancedChunkFromResult(r),
-      );
-
-      const analysisResult =
-        await this.relationshipAnalyzer.analyzeChunkRelationships(
-          enhancedChunk,
-          allChunks,
-        );
-
-      return analysisResult.relationships;
-    } catch (error) {
-      log(`Error analyzing relationships: ${error}`);
-      return [];
-    }
-  }
 
   /**
    * Generate basic context info for a result
    */
-  private async generateBasicContextInfo(result: SemanticSearchResult) {
-    const contextInfo = await this.generateContextInfo(result, 5);
-    return {
-      ...contextInfo,
-      fileContext: {
-        totalLines: result.content.split('\n').length,
-        fileSize: result.content.length,
-        lastModified: new Date(result.timestamp),
-        encoding: 'utf-8',
-        siblingChunks: [],
-      },
-    };
-  }
 
   /**
    * Create an enhanced chunk from a search result

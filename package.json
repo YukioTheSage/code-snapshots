@@ -2,7 +2,7 @@
   "name": "vscode-snapshots",
   "displayName": "CodeLapse",
   "description": "Simple Git-like code snapshots with easy navigation and improved user experience",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "publisher": "YukioTheSage",
   "icon": "images/snapshot.png",
   "license": "MIT",
@@ -25,7 +25,7 @@
     "url": "https://github.com/YukioTheSage/code-snapshots.git"
   },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
     "Other",
@@ -33,6 +33,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:vscode-snapshots.getApi"
   ],
   "contributes": {
@@ -180,6 +181,11 @@
         "command": "vscode-snapshots.editConfig",
         "title": "Snapshots: Edit Setting",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "vscode-snapshots.toggleChangedFilesView",
+        "title": "Snapshots: Toggle Show Only Changed Files",
+        "icon": "$(list-filter)"
       }
     ],
     "configuration": {
@@ -193,7 +199,14 @@
         "vscode-snapshots.maxSnapshots": {
           "type": "number",
           "default": 50,
+          "minimum": 1,
           "description": "Maximum number of snapshots to keep"
+        },
+        "vscode-snapshots.maxSnapshotStoreBytes": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum bytes the snapshot store may occupy. 0 disables the limit; the oldest snapshots are removed when it is exceeded. A snapshot a survivor still references is rebuilt from full content before its base is removed, so the store can stay above the limit rather than lose data."
         },
         "vscode-snapshots.autoSnapshotInterval": {
           "type": "number",
@@ -221,12 +234,6 @@
           "default": true,
           "scope": "resource",
           "description": "Enable the 'Create Git Commit from Snapshot' command."
-        },
-        "vscode-snapshots.git.autoSnapshotBeforeOperation": {
-          "type": "boolean",
-          "default": false,
-          "scope": "resource",
-          "description": "Automatically take a snapshot before Git operations like pull, merge, and rebase."
         },
         "vscode-snapshots.autoSnapshot.rules": {
           "type": "array",
@@ -265,32 +272,42 @@
         "vscode-snapshots.ux.useAnimations": {
           "type": "boolean",
           "default": true,
-          "description": "Use animations for smoother transitions"
+          "description": "Show a gutter direction indicator while navigating to the previous or next snapshot. Nothing else is animated."
         },
         "vscode-snapshots.ux.confirmRestoreOperations": {
           "type": "boolean",
           "default": true,
-          "description": "Confirm before restoring snapshots"
+          "description": "Ask for confirmation before restoring a snapshot. This does NOT control the unsaved-changes warning when a restore would discard unsaved work; that warning is always shown, because it prevents data loss."
         },
         "vscode-snapshots.semanticSearch.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable semantic code search across snapshots"
+          "description": "Enable semantic code search across snapshots. Requires a Gemini API key and a Pinecone API key; there is no offline mode, so indexing prompts for a missing key and fails if you decline."
         },
         "vscode-snapshots.semanticSearch.chunkSize": {
           "type": "number",
           "default": 200,
-          "description": "Maximum token size for each code chunk"
+          "description": "Maximum lines per code chunk"
         },
         "vscode-snapshots.semanticSearch.chunkOverlap": {
           "type": "number",
           "default": 50,
-          "description": "Overlap between adjacent chunks in tokens"
+          "description": "Overlap between adjacent chunks in lines, clamped to chunkSize minus 5"
         },
         "vscode-snapshots.semanticSearch.autoIndex": {
           "type": "boolean",
           "default": false,
           "description": "Automatically index snapshots in the background"
+        },
+        "vscode-snapshots.semanticSearch.embedding.model": {
+          "type": "string",
+          "default": "gemini-embedding-2",
+          "description": "Embedding model id used for indexing and search. Google retires model ids on a published schedule; if indexing starts failing, check https://ai.google.dev/gemini-api/docs/deprecations and update this value."
+        },
+        "vscode-snapshots.semanticSearch.embedding.dimension": {
+          "type": "number",
+          "default": 3072,
+          "description": "Embedding vector dimension. Must match the dimension the vector index was created with; changing it requires clearing and rebuilding the index."
         }
       }
     },
@@ -530,6 +547,16 @@
           "command": "vscode-snapshots.searchSnapshots",
           "when": "view == manualSnapshotHistoryView || view == autoSnapshotHistoryView",
           "group": "navigation@6"
+        },
+        {
+          "command": "vscode-snapshots.toggleChangedFilesView",
+          "when": "view == manualSnapshotHistoryView",
+          "group": "navigation@7"
+        },
+        {
+          "command": "vscode-snapshots.toggleChangedFilesView",
+          "when": "view == autoSnapshotHistoryView",
+          "group": "navigation@7"
         }
       ],
       "commandPalette": [
@@ -544,6 +571,50 @@
         {
           "command": "vscode-snapshots.focusAutoSnapshotView",
           "group": "CodeLapse"
+        },
+        {
+          "command": "vscode-snapshots.restoreFromTree",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.compareWithCurrentFromTree",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.deleteFromTree",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.compareFileWithWorkspace",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.restoreFileFromSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.showChangedFilesInSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.toggleFavoriteStatus",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotTags",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editSnapshotNotes",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editTaskReference",
+          "when": "false"
+        },
+        {
+          "command": "vscode-snapshots.editConfig",
+          "when": "false"
         }
       ]
     }
@@ -558,25 +629,34 @@
     "esbuild-prod": "npm run check-types && node esbuild.js --production",
     "package": "npm run esbuild-prod && vsce package",
     "lint": "eslint \"src/**/*.ts\"",
+    "lint:budget": "jest --runInBand src/__tests__/deadCodeBudget.test.ts",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "jest",
+    "test:integration": "npm run compile && tsc -p tsconfig.integration.json && node test-out/test/runTest.js",
+    "test:visual": "npx ts-node test/visual/visualRegression.ts",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
     "@types/jest": "^29.0.0",
+    "@types/mocha": "^10.0.10",
     "@types/node": "14.x",
-    "@types/vscode": "^1.60.0",
+    "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^5.0.0",
     "@typescript-eslint/parser": "^5.0.0",
+    "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.25.3",
     "eslint": "^8.0.0",
     "eslint-config-prettier": "^8.0.0",
     "eslint-plugin-prettier": "^4.0.0",
     "jest": "^29.0.0",
+    "jest-util": "^29.7.0",
+    "mocha": "^12.0.0",
     "npm-run-all": "^4.1.5",
+    "playwright-core": "^1.63.0",
     "prettier": "^2.8.0",
     "ts-jest": "^29.0.0",
     "typescript": "^4.3.2",
@@ -586,6 +666,7 @@
     "@google/genai": "^0.10.0",
     "@google/generative-ai": "^0.24.0",
     "@pinecone-database/pinecone": "^5.1.2",
+    "codelapse-core": "file:shared",
     "diff": "^5.0.0",
     "java-parser": "^2.3.3",
     "minimatch": "^10.0.1",

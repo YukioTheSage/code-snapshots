@@ -26,6 +26,7 @@ import {
 } from '../../types/enhancedSearch';
 import { SemanticSearchResult } from '../semanticSearchService';
 import { QualityMetrics, ContextInfo } from '../../types/enhancedChunking';
+import { toRatio } from '../qualityScale';
 
 describe('ResultManager', () => {
   let resultManager: ResultManager;
@@ -144,14 +145,13 @@ describe('ResultManager', () => {
             weight: 0.8,
           },
         ],
-        penaltyFactors: [
-          {
-            condition: 'hasCodeSmells',
-            multiplier: 0.8,
-            description: 'Penalize code with smells',
-            weight: 0.6,
-          },
-        ],
+        // Empty on purpose. This used to register a `hasCodeSmells` penalty
+        // (0.8 / 0.6), which Plan 08 deleted from `evaluateCondition`: an
+        // unknown condition falls through to `default: false`, so the entry
+        // penalized nothing while reading as if it did. The penalty arithmetic
+        // is exercised where it can be observed, in
+        // `src/__tests__/rankingHeuristics.test.ts`.
+        penaltyFactors: [],
       },
       filters: {
         qualityThreshold: 0.6,
@@ -202,9 +202,37 @@ describe('ResultManager', () => {
       expect(stats).toBeDefined();
       expect(stats.originalCount).toBe(mockBaseResults.length);
       expect(stats.finalCount).toBe(results.length);
-      expect(stats.processingTime).toBeGreaterThan(0);
+      // A duration is not required to be > 0: sub-millisecond work
+      // legitimately measures 0 ms, which made this fail intermittently.
+      expect(typeof stats.processingTime).toBe('number');
+      expect(Number.isFinite(stats.processingTime)).toBe(true);
+      expect(stats.processingTime).toBeGreaterThanOrEqual(0);
       expect(stats.diversityScore).toBeGreaterThanOrEqual(0);
       expect(stats.averageQualityScore).toBeGreaterThanOrEqual(0);
+    });
+
+    it('ranks the manufactured defaults exactly as it did before the scale fix', async () => {
+      // The defaults used to be written on the 0-1 scale in 0-100 fields
+      // (readabilityScore 0.7, duplicationRisk 0.3, ...). Converting them to
+      // the documented contract while converting every consumer must leave the
+      // composite identical: (0.7 + 0.5 + 0.7 + 0.8) / 4 either way.
+      const { results, stats } = await resultManager.processResults(
+        mockBaseResults,
+        mockProcessedQuery,
+        { ...mockOptions, filterCriteria: {}, limit: 10 },
+      );
+
+      expect(results.length).toBeGreaterThan(0);
+      for (const result of results) {
+        expect(result.qualityMetrics.readabilityScore).toBe(70);
+        expect(result.qualityMetrics.duplicationRisk).toBe(30);
+      }
+      // `averageQualityScore` averages `overallScore` (70, a 0-100 field) and is
+      // reported on the 0-1 statistic scale, so it is 0.7 -- not 70, and not the
+      // 0.675 quality term, which is a different quantity. The composite itself
+      // is proven unchanged in src/__tests__/rankingThreshold.test.ts, against a
+      // fixture with controlled weights.
+      expect(stats.averageQualityScore).toBeCloseTo(0.7);
     });
 
     it('should handle empty results gracefully', async () => {
@@ -220,25 +248,53 @@ describe('ResultManager', () => {
     });
 
     it('should apply quality threshold filtering', async () => {
-      const optionsWithHighThreshold = {
-        ...mockOptions,
-        filterCriteria: {
-          qualityThreshold: 0.9,
-        },
-      };
-
-      const { results } = await resultManager.processResults(
+      // This test previously set a threshold of 0.9 while the pipeline assigns
+      // every result a default readabilityScore of 0.7. Every result was
+      // therefore filtered out and the `results.forEach(...)` body never ran,
+      // so deleting the filter altogether would not have failed it.
+      //
+      // The default score is read from an unfiltered run rather than
+      // hardcoded, so this asserts the filtering boundary without depending on
+      // the absolute value of the default. The metric is converted to the
+      // threshold's 0-1 units, because the threshold is a ratio-scale filter
+      // input -- `queryProcessor.ts` sets 0.7 -- while the metric is a 0-100
+      // contract field.
+      const unfiltered = await resultManager.processResults(
         mockBaseResults,
         mockProcessedQuery,
-        optionsWithHighThreshold,
+        { ...mockOptions, filterCriteria: {}, limit: 10 },
       );
 
-      // Should filter out results with lower quality scores
-      results.forEach((result) => {
-        expect(result.qualityMetrics.readabilityScore).toBeGreaterThanOrEqual(
-          0.6,
-        ); // Default quality
-      });
+      expect(unfiltered.results.length).toBeGreaterThan(0);
+      const defaultRatio = toRatio(
+        unfiltered.results[0].qualityMetrics.readabilityScore,
+      );
+      expect(typeof defaultRatio).toBe('number');
+
+      // A threshold at the default keeps everything...
+      const atThreshold = await resultManager.processResults(
+        mockBaseResults,
+        mockProcessedQuery,
+        {
+          ...mockOptions,
+          filterCriteria: { qualityThreshold: defaultRatio },
+          limit: 10,
+        },
+      );
+      expect(atThreshold.results).toHaveLength(unfiltered.results.length);
+
+      // ...and one above it removes everything, which is what proves the
+      // filter runs at all.
+      const aboveThreshold = await resultManager.processResults(
+        mockBaseResults,
+        mockProcessedQuery,
+        {
+          ...mockOptions,
+          filterCriteria: { qualityThreshold: defaultRatio + 0.1 },
+          limit: 10,
+        },
+      );
+      expect(aboveThreshold.results).toHaveLength(0);
     });
 
     it('should respect result limit', async () => {
@@ -379,11 +435,16 @@ describe('ResultManager', () => {
 
       expect(rankedResults.length).toBeGreaterThan(0);
 
-      // Results should be sorted by score (descending)
+      // Ordering follows the composite ranking value, NOT the raw similarity.
+      // This previously asserted that `score` was descending, which held only
+      // because the normalized composite was written back over `score`. Now
+      // that `score` is the cosine similarity the user is shown, a boost
+      // factor can legitimately rank a lower-similarity result first.
       for (let i = 1; i < rankedResults.length; i++) {
-        expect(rankedResults[i - 1].score).toBeGreaterThanOrEqual(
-          rankedResults[i].score,
-        );
+        const previous =
+          rankedResults[i - 1].rankingScore ?? rankedResults[i - 1].score;
+        const current = rankedResults[i].rankingScore ?? rankedResults[i].score;
+        expect(previous).toBeGreaterThanOrEqual(current);
       }
     });
 
@@ -750,7 +811,11 @@ describe('ResultManager', () => {
 
       expect(results.length).toBeLessThanOrEqual(20);
       expect(processingTime).toBeLessThan(5000); // Should complete within 5 seconds
-      expect(stats.processingTime).toBeGreaterThan(0);
+      // A duration is not required to be > 0: sub-millisecond work
+      // legitimately measures 0 ms, which made this fail intermittently.
+      expect(typeof stats.processingTime).toBe('number');
+      expect(Number.isFinite(stats.processingTime)).toBe(true);
+      expect(stats.processingTime).toBeGreaterThanOrEqual(0);
     });
 
     it('should handle results with missing metadata gracefully', async () => {

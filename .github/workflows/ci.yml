@@ -7,7 +7,40 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  # `codelapse-core` is declared as `file:shared` in the root package and as
+  # `file:../shared` in cli/, so `npm ci` does not install a published copy: npm
+  # links node_modules/codelapse-core to this checkout's shared/ directory. The link
+  # resolves through shared/package.json's `main`, which is dist/index.js, and
+  # dist/ is gitignored -- so a fresh checkout has no build output and every job
+  # that imports the core has to build it first. See the "Build the linked core"
+  # step in each of the jobs below. Two consequences worth knowing:
+  #   1. A change under shared/src *is* exercised by the jobs below, because they
+  #      run against this checkout rather than against a release.
+  #   2. This job type-checks and builds shared/ on its own, which is what catches a
+  #      compile error there before the other jobs hit it.
+  shared:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+      # No lint or format:check step here, deliberately. shared/ has neither
+      # script, and 8 of its files do not currently satisfy prettier. Add both
+      # once those are formatted, rather than gating on a check that would fail
+      # on arrival.
+
+  extension:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -17,9 +50,128 @@ jobs:
           node-version: '20'
       - name: Install dependencies
         run: npm ci
+      - name: Build the linked core
+        # `codelapse-core` is a `file:shared` link, so `npm ci` above linked it into
+        # node_modules without installing anything from the registry. That link
+        # resolves through shared/package.json's `main` -- dist/index.js -- and
+        # dist/ is gitignored, so a fresh checkout has none and the type-check
+        # below fails with "Cannot find module 'codelapse-core'". Build it here
+        # first. A `prepare` script in shared/package.json would also run (npm does
+        # run it for file: links), but it needs shared's own node_modules for tsc and
+        # rimraf, and a failure there fails the install instead of one visible step.
+        working-directory: shared
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Report which core the steps below load
+        # Informational, not a gate: Compile and Test below fail loudly if the link
+        # or the build is missing. Printing the resolved entry point makes "which
+        # core did this run test?" answerable from the log alone.
+        run: node -e "console.log('codelapse-core ->', require.resolve('codelapse-core'))"
       - name: Lint
-        run: npm run lint
+        # `set -o pipefail` is load-bearing. The default shell for `run:` is
+        # `bash -e {0}`, which has no pipefail, so this pipeline's status was
+        # `tee`'s -- always 0 -- and eslint errors could not fail this job.
+        # With pipefail, errors fail the step. Warnings do not: the remaining
+        # warnings are real but pre-existing, so they are reported rather than
+        # gated. The summary line below prints the count each run, so drift is
+        # visible without a hard-coded number here that goes stale.
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee /tmp/lint.txt
+          echo "### Extension lint warnings: $(grep -c ' warning ' /tmp/lint.txt || true)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Lint budget
+        # The count may only fall; this fails if a new warning is added.
+        run: npm run lint:budget
+      # Must be `format:check`, not `format -- --check`. The `format` script is
+      # `prettier --write`, and passing `--check` alongside `--write` makes
+      # prettier REWRITE the files and exit 0 -- so the previous invocation
+      # could never fail and silently masked violations instead of reporting
+      # them. Verified with a deliberately malformed file.
       - name: Format check
-        run: npm run format -- --check
+        run: npm run format:check
       - name: Compile
         run: npm run compile
+      - name: Test
+        # --runInBand: the forked-worker pool fails with EPERM in restricted
+        # environments. --forceExit: the suite reports leaked handles and does
+        # not exit on its own (CliConnectorService never closes its server).
+        run: npx jest --runInBand --ci --forceExit
+      - name: Package
+        # Proves the extension still bundles AND that `vsce` accepts the
+        # manifest: a malformed `contributes` block, a command with no
+        # registration or a missing icon fails here rather than at publish
+        # time. This runs `vscode:prepublish`, so it re-runs the type-check and
+        # the production esbuild on top of the Compile step above.
+        run: npx vsce package --no-dependencies --out /tmp/codelapse.vsix
+
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      # The Lint and Format check steps below run cli/package.json's scripts,
+      # but cli/ declares neither eslint nor prettier: they live in the root
+      # package. Locally `npm run lint` finds them only because npm puts every
+      # ancestor node_modules/.bin on PATH -- in CI that ancestor has to exist,
+      # so install the root toolchain here as well as cli's dependencies.
+      # Without this, both steps fail with "eslint: not found" / "prettier: not
+      # found" (exit 127) instead of reporting findings, and a `not found` exit
+      # is precisely what the `| tee` in the Lint step used to swallow.
+      - name: Install root toolchain
+        run: npm ci
+        # A step-level `working-directory` replaces this job's
+        # `defaults.run.working-directory: cli`, but an absolute path says so
+        # unambiguously: `${{ github.workspace }}` resolves against the
+        # checkout, so this installs the repository root's tools, not cli's.
+        working-directory: ${{ github.workspace }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Build the linked core
+        # `codelapse-core` is a `file:shared` link, so `npm ci` above linked it into
+        # node_modules without installing anything from the registry. That link
+        # resolves through shared/package.json's `main` -- dist/index.js -- and
+        # dist/ is gitignored, so a fresh checkout has none and the type-check
+        # below fails with "Cannot find module 'codelapse-core'". Build it here
+        # first. A `prepare` script in shared/package.json would also run (npm does
+        # run it for file: links), but it needs shared's own node_modules for tsc and
+        # rimraf, and a failure there fails the install instead of one visible step.
+        working-directory: shared
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Report which core the steps below load
+        # Informational, not a gate: Compile and Test below fail loudly if the link
+        # or the build is missing. Printing the resolved entry point makes "which
+        # core did this run test?" answerable from the log alone.
+        run: node -e "console.log('codelapse-core ->', require.resolve('codelapse-core'))"
+      - name: Lint
+        # Added alongside the formatting fix: cli/ had 43 eslint errors that no
+        # gate ever caught, because this job only type-checked, tested and built.
+        # `set -o pipefail` is load-bearing here for the same reason as in the
+        # extension job: without it the step's status is `tee`'s, always 0, so
+        # errors could not fail the job. Errors now fail the step; warnings are
+        # only counted, in the summary line below.
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee /tmp/lint-cli.txt
+          echo "### CLI lint warnings: $(grep -c ' warning ' /tmp/lint-cli.txt || true)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Format check
+        run: npm run format:check
+      - name: Type-check sources
+        run: npm run check-types
+      - name: Type-check tests
+        # cli/tsconfig.json excludes **/*.test.ts so tests are not emitted to
+        # dist/. That exclusion is why four suites could fail to compile while
+        # `tsc --noEmit` still exited 0. This step checks them.
+        run: npm run check-types:test
+      - name: Test
+        run: npm run test:ci
+      - name: Build
+        run: npm run build

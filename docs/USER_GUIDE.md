@@ -37,7 +37,8 @@ CodeLapse is a lightweight companion to Git that focuses on your personal develo
 4. **View**: Click the history icon (📜) in the Activity Bar
 5. **Navigate**: Use `Ctrl+Alt+B` (Back) and `Ctrl+Alt+N` (Next) to move between snapshots
 
-> 💡 **First Time?** Run "Snapshots: Getting Started" from Command Palette for a guided tour
+> 💡 **First Time?** Run "Snapshots: Getting Started" from the Command Palette for
+> a four-step walkthrough delivered as notification prompts
 
 ## Core Features
 
@@ -74,7 +75,13 @@ Set up automated safety nets for your development workflow:
 
 - **Time-Based**: Automatic snapshots at regular intervals
 - **Rule-Based**: Pattern-matching rules for specific file types or directories
-- **Git Integration**: Automatic snapshots before Git operations (pull, merge, rebase)
+
+> **Git operations are _not_ automatic.** CodeLapse cannot take a snapshot before
+> `git pull` / `merge` / `rebase` runs from the VS Code Git UI — VS Code exposes
+> no pre-operation hook, and the setting that claimed to do this
+> (`git.autoSnapshotBeforeOperation`) never fired and has been removed. Take one
+> yourself before a destructive Git operation. See the
+> [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 ### Semantic Search
 > ⚠️ **EXPERIMENTAL FEATURE** - See [security warnings](#semantic-search) below
@@ -158,10 +165,14 @@ Find code across all snapshots using natural language queries:
 5. Save rule
 
 **Git Integration**:
-1. Open Settings view in Snapshot Explorer
-2. Click "Auto Snapshot Before Git Operations"
-3. Select "Yes" to enable
-4. Automatic snapshots before pull/merge/rebase operations
+Git operations performed from the VS Code Git UI or the command palette are
+**not** snapshotted automatically, and there is no setting for it — the previous
+`git.autoSnapshotBeforeOperation` configured an interception that nothing ever
+invoked, and it has been removed. Take a snapshot first:
+
+1. Press `Ctrl+Alt+S` (or `Cmd+Alt+S` on Mac) before the operation, or
+2. Run `codelapse git auto-commit pull` from a terminal — it works in either
+   mode, with or without the extension running.
 
 **Example Rules for Different Projects**:
 - **Web Development**: `src/**/*.{js,ts,jsx,tsx}` every 20 minutes
@@ -233,15 +244,14 @@ The **Settings** view in the Snapshot Explorer provides quick access to all Code
 - **Auto Snapshot Interval**: Configure time-based auto-snapshots (in minutes)
 - **Enable Logging**: Toggle extension logging for troubleshooting
 - **Enable Verbose Logging**: Toggle detailed debug logging
-- **Auto Snapshot Before Git Operations**: Automatically snapshot before Git operations
 - **Auto Snapshot Rules**: Configure file-pattern-based auto-snapshot rules
 - **Show Only Changed Files**: Toggle between showing all files or only changed files in snapshots
 
 **UX Settings:**
 - **Show Welcome On Startup**: Control whether the welcome message appears for new users
 - **Show Keyboard Shortcut Hints**: Toggle display of keyboard shortcut hints and tips
-- **Use Animations**: Enable/disable smooth animations for transitions
-- **Confirm Restore Operations**: Control whether confirmation is required before restoring snapshots
+- **Use Animations**: Show or hide the gutter direction indicator that appears while navigating to the previous/next snapshot
+- **Confirm Restore Operations**: Control whether the restore confirmation prompt appears. This does **not** disable the unsaved-changes warning, which is always shown because it prevents data loss
 
 **API Keys:** (for Semantic Search)
 - **Pinecone API Key**: Configure API key for vector database storage
@@ -478,11 +488,14 @@ If you save changes and haven't taken a snapshot in a while (default > 15 minute
 
 #### Status Bar Indicator
 
-The main status bar item (bottom-left) shows: `$(history) <Time Ago> | <Current/Total> Snapshots`.
+The main status bar item (bottom-left) shows `$(history) <Time Ago> | <count>`, where the two forms mean different things:
 
-- `<Time Ago>`: Time since the _very last_ snapshot was taken (e.g., `5m ago`).
-- `<Current/Total>`: Index of the currently restored snapshot and total count (e.g., `3/10`), or just the total count if viewing the latest workspace state (e.g., `10 Snapshots`).
-- Clicking it opens the "View Snapshots" Quick Pick. Hovering shows more details.
+- `5m ago | 3/10` — the workspace is **at** snapshot 3 of 10. This is the state after a restore.
+- `5m ago | 10 snapshots` — the workspace is **not** at any snapshot. This is the state in a fresh window, and after the snapshot you were viewing is deleted or pruned.
+
+`<Time Ago>` is the time since the _very last_ snapshot was taken (e.g., `5m ago`). Clicking the item opens the "View Snapshots" Quick Pick. Hovering shows more details, including whether the workspace is at a snapshot.
+
+Taking a snapshot makes it the active one, so the count form becomes the `n/10` form.
 
 #### Diagnostics and Logging
 
@@ -601,7 +614,7 @@ Use `.snapshotignore` (same format as `.gitignore`) in your workspace root for s
 
 ### Help and Information
 
-- **Getting Started**: Access the guided tour of CodeLapse features anytime
+- **Getting Started**: Four sequential notification prompts (take a snapshot, open the sidebar, navigate, done) with a *Skip Tour* button on each. It is not an interactive walkthrough overlay
 - **Show Extension Logs**: View detailed extension logs for troubleshooting
 - **Run Diagnostics**: Comprehensive system check and diagnostic information
 
@@ -613,6 +626,7 @@ Configure via VS Code Settings (`Ctrl+,`) or through the Settings view in the Sn
 | :------------------------------------------------- | :--------------------------------------------------------------- | :----------- |
 | `vscode-snapshots.snapshotLocation`                | Storage path relative to workspace root                          | `.snapshots` |
 | `vscode-snapshots.maxSnapshots`                    | Max number of snapshots to keep (oldest are deleted)             | 50           |
+| `vscode-snapshots.maxSnapshotStoreBytes`           | Maximum bytes the snapshot store may occupy (0 = no limit)       | 0            |
 | `vscode-snapshots.autoSnapshotInterval`            | Minutes between time-based auto-snapshots (0=disable)            | 0            |
 | `vscode-snapshots.autoSnapshot.rules`              | Array of rules for rule-based auto-snapshots                     | `[]`         |
 | `vscode-snapshots.loggingEnabled`                  | Enable Output channel logging                                    | `true`       |
@@ -620,14 +634,13 @@ Configure via VS Code Settings (`Ctrl+,`) or through the Settings view in the Sn
 | `vscode-snapshots.showOnlyChangedFiles`            | Show only changed files when expanding snapshots in Tree View    | `true`       |
 | `vscode-snapshots.git.addCommitInfo`               | Store Git branch/commit hash with snapshots                      | `true`       |
 | `vscode-snapshots.git.commitFromSnapshotEnabled`   | Enable "Create Git Commit from Snapshot" command                 | `true`       |
-| `vscode-snapshots.git.autoSnapshotBeforeOperation` | Automatically snapshot before Git pull/merge/rebase (via VSCode) | `false`      |
 | `vscode-snapshots.ux.showWelcomeOnStartup`         | Show welcome message for first-time users                        | `true`       |
 | `vscode-snapshots.ux.showKeyboardShortcutHints`    | Show keyboard shortcut hints and tips                           | `true`       |
-| `vscode-snapshots.ux.useAnimations`                | Use animations for smoother transitions                         | `true`       |
-| `vscode-snapshots.ux.confirmRestoreOperations`     | Confirm before restoring snapshots                              | `true`       |
+| `vscode-snapshots.ux.useAnimations`                | Show the gutter direction indicator on snapshot navigation       | `true`       |
+| `vscode-snapshots.ux.confirmRestoreOperations`     | Confirm before restoring snapshots (not the unsaved-changes prompt) | `true`    |
 | `vscode-snapshots.semanticSearch.enabled`          | Enable semantic code search across snapshots                     | `true`       |
-| `vscode-snapshots.semanticSearch.chunkSize`        | Maximum token size for each code chunk                           | 200          |
-| `vscode-snapshots.semanticSearch.chunkOverlap`     | Overlap between adjacent chunks in tokens                        | 50           |
+| `vscode-snapshots.semanticSearch.chunkSize`        | Maximum lines per code chunk                                     | 200          |
+| `vscode-snapshots.semanticSearch.chunkOverlap`     | Overlap between adjacent chunks, in lines                        | 50           |
 | `vscode-snapshots.semanticSearch.autoIndex`        | Automatically index snapshots in the background                  | `false`      |
 
 ## Troubleshooting Guide
@@ -758,7 +771,7 @@ Configure via VS Code Settings (`Ctrl+,`) or through the Settings view in the Sn
 1. **Run Diagnostics**: `Ctrl+Alt+D` provides comprehensive system information
 2. **Check Extension Logs**: "Snapshots: Show Extension Logs" for detailed troubleshooting
 3. **Review Documentation**: Check [Git Companion Guide](GIT_COMPANION.md) for integration help
-4. **Use Getting Started**: "Snapshots: Getting Started" command for guided tour
+4. **Use Getting Started**: "Snapshots: Getting Started" runs four short notification prompts
 
 #### Reporting Issues
 When reporting bugs, include:
@@ -780,6 +793,17 @@ If CodeLapse causes VS Code instability:
 3. Check `.snapshots/` directory for corruption
 4. Re-enable extension after identifying the issue
 
+## Command Line Interface (CLI)
+
+CodeLapse provides a powerful CLI tool (`codelapse-cli`) that brings snapshot management to your terminal.
+
+### Key Features
+- **Standalone Mode**: Run independently without VS Code (perfect for CI/CD, servers, and headless environments).
+- **IPC Mode**: Connect to the running VS Code extension for AI features and visual management.
+- **Automation**: Scriptable JSON output and batch operations.
+
+For detailed installation and usage instructions, see the [CLI Guide](../cli/README.md).
+
 ## Tips and Best Practices
 
 - Use meaningful descriptions, tags, and task references.
@@ -791,14 +815,14 @@ If CodeLapse causes VS Code instability:
 - Clean up old/unneeded snapshots periodically.
 - Combine Snapshots with Git for a robust workflow (see [Git Companion Guide](GIT_COMPANION.md)).
 - Take advantage of the Settings view for quick configuration changes.
-- Use the Getting Started tour to familiarize new team members with CodeLapse.
+- Use the Getting Started prompts to familiarize new team members with CodeLapse.
 
 ## Getting Help
 
 1. Run "Snapshots: Run Diagnostics" (`Ctrl+Alt+D`).
 2. Check the Output panel ("CodeLapse" channel) or use "Snapshots: Show Extension Logs".
 3. Review this User Guide and the [Git Companion Guide](GIT_COMPANION.md).
-4. Use the "Snapshots: Getting Started" command for a guided tour.
+4. Use the "Snapshots: Getting Started" command for four short notification prompts.
 5. Check the extension's GitHub repository for known issues.
 6. Report bugs or request features via GitHub Issues.
 
@@ -809,16 +833,16 @@ If CodeLapse causes VS Code instability:
 **Storage and Performance**:
 - `vscode-snapshots.snapshotLocation`: Where snapshots are stored (default: `.snapshots`)
 - `vscode-snapshots.maxSnapshots`: Maximum snapshots to keep (default: 50)
+- `vscode-snapshots.maxSnapshotStoreBytes`: Maximum bytes the snapshot store may occupy (default: 0, no limit)
 - `vscode-snapshots.showOnlyChangedFiles`: Show only modified files in snapshot view (default: true)
 
 **Automation Settings**:
 - `vscode-snapshots.autoSnapshotInterval`: Minutes between auto-snapshots (0 = disabled)
 - `vscode-snapshots.autoSnapshot.rules`: Array of pattern-based rules for automatic snapshots
-- `vscode-snapshots.git.autoSnapshotBeforeOperation`: Auto-snapshot before Git operations
 
 **User Experience**:
-- `vscode-snapshots.ux.confirmRestoreOperations`: Require confirmation before restoring
-- `vscode-snapshots.ux.useAnimations`: Enable smooth transitions and animations
+- `vscode-snapshots.ux.confirmRestoreOperations`: Require confirmation before restoring (the unsaved-changes warning is separate and always shown)
+- `vscode-snapshots.ux.useAnimations`: Show the gutter direction indicator while navigating snapshots
 - `vscode-snapshots.ux.showKeyboardShortcutHints`: Display helpful keyboard shortcuts
 
 ### Example Configuration
@@ -837,8 +861,7 @@ If CodeLapse causes VS Code instability:
       "pattern": "*.{json,md}",
       "intervalMinutes": 30
     }
-  ],
-  "vscode-snapshots.git.autoSnapshotBeforeOperation": true
+  ]
 }
 ```
 
@@ -921,7 +944,7 @@ vendor/
 **From Command Palette** (`Ctrl+Shift+P` / `Cmd+Shift+P`):
 - `Snapshots: Take Snapshot` - Create new snapshot
 - `Snapshots: View Snapshots` - Browse and restore snapshots
-- `Snapshots: Getting Started` - Launch guided tour
+- `Snapshots: Getting Started` - Run the four-step introduction prompts
 - `Snapshots: Manage Auto-Snapshot Rules` - Configure automation
 - `Snapshots: Show Extension Logs` - View detailed logs
 - `Snapshots: Index All Snapshots for Search` - Prepare semantic search

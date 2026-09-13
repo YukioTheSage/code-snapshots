@@ -3,12 +3,34 @@ import * as vscode from 'vscode'; // Ensure vscode is imported for QuickPick etc
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { promises as fsPromises } from 'fs'; // Import promises API
-import { GitignoreParser } from './gitignoreParser';
+import {
+  GitignoreParser,
+  runWithConcurrencyLimit,
+  selectSizePruneCandidates,
+  type SnapshotSizePruneResult,
+} from 'codelapse-core';
 import { log, logVerbose } from './logger';
-import { getMaxSnapshots } from './config';
+import {
+  getMaxSnapshotStoreBytes,
+  getMaxSnapshots,
+  getSnapshotLocation,
+} from './config';
 import { createDiff } from './snapshotDiff'; // Removed unused applyDiff import
 import { SnapshotStorage } from './snapshotStorage';
 import { API as GitAPI } from './types/git'; // Import Git API type
+import { assertNoSymlinkPath, ensureWithinDirectory } from './pathSecurity';
+import {
+  ACTIVE_NONE,
+  resolveActiveIndex,
+  resolveNavigationTarget,
+  type NavigationDirection,
+} from './snapshotSelection';
+import { MAX_FILE_SIZE_BYTES } from './security/limits';
+import {
+  getUnrecoverableFiles,
+  scanSnapshotIntegrity,
+  type SnapshotIntegrityReport,
+} from './snapshotVerification';
 
 // Keep Snapshot interface definition here as it's central to the manager
 export interface Snapshot {
@@ -36,11 +58,180 @@ export interface Snapshot {
   };
 }
 
+/**
+ * Outcome of a restore.
+ *
+ * `skipped` and `refusedDeletions` are the reason this is not a boolean: a
+ * snapshot whose delta chain is broken does not describe the whole workspace,
+ * so a restore can neither reconstruct every file nor safely delete the files
+ * it does not know about. Reporting both separately is what lets a caller tell
+ * "restored everything" from "restored what it could and left the rest alone".
+ */
+export interface RestoreResult {
+  success: boolean;
+  /** Relative paths written to disk. */
+  restored: string[];
+  /** Relative paths present in the snapshot whose content could not be reconstructed. */
+  skipped: string[];
+  /** Relative paths left in place because deleting them was unsafe. */
+  refusedDeletions: string[];
+  /** Relative paths deleted from the workspace. */
+  deleted: string[];
+  /**
+   * Relative paths whose on-disk content was replaced while a dirty buffer
+   * still held different text.
+   */
+  divergentBuffers: string[];
+  /**
+   * Whether only the files this snapshot captured were written, leaving the rest
+   * of the workspace alone.
+   *
+   * Callers must not report the workspace as matching the snapshot when this is
+   * true: the workspace is only partly the snapshot's state.
+   */
+  selective: boolean;
+}
+
+/**
+ * What a call to `takeSnapshot` actually did.
+ *
+ * A snapshot is skipped when an auto-snapshot finds nothing has changed, so
+ * "a snapshot exists afterwards" is not the same as "this call created one".
+ * Callers must narrow on `created` before reading `snapshot`.
+ */
+export type TakeSnapshotOutcome =
+  | { created: true; snapshot: Snapshot }
+  | { created: false; reason: 'no-changes' };
+
+/**
+ * The search index's purge hook. Kept structural so the snapshot engine keeps
+ * no compile-time dependency on semantic search, which is optional and fails
+ * without credentials.
+ */
+export interface SnapshotIndexPurgeTarget {
+  deleteSnapshotIndexing?(id: string): Promise<void>;
+}
+
+/**
+ * Chooses which snapshots can be pruned without making any surviving snapshot
+ * unreadable. Snapshots are deltas: an entry with only a `baseSnapshotId` is
+ * reconstructable solely while that base still exists, so removing a referenced
+ * snapshot silently destroys data in its dependants. This is the mechanism that
+ * produced the 4,942 directly-unrecoverable files in this repository's store.
+ *
+ * The candidate set is the `excess` oldest snapshots. References are evaluated
+ * against the *projected remainder* -- the snapshots that would still exist
+ * afterwards -- so a reference held only by another snapshot that is itself
+ * being pruned does not block its base. If the full set would leave a dangling
+ * reference, the newest candidate is dropped and the check repeats, so the
+ * result is always a prefix of the oldest-first order and the store simply
+ * keeps more snapshots than the configured maximum rather than losing data.
+ *
+ * Note on ordering: pruning must always take from the *oldest* end. A revision
+ * of this function that skipped referenced candidates and carried on down the
+ * list selected the newest snapshots instead -- discarding the user's most
+ * recent history while keeping ancient ones. It also fails three of this
+ * function's own tests; see the commit message.
+ */
+export function selectPrunableSnapshots(
+  allSnapshots: Snapshot[],
+  maxSnapshots: number,
+): string[] {
+  const excess = allSnapshots.length - maxSnapshots;
+  if (excess <= 0) {
+    return [];
+  }
+
+  const byAge = [...allSnapshots].sort((a, b) => a.timestamp - b.timestamp);
+  const selected = byAge.slice(0, excess);
+
+  while (selected.length > 0) {
+    const pruned = new Set(selected.map((s) => s.id));
+    const danglingReference = byAge.some(
+      (snapshot) =>
+        !pruned.has(snapshot.id) &&
+        Object.values(snapshot.files).some(
+          (fileData) =>
+            // A tombstone is a statement about absence, not a delta on its base:
+            // nothing ever resolves its content through `baseSnapshotId` -- the
+            // verification scan skips deleted markers for the same reason -- so
+            // counting it as a reference refuses the prune forever for any store
+            // that holds one, however healthy the rest of it is.
+            !fileData.deleted &&
+            !!fileData.baseSnapshotId &&
+            pruned.has(fileData.baseSnapshotId),
+        ),
+    );
+    if (!danglingReference) {
+      break;
+    }
+    selected.pop();
+  }
+
+  return selected.map((s) => s.id);
+}
+
+/**
+ * Coerce a caller-supplied `selectedFiles` into the list a capture reads.
+ *
+ * The value arrives from API payloads, editor commands and the CLI, so its
+ * declared type is a promise rather than a fact: a payload can carry a single
+ * path as a string. The capture filter tested it for truthiness while the
+ * deletion guard tested `Array.isArray`, and those two disagree for exactly that
+ * case: a truthy non-array makes the filter run `new Set('src/app.ts')` -- a set
+ * of characters, matching no path, so the capture holds nothing -- while the
+ * guard reads the empty result as a whole-tree capture and tombstones every file
+ * in the workspace. Normalising once, where the request options are consumed, is
+ * what keeps the filter, the guard and the recorded snapshot from disagreeing.
+ */
+export function normalizeSelectedFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  );
+}
+
 export class SnapshotManager {
   private snapshots: Snapshot[] = [];
-  private currentSnapshotIndex = -1;
+
+  /**
+   * Cached integrity scan of `snapshots`, refreshed at every site that changes
+   * the list. Cached rather than recomputed per read because the tree view asks
+   * per snapshot row, which would otherwise rescan the whole store for each one.
+   */
+  private integrityReport: SnapshotIntegrityReport = {
+    brokenSnapshotIds: [],
+    missingBaseSnapshotIds: [],
+    unrecoverableFileCount: 0,
+    perSnapshot: {},
+  };
+  /**
+   * The snapshot the workspace currently reflects, or `null` when the
+   * workspace does not correspond to any snapshot.
+   *
+   * This is the single source of truth for "which snapshot am I on". The field
+   * it replaces (`currentSnapshotIndex`) was written as "the newest snapshot"
+   * on load and after every take, but read as "the snapshot the workspace
+   * reflects" by the status bar, the tree highlight, the quick pick and the
+   * diff base for new snapshots. The two meanings are indistinguishable when
+   * they are stored as one position, which is how a fresh window came to
+   * report "Viewing snapshot 54/54". Identity is stored; the index is derived.
+   * See `snapshotSelection.ts`.
+   */
+  private activeSnapshotId: string | null = null;
   private storage: SnapshotStorage;
+  private semanticSearchService?: SnapshotIndexPurgeTarget;
   private gitApi: GitAPI | null; // Store Git API instance
+  private writeLock: Promise<void> = Promise.resolve();
+  /**
+   * The load the constructor starts. Activation retention awaits it, because
+   * loadSnapshots() fills the snapshot list asynchronously and an enforcement
+   * that ran first would see an empty list.
+   */
+  private loadPromise: Promise<void> = Promise.resolve();
   private _onDidChangeSnapshots = new vscode.EventEmitter<void>(); // Event emitter
   public readonly onDidChangeSnapshots: vscode.Event<void> =
     this._onDidChangeSnapshots.event; // Public event
@@ -50,7 +241,7 @@ export class SnapshotManager {
     log('Initializing SnapshotManager');
     this.gitApi = gitApi; // Store the Git API
     this.storage = new SnapshotStorage(); // Initialize storage handler
-    this.loadSnapshots(); // Load initial state
+    this.loadPromise = this.loadSnapshots(); // Load initial state
 
     // Listen for storage path changes (e.g., workspace folder opened/closed)
     // This might require an event emitter in SnapshotStorage if needed beyond constructor init
@@ -67,6 +258,17 @@ export class SnapshotManager {
   }
 
   /**
+   * The snapshot store directory as the storage layer resolved it.
+   *
+   * Activation retention names it when a prune fails: the location is
+   * configurable, so the workspace alone would not say which store could not
+   * be trimmed.
+   */
+  public getStoreDirectory(): string {
+    return this.storage.getSnapshotDirectory();
+  }
+
+  /**
    * Load existing snapshots using the SnapshotStorage module.
    */
   private async loadSnapshots() {
@@ -75,17 +277,33 @@ export class SnapshotManager {
 
     if (loadedState) {
       this.snapshots = loadedState.snapshots;
-      this.currentSnapshotIndex = loadedState.currentIndex;
+      if (typeof loadedState.activeSnapshotId === 'string') {
+        // New shape: the field is authoritative, and null means detached.
+        this.activeSnapshotId = loadedState.activeSnapshotId;
+      } else {
+        // Legacy index.json: `currentIndex` meant "newest", never "active".
+        // A legacy store has no evidence that the workspace corresponds to any
+        // snapshot, so start detached and let the user navigate deliberately.
+        // Mapping that position to an id instead would leave the workspace
+        // claiming to be at snapshot N/N -- the bug this task exists to remove.
+        log(
+          'Legacy snapshot index detected (no activeSnapshotId); starting detached.',
+        );
+        this.activeSnapshotId = null;
+      }
       log(
-        `Loaded ${this.snapshots.length} snapshots, current index: ${this.currentSnapshotIndex}`,
+        `Loaded ${this.snapshots.length} snapshots, active snapshot: ${
+          this.activeSnapshotId ?? 'none'
+        }`,
       );
     } else {
       // Handle case where loading failed critically (should be logged by storage)
       this.snapshots = [];
-      this.currentSnapshotIndex = -1;
+      this.activeSnapshotId = null;
       log('Snapshot loading failed or returned null state.');
     }
     // No need to sort here, assuming storage returns them sorted
+    this.refreshIntegrityReport();
     this._onDidChangeSnapshots.fire(); // Notify listeners about the loaded state
   }
 
@@ -96,8 +314,41 @@ export class SnapshotManager {
     // No await needed here as saveSnapshotIndex in storage is already async
     await this.storage.saveSnapshotIndex(
       this.snapshots,
-      this.currentSnapshotIndex,
+      this.getCurrentSnapshotIndex(),
+      this.activeSnapshotId,
     );
+  }
+
+  /**
+   * Drops the active-snapshot reference when the snapshot it named no longer
+   * exists. Every path that removes snapshots from the list must call this:
+   * the workspace cannot still be at a snapshot that has been deleted.
+   */
+  private detachIfActiveSnapshotRemoved(): void {
+    if (
+      this.activeSnapshotId &&
+      !this.snapshots.some((s) => s.id === this.activeSnapshotId)
+    ) {
+      log(
+        `Active snapshot ${this.activeSnapshotId} was removed; the workspace no longer corresponds to a snapshot.`,
+      );
+      this.activeSnapshotId = null;
+    }
+  }
+
+  private async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previousLock = this.writeLock;
+    let releaseLock: () => void = () => undefined;
+    this.writeLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    await previousLock;
+    try {
+      return await operation();
+    } finally {
+      releaseLock();
+    }
   }
 
   /**
@@ -114,18 +365,44 @@ export class SnapshotManager {
       isSelective?: boolean;
       selectedFiles?: string[];
     } = {},
-  ): Promise<Snapshot> {
+  ): Promise<TakeSnapshotOutcome> {
+    return await this.withWriteLock(() =>
+      this.takeSnapshotInternal(description, contextOptions),
+    );
+  }
+
+  private async takeSnapshotInternal(
+    description = '',
+    contextOptions: {
+      tags?: string[];
+      notes?: string;
+      taskReference?: string;
+      isFavorite?: boolean;
+      isSelective?: boolean;
+      selectedFiles?: string[];
+    } = {},
+  ): Promise<TakeSnapshotOutcome> {
     const workspaceRoot = this.storage.getWorkspaceRoot();
     if (!workspaceRoot) {
       throw new Error('No workspace folder open');
     }
+
+    // Resolved once, before anything reads the selection: the capture filter,
+    // the deletion guard and the recorded snapshot must all see the same list.
+    const selectedFiles = normalizeSelectedFiles(contextOptions.selectedFiles);
 
     // Create a new snapshot
     const timestamp = Date.now();
     const id = `snapshot-${timestamp}-${crypto.randomBytes(4).toString('hex')}`;
 
     // Instantiate the gitignore parser
-    const parser = new GitignoreParser(workspaceRoot);
+    // The configured location, not the parser's default: the store lives inside
+    // the scanned workspace, so a parser that assumes `.snapshots` captures the
+    // store's own index and payload files into every snapshot.
+    const parser = new GitignoreParser(
+      workspaceRoot,
+      this.getStoreLocationForScan(workspaceRoot),
+    );
     log(`Initialized GitignoreParser for workspace: ${workspaceRoot}`);
 
     // --- Get Git Info ---
@@ -176,7 +453,7 @@ export class SnapshotManager {
       isFavorite: contextOptions.isFavorite || false,
       // Add selective snapshot fields
       isSelective: contextOptions.isSelective || false,
-      selectedFiles: contextOptions.selectedFiles || [],
+      selectedFiles,
       files: {},
     };
 
@@ -226,19 +503,18 @@ export class SnapshotManager {
     });
 
     // 4. Apply selective filtering if needed
-    let finalFiles = Array.from(finalFileUrisMap.values());
-    log(`Final file count after combining negated rules: ${finalFiles.length}`);
-    if (
-      snapshot.isSelective &&
-      snapshot.selectedFiles &&
-      snapshot.selectedFiles.length > 0
-    ) {
-      log(
-        `Applying selective filter for ${snapshot.selectedFiles.length} files`,
-      );
+    let finalFiles = Array.from(finalFileUrisMap.values()).filter((fileUri) => {
+      const relativePath = path.relative(workspaceRoot, fileUri.fsPath);
+      return !parser.shouldIgnore(relativePath);
+    });
+    log(
+      `Final file count after combining negated rules and local filtering: ${finalFiles.length}`,
+    );
+    if (snapshot.isSelective && selectedFiles.length > 0) {
+      log(`Applying selective filter for ${selectedFiles.length} files`);
 
       // Create a set of selected file paths for faster lookup
-      const selectedPathsSet = new Set(snapshot.selectedFiles);
+      const selectedPathsSet = new Set(selectedFiles);
 
       // Filter to only include selected files
       finalFiles = finalFiles.filter((fileUri) => {
@@ -253,10 +529,9 @@ export class SnapshotManager {
     // --- End: New File Filtering Logic ---
 
     // Find the previous snapshot to base diffs on - MOVED UP BEFORE IT'S USED
-    const baseSnapshot =
-      this.currentSnapshotIndex >= 0
-        ? this.snapshots[this.currentSnapshotIndex]
-        : undefined;
+    // The base is the snapshot the workspace reflects; when none is active it
+    // is the newest snapshot.
+    const baseSnapshot = this.getDiffBaseSnapshot();
 
     if (finalFiles.length > 0) {
       // Check for suspicious files - those that might be binary but weren't caught by extension check
@@ -316,15 +591,28 @@ export class SnapshotManager {
     }
 
     // Process each file identified by the new filtering logic
-    for (const file of finalFiles) {
+    await runWithConcurrencyLimit(finalFiles, 50, async (file) => {
       // File was NOT ignored by the new logic, so we process it
       logVerbose(`Including file in snapshot: ${file.fsPath}`);
 
       // Skip binary files and files we can't read (using storage method)
       try {
         const relativePath = path.relative(workspaceRoot, file.fsPath);
+        const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
+        await assertNoSymlinkPath(workspaceRoot, fullPath);
+        const fileStats = await fsPromises.lstat(fullPath);
+        if (!fileStats.isFile() || fileStats.isSymbolicLink()) {
+          logVerbose(`Skipping non-regular file: ${relativePath}`);
+          return;
+        }
+        if (fileStats.size > MAX_FILE_SIZE_BYTES) {
+          logVerbose(
+            `Skipping oversized file ${relativePath}: ${fileStats.size} bytes exceeds ${MAX_FILE_SIZE_BYTES} byte limit`,
+          );
+          return;
+        }
 
-        if (this.storage.isBinaryFile(file.fsPath)) {
+        if (this.storage.isBinaryFile(fullPath)) {
           // Record it exists, but don't store content
           snapshot.files[relativePath] = {
             isBinary: true,
@@ -332,14 +620,14 @@ export class SnapshotManager {
             baseSnapshotId: baseSnapshot?.files[relativePath]?.baseSnapshotId,
           };
           logVerbose(`Recorded binary file presence: ${relativePath}`);
-          continue; // Skip content reading for binary files
+          return; // Skip content reading for binary files
         }
 
         // Add await here
-        const content = await this.storage.readFileContent(file.fsPath); // Use storage method
+        const content = await this.storage.readFileContent(fullPath); // Use storage method
         if (content === null) {
-          logVerbose(`Skipping file with null content: ${file.fsPath}`);
-          continue; // Skip binary or unreadable files
+          logVerbose(`Skipping file with null content: ${fullPath}`);
+          return; // Skip binary or unreadable files
         }
 
         // If we have a base snapshot with this file, store just the diff
@@ -382,11 +670,26 @@ export class SnapshotManager {
         // Log error but continue processing other files
         log(`Error processing file ${file.fsPath}: ${error}`); // Use imported log directly
       }
-    }
+    });
 
     // Check for files that existed in the previous snapshot but don't exist anymore
     // These represent deleted files that need to be tracked
-    if (baseSnapshot) {
+    //
+    // A selective capture with a NON-EMPTY selection photographs only its
+    // selected files (the filter above, whose condition this mirrors); with an
+    // empty selection the filter does not apply either, so the capture is
+    // whole-tree and its deletion markers are real. `currentWorkspaceFiles`
+    // is built from that filtered list, so every unselected file would look
+    // "gone" here -- a lie about the workspace that restore then acts on by
+    // deleting the user's files. Only a whole-tree capture can report deletions.
+    //
+    // `selectedFiles` is the normalised list resolved at the top of this method,
+    // so "empty" here means the caller supplied no usable selection rather than
+    // "whatever shape the payload happened to have".
+    const isSelective =
+      snapshot.isSelective === true && selectedFiles.length > 0;
+
+    if (baseSnapshot && !isSelective) {
       let deletedFilesCount = 0;
       previousSnapshotFiles.forEach((relativePath) => {
         if (!currentWorkspaceFiles.has(relativePath)) {
@@ -417,29 +720,111 @@ export class SnapshotManager {
       );
       if (!hasChange) {
         log('Skipping auto snapshot: no changes detected since last snapshot');
-        return this.snapshots[this.currentSnapshotIndex];
+        // An explicit outcome, not the previous snapshot: returning an
+        // existing Snapshot made "created" and "skipped" indistinguishable to
+        // every caller, which is how the UI came to report a snapshot that was
+        // never taken -- and, with no active snapshot, to return `undefined`
+        // from a method whose signature promised a Snapshot.
+        return { created: false, reason: 'no-changes' };
       }
     }
 
-    // Save the snapshot data using storage
+    // Add to our in-memory list first, so the index write below includes it.
+    // A new snapshot describes the workspace, so it also becomes the active
+    // one; that is deliberate, and it is recorded as identity so the index
+    // cannot drift from the list. The previous value is kept so the rollback
+    // paths below can restore exactly what the workspace reflected before.
+    const previousActiveSnapshotId = this.activeSnapshotId;
+    this.snapshots.push(snapshot);
+    this.activeSnapshotId = snapshot.id;
+
+    // Write the index BEFORE the snapshot data, and surface failure.
+    //
+    // The order is what makes the rollback honest. If the index write fails,
+    // nothing has reached disk yet, so dropping the in-memory entry leaves the
+    // store consistent. Writing the data first would leave a snapshot directory
+    // with no index entry -- exactly what `recoverSnapshotsFromFileSystem`
+    // deliberately resurrects -- so the user would be told "not saved" while the
+    // snapshot reappeared on the next reload.
     try {
-      // Add await here
-      await this.storage.saveSnapshotData(snapshot);
-    } catch (error) {
-      // Handle potential save error (logged by storage, but maybe show user message?)
-      vscode.window.showErrorMessage(`Failed to save snapshot data: ${error}`);
-      throw error; // Re-throw so the command fails
+      await this.saveSnapshotIndex();
+    } catch (indexError) {
+      this.snapshots.pop();
+      this.activeSnapshotId = previousActiveSnapshotId;
+      this.refreshIntegrityReport();
+      log(
+        `Failed to persist the snapshot index after taking a snapshot: ${indexError}`,
+      );
+      vscode.window.showErrorMessage(
+        `Snapshot was not saved: ${
+          indexError instanceof Error ? indexError.message : indexError
+        }`,
+      );
+      throw indexError;
     }
 
-    // Add to our in-memory list
-    this.snapshots.push(snapshot);
-    this.currentSnapshotIndex = this.snapshots.length - 1;
+    // Now persist the snapshot data. A failure here leaves an index entry with
+    // no data, which the loader skips and reports, rather than orphaned data
+    // that the recovery scan would bring back.
+    try {
+      await this.storage.saveSnapshotData(snapshot);
+    } catch (error) {
+      this.snapshots = this.snapshots.filter((s) => s.id !== snapshot.id);
+      this.activeSnapshotId = previousActiveSnapshotId;
+      this.refreshIntegrityReport();
 
-    // Update the index file
-    await this.saveSnapshotIndex();
+      // Remove anything the failed write left behind, so the recovery scan
+      // cannot resurrect a snapshot the user was told was not saved.
+      try {
+        await this.storage.deleteSnapshotData(snapshot.id);
+      } catch (cleanupError) {
+        log(
+          `Could not remove partial snapshot data for ${snapshot.id}: ${cleanupError}`,
+        );
+      }
+      try {
+        await this.saveSnapshotIndex();
+      } catch (rewriteError) {
+        log(
+          `Could not rewrite the index after a failed snapshot write: ${rewriteError}`,
+        );
+      }
 
-    // Enforce max snapshots limit
-    await this.enforceSnapshotLimit(); // This now uses storage for deletion
+      vscode.window.showErrorMessage(`Failed to save snapshot data: ${error}`);
+      throw error;
+    }
+
+    this.refreshIntegrityReport();
+
+    // Enforce max snapshots limit. Best effort at the call site: the snapshot
+    // above is already saved and indexed, so a retention failure must not turn
+    // a successful take into a failed one. Each trim ends with an index write
+    // that Plan 02 deliberately lets surface, and a purge can reject; both are
+    // reported here rather than propagated, and neither is silenced inside the
+    // trim itself.
+    try {
+      await this.enforceSnapshotLimit(); // This now uses storage for deletion
+    } catch (error) {
+      log(
+        'Snapshot limit: could not be enforced after this snapshot: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. The snapshot was taken; only the prune stopped.',
+      );
+    }
+
+    // Then the byte limit: a store can be inside its snapshot count and still
+    // hold more bytes than the user allows. The snapshot just written is passed
+    // so its own trim can never delete it. Guarded for the same reason: the
+    // index write at the end of the size trim can reject.
+    try {
+      await this.enforceSnapshotSizeLimitInternal(snapshot.id);
+    } catch (error) {
+      log(
+        'Size retention: could not be enforced after this snapshot: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. The snapshot was taken; only the trim stopped.',
+      );
+    }
 
     // Log summary of what was done
     const filesProcessed = Object.keys(snapshot.files).length;
@@ -453,7 +838,7 @@ export class SnapshotManager {
     this._onDidChangeSnapshots.fire();
     log('Fired onDidChangeSnapshots event after takeSnapshot');
 
-    return snapshot;
+    return { created: true, snapshot };
   }
 
   /**
@@ -485,9 +870,26 @@ export class SnapshotManager {
   > {
     logVerbose(`Calculating changes for snapshot ${snapshot.id}`);
 
+    // Restoring a selective snapshot performs no deletions at all: apply skips
+    // the phase wholesale (`deletionCandidates = isSelectiveCapture ? [] : ...`),
+    // so the preview must not advertise any deletion for one -- neither of a file
+    // the snapshot never looked at, nor of a file a pre-guard capture tombstoned.
+    // The predicate is the same one the capture guard uses: a rule-based snapshot
+    // with an empty selection is a whole-tree capture and keeps the old preview
+    // behavior.
+    const isSelectiveCapture =
+      snapshot.isSelective === true &&
+      Array.isArray(snapshot.selectedFiles) &&
+      snapshot.selectedFiles.length > 0;
+
     // 1. Get current workspace files (using existing filtering logic)
     // TODO: Consider extracting this file filtering logic into a reusable private method
-    const parser = new GitignoreParser(workspaceRoot);
+    // Configured store location, as in takeSnapshotInternal: the store is not
+    // workspace content and must not appear in a change calculation either.
+    const parser = new GitignoreParser(
+      workspaceRoot,
+      this.getStoreLocationForScan(workspaceRoot),
+    );
     const excludePattern = parser.getExcludeGlobPattern();
     const negatedGlobs = parser.getNegatedGlobs();
     const initialCurrentFiles = await vscode.workspace.findFiles(
@@ -507,14 +909,18 @@ export class SnapshotManager {
       }
     }
     const currentWorkspaceFilesRelative = new Set<string>();
-    initialCurrentFiles.forEach((uri) =>
-      currentWorkspaceFilesRelative.add(
-        path.relative(workspaceRoot, uri.fsPath),
-      ),
-    );
+    initialCurrentFiles.forEach((uri) => {
+      const relativePath = path.relative(workspaceRoot, uri.fsPath);
+      if (!parser.shouldIgnore(relativePath)) {
+        currentWorkspaceFilesRelative.add(relativePath);
+      }
+    });
     reIncludedCurrentFiles.forEach((fsPath) => {
       const relativePath = path.relative(workspaceRoot, fsPath);
-      if (!currentWorkspaceFilesRelative.has(relativePath)) {
+      if (
+        !currentWorkspaceFilesRelative.has(relativePath) &&
+        !parser.shouldIgnore(relativePath)
+      ) {
         currentWorkspaceFilesRelative.add(relativePath);
       }
     });
@@ -544,73 +950,82 @@ export class SnapshotManager {
     }[] = [];
 
     // Check for modifications and additions
-    for (const [relativePath, fileData] of expectedSnapshotFiles.entries()) {
-      if (fileData.deleted) continue; // Handle deletions separately
+    await runWithConcurrencyLimit(
+      Array.from(expectedSnapshotFiles.entries()),
+      50,
+      async ([relativePath, fileData]) => {
+        if (fileData.deleted) return; // Handle deletions separately
 
-      if (fileData.isBinary) {
-        if (!currentWorkspaceFilesRelative.has(relativePath)) {
-          // Only show addition if binary file doesn't exist in workspace
+        if (fileData.isBinary) {
+          if (!currentWorkspaceFilesRelative.has(relativePath)) {
+            // Only show addition if binary file doesn't exist in workspace
+            changes.push({
+              label: `+ ${relativePath} (Binary)`,
+              description: 'Added (Binary File)',
+              relativePath,
+              status: 'A',
+            });
+          }
+          return; // Skip further comparison for binary files
+        }
+
+        const workspacePath = ensureWithinDirectory(
+          workspaceRoot,
+          relativePath,
+        );
+        let workspaceContent: string | null = null;
+        let snapshotContent: string | null = null;
+        let isDirty = false;
+
+        // Check if file exists in workspace and if it's dirty
+        if (currentWorkspaceFilesRelative.has(relativePath)) {
+          try {
+            workspaceContent = await this.storage.readFileContent(
+              workspacePath,
+            ); // Use storage method
+            // Check if the file is open and dirty
+            const openEditor = vscode.window.visibleTextEditors.find(
+              (editor) => editor.document.uri.fsPath === workspacePath,
+            );
+            if (openEditor?.document.isDirty) {
+              isDirty = true;
+            }
+          } catch (e) {
+            logVerbose(
+              `Could not read workspace file ${relativePath} for change calculation: ${e}`,
+            );
+            // Treat as if it doesn't exist for comparison purposes
+          }
+        }
+
+        // Get snapshot content (only if needed for comparison or addition)
+        snapshotContent = await this.getSnapshotFileContentPublic(
+          snapshot.id,
+          relativePath,
+        );
+
+        if (currentWorkspaceFilesRelative.has(relativePath)) {
+          // File exists in both: Check for modification
+          if (workspaceContent !== snapshotContent) {
+            changes.push({
+              label: `~ ${relativePath}${isDirty ? ' *' : ''}`, // Mark dirty files
+              description: 'Modified',
+              relativePath,
+              status: 'M',
+              isDirty,
+            });
+          }
+        } else {
+          // File exists in snapshot but not workspace: Added
           changes.push({
-            label: `+ ${relativePath} (Binary)`,
-            description: 'Added (Binary File)',
+            label: `+ ${relativePath}`,
+            description: 'Added',
             relativePath,
             status: 'A',
           });
         }
-        continue; // Skip further comparison for binary files
-      }
-
-      const workspacePath = path.join(workspaceRoot, relativePath);
-      let workspaceContent: string | null = null;
-      let snapshotContent: string | null = null;
-      let isDirty = false;
-
-      // Check if file exists in workspace and if it's dirty
-      if (currentWorkspaceFilesRelative.has(relativePath)) {
-        try {
-          workspaceContent = await this.storage.readFileContent(workspacePath); // Use storage method
-          // Check if the file is open and dirty
-          const openEditor = vscode.window.visibleTextEditors.find(
-            (editor) => editor.document.uri.fsPath === workspacePath,
-          );
-          if (openEditor?.document.isDirty) {
-            isDirty = true;
-          }
-        } catch (e) {
-          logVerbose(
-            `Could not read workspace file ${relativePath} for change calculation: ${e}`,
-          );
-          // Treat as if it doesn't exist for comparison purposes
-        }
-      }
-
-      // Get snapshot content (only if needed for comparison or addition)
-      snapshotContent = await this.getSnapshotFileContentPublic(
-        snapshot.id,
-        relativePath,
-      );
-
-      if (currentWorkspaceFilesRelative.has(relativePath)) {
-        // File exists in both: Check for modification
-        if (workspaceContent !== snapshotContent) {
-          changes.push({
-            label: `~ ${relativePath}${isDirty ? ' *' : ''}`, // Mark dirty files
-            description: 'Modified',
-            relativePath,
-            status: 'M',
-            isDirty,
-          });
-        }
-      } else {
-        // File exists in snapshot but not workspace: Added
-        changes.push({
-          label: `+ ${relativePath}`,
-          description: 'Added',
-          relativePath,
-          status: 'A',
-        });
-      }
-    }
+      },
+    );
 
     // Check for deletions
     for (const relativePath of currentWorkspaceFilesRelative) {
@@ -619,7 +1034,16 @@ export class SnapshotManager {
         expectedSnapshotFiles.get(relativePath)?.deleted
       ) {
         // File exists in workspace but not in snapshot (or marked deleted): Deletion
-        const workspacePath = path.join(workspaceRoot, relativePath);
+        if (isSelectiveCapture) {
+          // For a selective capture nothing in this snapshot is deleted by
+          // apply, whatever the entry says: a file it never looked at, or one a
+          // pre-guard capture recorded as `{deleted: true}`, is left alone.
+          continue;
+        }
+        const workspacePath = ensureWithinDirectory(
+          workspaceRoot,
+          relativePath,
+        );
 
         // NEW: Preserve binary files during restore preview
         if (this.storage.isBinaryFile(workspacePath)) {
@@ -649,6 +1073,15 @@ export class SnapshotManager {
     // Also explicitly add files marked as deleted in the snapshot metadata,
     // even if they don't currently exist in the workspace (idempotency)
     for (const [relativePath, fileData] of expectedSnapshotFiles.entries()) {
+      if (isSelectiveCapture) {
+        // Legacy selective snapshots -- captured before the capture guard above
+        // existed -- carry `{deleted: true}` tombstones for files they never
+        // looked at, because the pre-guard pass compared the previous snapshot
+        // against a workspace list the selective filter had already narrowed.
+        // Apply deletes nothing for a selective snapshot, so reporting one here
+        // would re-introduce exactly the over-claim this method now avoids.
+        continue;
+      }
       if (
         fileData.deleted &&
         !changes.some(
@@ -669,7 +1102,7 @@ export class SnapshotManager {
           !previousSnapshot.files[relativePath].deleted
         ) {
           // NEW: Skip binary files marked as deleted
-          const fullPath = path.join(workspaceRoot, relativePath);
+          const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
           if (this.storage.isBinaryFile(fullPath)) {
             logVerbose(
               `Binary file excluded from deletion in snapshot metadata preview: ${relativePath}`,
@@ -713,6 +1146,87 @@ export class SnapshotManager {
   // --- End: Preview Helper Method (REMOVED) ---
 
   /**
+   * The snapshot store path, relative to the workspace root, as the storage
+   * layer actually resolved it.
+   *
+   * The scan must exclude the same directory the snapshots are written to, and
+   * `snapshotStorage` resolves `snapshotLocation` **once** at activation while
+   * this used to re-read the setting on every snapshot. Those two reads can
+   * disagree: a configuration read taken while the workspace settings are being
+   * rewritten (a restore writes `.vscode/settings.json`) can come back with the
+   * defaults, naming `.snapshots` while the store really is `.snapshots-test`.
+   * The store was then captured into the very snapshot being written -- the
+   * self-referential capture this exclusion exists to prevent, and the phantom
+   * `deleted` entries it leaves behind also defeat the auto-snapshot
+   * no-changes skip. Resolving through the storage layer removes the second
+   * source of truth; the deletion guard already resolves the store this way.
+   *
+   * Falls back to the configured value when the store is unknown or lives
+   * outside the workspace, where a workspace scan cannot reach it anyway.
+   */
+  private getStoreLocationForScan(workspaceRoot: string): string {
+    const storeDirectory = this.storage.getSnapshotDirectory();
+    if (workspaceRoot && storeDirectory) {
+      const relative = path.relative(workspaceRoot, storeDirectory);
+      if (
+        relative &&
+        !relative.startsWith('..') &&
+        !path.isAbsolute(relative)
+      ) {
+        return relative;
+      }
+    }
+    return getSnapshotLocation();
+  }
+
+  /**
+   * Whether a workspace-relative path names something inside the snapshot
+   * store.
+   *
+   * The store is application data the extension writes while it works, so it is
+   * never workspace content and never extraneous: a restore that deletes it is
+   * destroying the snapshots themselves.
+   *
+   * Resolved through `path.relative` rather than by string prefix, so a store
+   * reached through a different spelling (`./.snapshots-test`, `.snapshots/`)
+   * is still recognised. The comparison ignores case on Windows only, where the
+   * filesystem does: elsewhere `.Snapshots` and `.snapshots` are two different
+   * directories and refusing to delete the wrong one would be a real change in
+   * behaviour.
+   */
+  private isInsideSnapshotStore(
+    relativePath: string,
+    workspaceRoot: string,
+  ): boolean {
+    const storeDirectory = this.storage.getSnapshotDirectory();
+    if (!workspaceRoot || !storeDirectory) {
+      return false;
+    }
+
+    const storeRelative = path.relative(workspaceRoot, storeDirectory);
+    // A store outside the workspace cannot be reached by a workspace scan; the
+    // guard would otherwise refuse deletions it has no business judging.
+    if (
+      !storeRelative ||
+      storeRelative.startsWith('..') ||
+      path.isAbsolute(storeRelative)
+    ) {
+      return false;
+    }
+
+    const normalize = (value: string): string => {
+      const withSlashes = value.replace(/\\/g, '/').replace(/\/+$/, '');
+      return process.platform === 'win32'
+        ? withSlashes.toLowerCase()
+        : withSlashes;
+    };
+
+    const store = normalize(storeRelative);
+    const target = normalize(relativePath);
+    return target === store || target.startsWith(`${store}/`);
+  }
+
+  /**
    * Applies the file changes necessary to restore a specific snapshot.
    * This method performs the core file operations (add, modify, delete)
    * but does NOT handle UI interactions like previews, confirmations, or conflict checks.
@@ -720,7 +1234,17 @@ export class SnapshotManager {
    * @returns A promise resolving to true if successful, false otherwise.
    * @throws Error if workspace root is not found or snapshot is invalid.
    */
-  public async applySnapshotRestore(snapshotId: string): Promise<boolean> {
+  public async applySnapshotRestore(
+    snapshotId: string,
+  ): Promise<RestoreResult> {
+    return await this.withWriteLock(() =>
+      this.applySnapshotRestoreInternal(snapshotId),
+    );
+  }
+
+  private async applySnapshotRestoreInternal(
+    snapshotId: string,
+  ): Promise<RestoreResult> {
     // Find the snapshot
     const index = this.snapshots.findIndex((s) => s.id === snapshotId);
     if (index === -1) {
@@ -742,7 +1266,14 @@ export class SnapshotManager {
     log(`Applying snapshot restore operations for ${snapshotId}...`);
     // Re-fetch current workspace files and expected snapshot files
     // TODO: Consider extracting file filtering logic to a reusable private method
-    const parser = new GitignoreParser(workspaceRoot);
+    // Configured store location, as in takeSnapshotInternal: enumerating the
+    // store here is what made a restore delete the snapshot payloads it was
+    // restoring around (they are written after their own snapshot's scan, so
+    // the snapshot never lists them).
+    const parser = new GitignoreParser(
+      workspaceRoot,
+      this.getStoreLocationForScan(workspaceRoot),
+    );
     const excludePattern = parser.getExcludeGlobPattern();
     const negatedGlobs = parser.getNegatedGlobs();
     const initialCurrentFiles = await vscode.workspace.findFiles(
@@ -779,154 +1310,273 @@ export class SnapshotManager {
       { deleted?: boolean; isBinary?: boolean }
     >();
     Object.entries(snapshot.files).forEach(([relativePath, fileData]) => {
-      expectedSnapshotFiles.set(relativePath, { deleted: fileData.deleted });
+      expectedSnapshotFiles.set(relativePath, {
+        deleted: fileData.deleted,
+        isBinary: fileData.isBinary,
+      });
     });
 
-    let restoredCount = 0;
-    let deletedCount = 0;
-    const fileOpPromises: Promise<void>[] = [];
+    // Files whose baseSnapshotId chain cannot be resolved. Their content is
+    // gone from the store, which makes this snapshot an incomplete description
+    // of the workspace -- so it is also what forbids deleting anything below.
+    const unrecoverable = new Set(
+      getUnrecoverableFiles(snapshot, this.snapshots),
+    );
+    if (unrecoverable.size > 0) {
+      log(
+        `Restore: ${unrecoverable.size} file(s) in snapshot ${snapshotId} have unresolvable base references and will not be restored.`,
+      );
+    }
+
+    const restored: string[] = [];
+    const deleted: string[] = [];
+    const skipped: string[] = [];
+    const refusedDeletions: string[] = [];
+
+    // A selective snapshot is an explicit claim about SOME files, never a
+    // statement about the whole workspace: its capture holds no entry for the
+    // files it never looked at, so "absent from the snapshot" is no evidence
+    // that a file is extraneous. Restoring one therefore writes back the files
+    // it captured and deletes nothing.
+    //
+    // The predicate must match the capture side exactly (takeSnapshotInternal),
+    // because a rule-based producer passes `isSelective: true` with the files a
+    // rule matched, and an empty selection means the capture ran over the whole
+    // tree: its `{deleted:true}` markers are real, and skipping its deletion
+    // phase would leave files the user actually deleted in the workspace.
+    const isSelectiveCapture =
+      snapshot.isSelective === true &&
+      Array.isArray(snapshot.selectedFiles) &&
+      snapshot.selectedFiles.length > 0;
+    if (isSelectiveCapture) {
+      const capturedCount = snapshot.selectedFiles?.length ?? 0;
+      log(
+        `Restore Apply: selective snapshot — skipping deletion phase (${capturedCount} captured file(s) are its whole scope).`,
+      );
+    }
 
     // 1. Handle Deletions: Files in workspace but not in snapshot (or marked deleted)
-    currentWorkspaceFilesRelative.forEach((relativePath) => {
-      if (
-        !expectedSnapshotFiles.has(relativePath) ||
-        expectedSnapshotFiles.get(relativePath)?.deleted
-      ) {
-        const fullPath = path.join(workspaceRoot, relativePath);
-
-        // CRITICAL FIX: Preserve binary files even if they weren't in the snapshot
-        if (this.storage.isBinaryFile(fullPath)) {
-          logVerbose(
-            `Restore Apply: Preserving binary file not tracked in snapshot: ${relativePath}`,
-          );
-          // Don't add to deletion operations
-        } else {
-          logVerbose(
-            `Restore Apply: Deleting extraneous/marked-deleted file: ${relativePath}`,
-          );
-          fileOpPromises.push(
-            this.storage.deleteWorkspaceFile(fullPath).then(() => {
-              deletedCount++;
-            }),
-          );
-        }
+    //
+    // Sequential rather than a forEach that pushes promises: the callback could
+    // not be awaited, so a rejection had nowhere to go, and every deletion was
+    // started at once with no back-pressure.
+    //
+    // Empty by construction for a selective capture; the guards inside the loop
+    // (the snapshot store, unrecoverable content) therefore keep judging every
+    // deletion of a whole-tree capture, exactly as before.
+    const deletionCandidates: Iterable<string> = isSelectiveCapture
+      ? []
+      : currentWorkspaceFilesRelative;
+    for (const relativePath of deletionCandidates) {
+      const inSnapshot = expectedSnapshotFiles.has(relativePath);
+      const markedDeleted = expectedSnapshotFiles.get(relativePath)?.deleted;
+      // Delete only when the file is not in the snapshot at all, or the
+      // snapshot explicitly records it as deleted. This is the negation of the
+      // original `!inSnapshot || markedDeleted`, kept as an early-continue so
+      // the rest of the loop body has no nesting.
+      if (inSnapshot && !markedDeleted) {
+        continue;
       }
-    });
+
+      // The store is application data that happens to live inside the
+      // workspace, not workspace content: it is written by this extension while
+      // the snapshot is being taken, so no snapshot's own scan can describe it,
+      // and "absent from the snapshot" is never evidence that it is extraneous.
+      // Enumerating it is what deleted the payloads of the snapshot being
+      // restored to and of every newer snapshot; the parser now excludes it, and
+      // this guard is what keeps a future filtering regression from deleting it
+      // again.
+      if (this.isInsideSnapshotStore(relativePath, workspaceRoot)) {
+        refusedDeletions.push(relativePath);
+        log(
+          `Restore Apply: Refusing to delete ${relativePath}: it is inside the snapshot store.`,
+        );
+        continue;
+      }
+
+      const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
+
+      // Preserve binary files even if they weren't in the snapshot
+      if (this.storage.isBinaryFile(fullPath)) {
+        logVerbose(
+          `Restore Apply: Preserving binary file not tracked in snapshot: ${relativePath}`,
+        );
+        continue;
+      }
+
+      if (unrecoverable.size > 0) {
+        // The snapshot is incomplete: it does not describe the whole
+        // workspace, so "absent from the snapshot" is not evidence that the
+        // file is extraneous. Deleting live work on the strength of a broken
+        // record is exactly the failure this guard exists to prevent.
+        refusedDeletions.push(relativePath);
+        logVerbose(
+          `Restore Apply: Refusing to delete ${relativePath} because the snapshot has ${unrecoverable.size} unreadable file(s).`,
+        );
+        continue;
+      }
+
+      logVerbose(
+        `Restore Apply: Deleting extraneous/marked-deleted file: ${relativePath}`,
+      );
+      try {
+        await this.storage.deleteWorkspaceFile(fullPath);
+        deleted.push(relativePath);
+      } catch (error) {
+        // A failed deletion is reported rather than swallowed: the caller
+        // needs to know the workspace no longer matches the snapshot.
+        skipped.push(relativePath);
+        log(`Restore Apply: Error deleting ${relativePath}: ${error}`);
+      }
+    }
 
     // 2. Handle Restorations/Additions: Files in snapshot (and not marked deleted)
-    expectedSnapshotFiles.forEach(async (fileData, relativePath) => {
-      if (!fileData.deleted) {
-        const fullPath = path.join(workspaceRoot, relativePath);
-
-        if (fileData.isBinary) {
-          // Don't attempt to restore content for binary files
-          // They're just tracked for existence, not content
+    for (const [relativePath, fileData] of expectedSnapshotFiles) {
+      if (fileData.deleted) {
+        if (!currentWorkspaceFilesRelative.has(relativePath)) {
           logVerbose(
-            `Restore Apply: Binary file in snapshot, no content to restore: ${relativePath}`,
+            `Restore Apply: File marked deleted and not in workspace, no action needed: ${relativePath}`,
           );
-          return; // Skip content restoration for binary files
         }
+        continue;
+      }
+      if (fileData.isBinary) {
+        // Don't attempt to restore content for binary files.
+        // They're just tracked for existence, not content.
+        logVerbose(
+          `Restore Apply: Binary file in snapshot, no content to restore: ${relativePath}`,
+        );
+        continue;
+      }
+      if (unrecoverable.has(relativePath)) {
+        skipped.push(relativePath);
+        continue;
+      }
 
-        // Get content (this handles diff application internally via storage method)
-        const contentPromise = this.storage.getSnapshotFileContent(
+      const fullPath = ensureWithinDirectory(workspaceRoot, relativePath);
+      try {
+        const content = await this.storage.getSnapshotFileContent(
           snapshot.id,
           relativePath,
           this.snapshots,
         );
-        fileOpPromises.push(
-          contentPromise
-            .then(async (content) => {
-              if (content !== null) {
-                logVerbose(
-                  `Restore Apply: Writing content for file: ${relativePath}`,
-                );
-                await this.storage.writeFileContent(fullPath, content);
-                restoredCount++;
-              } else {
-                log(
-                  `Restore Apply: Skipping file with null/unresolved content: ${relativePath}`,
-                );
-              }
-            })
-            .catch((error) => {
-              // Log error but allow other operations to continue
-              log(
-                `Restore Apply: Error processing file ${relativePath}: ${error}`,
-              );
-              // Optionally re-throw if one failure should stop the whole process
-            }),
-        );
-      } else if (!currentWorkspaceFilesRelative.has(relativePath)) {
-        // Also ensure files marked deleted in snapshot *and* not present in workspace are handled (idempotency)
-        logVerbose(
-          `Restore Apply: File marked deleted and not in workspace, no action needed: ${relativePath}`,
-        );
+        if (content === null) {
+          // Not in the known-broken set but still unresolvable: a resolution
+          // failure deeper in the chain, or an I/O error reading a base.
+          skipped.push(relativePath);
+          log(
+            `Restore Apply: Skipping unresolvable content for ${relativePath}`,
+          );
+          continue;
+        }
+        await this.storage.writeFileContent(fullPath, content);
+        restored.push(relativePath);
+      } catch (error) {
+        skipped.push(relativePath);
+        log(`Restore Apply: Error restoring ${relativePath}: ${error}`);
       }
-    });
+    }
 
-    // Wait for all file operations to complete
-    try {
-      await Promise.all(fileOpPromises);
+    log(
+      `Restore Apply summary for ${snapshotId}: ${restored.length} restored, ${deleted.length} deleted, ${skipped.length} skipped, ${refusedDeletions.length} deletions refused.`,
+    );
+
+    if (skipped.length > 0 || refusedDeletions.length > 0) {
       log(
-        `Restore Apply summary for ${snapshotId}: ${restoredCount} files restored/added, ${deletedCount} files deleted.`,
+        `Restore Apply: snapshot ${snapshotId} is partially unreadable. Skipped: ${skipped.length}, refused deletions: ${refusedDeletions.length}.`,
       );
-    } catch (error) {
-      log(
-        `Restore Apply: Error during file operations for ${snapshotId}: ${error}`,
-      );
-      // Re-throw the error to indicate failure to the caller (command handler)
-      throw new Error(`Failed to apply snapshot restore: ${error}`);
     }
 
     // --- UI Summary Message REMOVED ---
     // This will be handled by the command handler
 
-    // Update current snapshot index
-    this.currentSnapshotIndex = index;
+    // Update which snapshot the workspace now reflects -- except after a
+    // selective restore, which wrote only the files the snapshot captured and
+    // left the rest of the workspace as it was. That workspace matches no
+    // snapshot, so it is left detached: claiming this one is what renders
+    // "workspace is at snapshot N of M" in the status bar (and an unqualified
+    // "Restored snapshot ..." in the command) for a workspace that was mostly
+    // untouched.
+    if (isSelectiveCapture) {
+      this.activeSnapshotId = null;
+      log(
+        `Restore Apply: ${snapshot.id} is selective, so the workspace does not correspond to it; leaving the workspace detached.`,
+      );
+    } else {
+      this.activeSnapshotId = snapshot.id;
+    }
     await this.saveSnapshotIndex();
 
     // Refresh open editors to reflect changes
-    await this.refreshOpenEditors();
+    const divergentBuffers: string[] = [];
+    await this.refreshOpenEditors(divergentBuffers);
 
     // Notify listeners (e.g., tree view) about the change
     this._onDidChangeSnapshots.fire();
     log(`Successfully applied restore for snapshot ${snapshotId}`);
 
-    return true; // Indicate success
+    return {
+      success: true,
+      restored,
+      skipped,
+      refusedDeletions,
+      deleted,
+      divergentBuffers,
+      selective: isSelectiveCapture,
+    };
   }
 
   /**
    * Navigate to previous snapshot (Uses applySnapshotRestore internally)
+   *
+   * Detach-tolerant: with no active snapshot this moves to the newest one
+   * rather than reporting that no history exists. See `resolveNavigationTarget`.
    */
   public async navigateToPreviousSnapshot(): Promise<boolean> {
-    if (this.currentSnapshotIndex <= 0) {
-      log('No previous snapshot available to navigate to.');
-      return false; // No previous snapshot
-    }
-
-    const prevSnapshotId = this.snapshots[this.currentSnapshotIndex - 1].id;
-    log(`Navigating to previous snapshot: ${prevSnapshotId}`);
-    // Note: applySnapshotRestore doesn't handle UI/confirmation,
-    // so this direct call bypasses that. The command handler for
-    // 'previousSnapshot' should orchestrate the full flow if needed.
-    // For now, assume direct application is intended for nav commands.
-    // Consider if nav commands should also have preview/confirm.
-    return await this.applySnapshotRestore(prevSnapshotId);
+    return await this.navigateByDirection('previous');
   }
 
   /**
    * Navigate to next snapshot (Uses applySnapshotRestore internally)
    */
   public async navigateToNextSnapshot(): Promise<boolean> {
-    if (this.currentSnapshotIndex >= this.snapshots.length - 1) {
-      log('No next snapshot available to navigate to.');
-      return false; // No next snapshot
+    return await this.navigateByDirection('next');
+  }
+
+  private async navigateByDirection(
+    direction: NavigationDirection,
+  ): Promise<boolean> {
+    const targetIndex = this.getNavigationTargetIndex(direction);
+    if (targetIndex === ACTIVE_NONE) {
+      log(`No ${direction} snapshot available to navigate to.`);
+      return false; // Nothing to navigate to
     }
 
-    const nextSnapshotId = this.snapshots[this.currentSnapshotIndex + 1].id;
-    log(`Navigating to next snapshot: ${nextSnapshotId}`);
-    // See note in navigateToPreviousSnapshot regarding UI/confirmation bypass.
-    return await this.applySnapshotRestore(nextSnapshotId);
+    const targetSnapshotId = this.snapshots[targetIndex].id;
+    log(`Navigating to ${direction} snapshot: ${targetSnapshotId}`);
+    // Note: applySnapshotRestore doesn't handle UI/confirmation,
+    // so this direct call bypasses that. The command handler for
+    // 'previousSnapshot' should orchestrate the full flow if needed.
+    // For now, assume direct application is intended for nav commands.
+    // Consider if nav commands should also have preview/confirm.
+    // `applySnapshotRestore` returns a RestoreResult; navigation only reports
+    // whether the restore succeeded.
+    return (await this.applySnapshotRestore(targetSnapshotId)).success;
+  }
+
+  /**
+   * Where a previous/next navigation would land, or `ACTIVE_NONE`.
+   *
+   * Public so the commands that report which snapshot they are moving to use
+   * the same answer the navigation itself will use; computing it twice is how
+   * a progress title ends up naming a snapshot the command never restores.
+   */
+  public getNavigationTargetIndex(direction: NavigationDirection): number {
+    return resolveNavigationTarget(
+      this.snapshots,
+      this.getCurrentSnapshotIndex(),
+      direction,
+    );
   }
 
   /**
@@ -940,13 +1590,103 @@ export class SnapshotManager {
    * Get current snapshot index
    */
   public getCurrentSnapshotIndex(): number {
-    return this.currentSnapshotIndex;
+    return resolveActiveIndex(this.snapshots, this.activeSnapshotId);
+  }
+
+  /**
+   * The snapshot the workspace currently reflects, or undefined when the
+   * workspace is not at a snapshot.
+   *
+   * Previously `currentSnapshotIndex` was initialised to the newest snapshot
+   * on load and after every takeSnapshot, so the status bar reported
+   * "Viewing snapshot 54/54" on a fresh window and the tree marked the newest
+   * snapshot as current even though nothing had been restored.
+   */
+  public getActiveSnapshot(): Snapshot | undefined {
+    const index = this.getCurrentSnapshotIndex();
+    return index === ACTIVE_NONE ? undefined : this.snapshots[index];
+  }
+
+  /**
+   * Whether the workspace currently reflects the given snapshot.
+   *
+   * Callers that highlight or mark a snapshot must use this rather than
+   * comparing array positions: the list is pruned and re-sorted, so a position
+   * captured earlier can name a different snapshot later.
+   */
+  public isSnapshotActive(snapshotId: string): boolean {
+    return this.activeSnapshotId === snapshotId;
+  }
+
+  /**
+   * Forgets which snapshot the workspace reflects, without touching the
+   * workspace itself. The store keeps every snapshot; only the claim that the
+   * workspace corresponds to one is dropped.
+   */
+  public async clearActiveSnapshot(): Promise<void> {
+    this.activeSnapshotId = null;
+    await this.saveSnapshotIndex();
+    this._onDidChangeSnapshots.fire();
+  }
+
+  /**
+   * The snapshot a new snapshot should diff against.
+   *
+   * That is the snapshot the workspace reflects. When nothing is active the
+   * base is the newest snapshot, which is the right default: a fresh window
+   * holds the newest state. The two cases were previously indistinguishable
+   * because both were read from the same stored position.
+   */
+  private getDiffBaseSnapshot(): Snapshot | undefined {
+    const active = this.getActiveSnapshot();
+    if (active) {
+      return active;
+    }
+    return this.snapshots.length > 0
+      ? this.snapshots[this.snapshots.length - 1]
+      : undefined;
+  }
+
+  /**
+   * Rescan integrity. Must be called after anything that changes `snapshots`.
+   */
+  private refreshIntegrityReport(): void {
+    this.integrityReport = scanSnapshotIntegrity(this.snapshots);
+    if (this.integrityReport.unrecoverableFileCount > 0) {
+      log(
+        `Integrity: ${
+          this.integrityReport.unrecoverableFileCount
+        } file(s) across ${
+          this.integrityReport.brokenSnapshotIds.length
+        } snapshot(s) cannot be reconstructed. Missing base snapshot(s): ${
+          this.integrityReport.missingBaseSnapshotIds.join(', ') || 'none'
+        }.`,
+      );
+    }
+  }
+
+  /**
+   * The most recent integrity scan. Detection is worthless if it stays in the
+   * log, so the tree and the restore preview read this.
+   */
+  public getIntegrityReport(): SnapshotIntegrityReport {
+    return this.integrityReport;
+  }
+
+  /**
+   * Relative paths in one snapshot whose content cannot be reconstructed.
+   */
+  public getUnrecoverableFilesFor(snapshotId: string): string[] {
+    return this.integrityReport.perSnapshot[snapshotId] ?? [];
   }
 
   /**
    * Delete a specific snapshot
    */
-  public async deleteSnapshot(snapshotId: string): Promise<boolean> {
+  public async deleteSnapshot(
+    snapshotId: string,
+    options?: { skipConfirm?: boolean; force?: boolean },
+  ): Promise<boolean> {
     log(`Attempting to delete snapshot: ${snapshotId}`);
     const index = this.snapshots.findIndex((s) => s.id === snapshotId);
 
@@ -956,68 +1696,135 @@ export class SnapshotManager {
       return false;
     }
 
-    // Confirmation dialog
-    const confirmation = await vscode.window.showWarningMessage(
-      `Are you sure you want to delete snapshot "${
-        this.snapshots[index].description || snapshotId
-      }"? This cannot be undone.`,
-      { modal: true }, // Make it modal to force a choice
-      'Delete',
-    );
-
-    if (confirmation !== 'Delete') {
-      log(`Deletion cancelled for snapshot ${snapshotId}.`);
-      return false;
-    }
-
-    const snapshotToDelete = this.snapshots[index];
-
-    // Delete the snapshot data using storage
-    // Add await here
-    await this.storage.deleteSnapshotData(snapshotToDelete.id);
-    // Note: deleteSnapshotData handles logging and errors internally
-
-    // Remove from the snapshots array
-    this.snapshots.splice(index, 1);
-    log(`Removed snapshot ${snapshotId} from in-memory list.`);
-
-    // Adjust currentSnapshotIndex if necessary
-    if (this.snapshots.length === 0) {
-      this.currentSnapshotIndex = -1;
-      log('No snapshots left, resetting current index.');
-    } else if (index <= this.currentSnapshotIndex) {
-      // If deleted snapshot was at or before the current one, decrement index
-      // (Handles deleting the current one, or one before it)
-      // Use max to ensure index doesn't go below -1 if the first was deleted
-      this.currentSnapshotIndex = Math.max(-1, this.currentSnapshotIndex - 1);
-      log(
-        `Adjusted current index due to deletion: ${this.currentSnapshotIndex}`,
+    // Confirmation dialog. `skipConfirm` exists for non-interactive callers
+    // (the integration suite), which cannot answer a modal dialog.
+    if (!options?.skipConfirm) {
+      const confirmation = await vscode.window.showWarningMessage(
+        `Are you sure you want to delete snapshot "${
+          this.snapshots[index].description || snapshotId
+        }"? This cannot be undone.`,
+        { modal: true }, // Make it modal to force a choice
+        'Delete',
       );
-    }
-    // If index > currentSnapshotIndex, no adjustment needed
 
-    // Delete semantic search data
-    const semanticSearchService = (this as any).semanticSearchService;
-    if (semanticSearchService) {
-      try {
-        await semanticSearchService.deleteSnapshotIndexing(snapshotToDelete.id);
-      } catch (error) {
-        log(`Error deleting semantic search data: ${error}`);
+      if (confirmation !== 'Delete') {
+        log(`Deletion cancelled for snapshot ${snapshotId}.`);
+        return false;
       }
     }
 
-    // Save the updated index
-    await this.saveSnapshotIndex();
-    log(`Snapshot index saved after deleting ${snapshotId}.`);
+    return await this.withWriteLock(async () => {
+      const lockedIndex = this.snapshots.findIndex((s) => s.id === snapshotId);
+      if (lockedIndex === -1) {
+        log(`Snapshot ${snapshotId} no longer exists.`);
+        return false;
+      }
 
-    // Emit event
-    this._onDidChangeSnapshots.fire();
-    log('Fired onDidChangeSnapshots event after deleteSnapshot');
+      const snapshotToDelete = this.snapshots[lockedIndex];
 
-    vscode.window.showInformationMessage(
-      `Snapshot "${snapshotToDelete.description || snapshotId}" deleted.`,
-    );
-    return true;
+      // Deleting a snapshot that a survivor stored a delta against would lose
+      // every file the survivor inherited, so rebuild the survivors first --
+      // exactly as `enforceSnapshotLimit` does before pruning. Refusing leaves
+      // the store untouched; forcing deletes anyway and lets the integrity
+      // report name what is now unrecoverable.
+      const survivors = this.snapshots.filter(
+        (s) =>
+          s.id !== snapshotId &&
+          Object.values(s.files).some(
+            (fileData) =>
+              !fileData.deleted && fileData.baseSnapshotId === snapshotId,
+          ),
+      );
+
+      if (survivors.length > 0) {
+        const materialization = await this.materializeDependents(
+          new Set([snapshotId]),
+        );
+        if (!materialization.ok) {
+          if (!options?.force) {
+            log(
+              `Delete refused for ${snapshotId}: ${survivors.length} later snapshot(s) cannot be rebuilt.`,
+            );
+            vscode.window.showErrorMessage(
+              `Cannot delete "${snapshotToDelete.description || snapshotId}": ${
+                survivors.length
+              } later snapshot(s) inherit files from it and cannot be rebuilt. Nothing was deleted.`,
+            );
+            return false;
+          }
+          log(
+            `Delete forced for ${snapshotId}: ${survivors.length} snapshot(s) keep an unresolvable base.`,
+          );
+        } else {
+          for (const survivor of materialization.touched) {
+            await this.storage.saveSnapshotData(survivor);
+          }
+        }
+      }
+
+      await this.purgeSnapshot(snapshotToDelete.id);
+
+      this.snapshots.splice(lockedIndex, 1);
+      log(`Removed snapshot ${snapshotId} from in-memory list.`);
+
+      this.detachIfActiveSnapshotRemoved();
+
+      await this.saveSnapshotIndex();
+      log(`Snapshot index saved after deleting ${snapshotId}.`);
+
+      // Deleting a snapshot can break every snapshot that used it as a base, so
+      // the report must be rebuilt before listeners render the tree.
+      this.refreshIntegrityReport();
+
+      this._onDidChangeSnapshots.fire();
+      log('Fired onDidChangeSnapshots event after deleteSnapshot');
+
+      vscode.window.showInformationMessage(
+        `Snapshot "${snapshotToDelete.description || snapshotId}" deleted.`,
+      );
+      return true;
+    });
+  }
+
+  /**
+   * Removes a snapshot from storage, the content cache and the semantic search
+   * index. Every path that discards a snapshot must go through here, so that no
+   * derived store keeps referencing it.
+   *
+   * `enforceSnapshotLimit` previously called `storage.deleteSnapshotData`
+   * directly and never told the search service, so pruned snapshots kept their
+   * vectors and stayed reachable in search results after their content was
+   * gone. The content cache was fine -- `deleteSnapshotData` already clears it
+   * by exact `"<snapshotId>::"` prefix, which is why the cache assertions for
+   * this task already passed.
+   */
+  /**
+   * Inject the search index's purge hook. A typed call keeps a rename from
+   * silently breaking the only path that removes deleted snapshots from search.
+   */
+  public setSemanticSearchService(
+    service: SnapshotIndexPurgeTarget | undefined,
+  ): void {
+    this.semanticSearchService = service;
+  }
+
+  private async purgeSnapshot(snapshotId: string): Promise<void> {
+    await this.storage.deleteSnapshotData(snapshotId);
+
+    if (
+      typeof this.semanticSearchService?.deleteSnapshotIndexing === 'function'
+    ) {
+      try {
+        await this.semanticSearchService.deleteSnapshotIndexing(snapshotId);
+      } catch (error) {
+        // Purge is best-effort on the derived store: a failure to clear vectors
+        // must not stop the snapshot itself from being removed, but it must be
+        // visible rather than swallowed.
+        log(
+          `Purge: failed to remove search index entries for ${snapshotId}: ${error}`,
+        );
+      }
+    }
   }
 
   /**
@@ -1136,7 +1943,11 @@ export class SnapshotManager {
     }
 
     // Get workspace file path
-    const workspaceFilePath = path.join(workspaceRoot, relativePath);
+    const workspaceFilePath = ensureWithinDirectory(
+      workspaceRoot,
+      relativePath,
+    );
+    await assertNoSymlinkPath(workspaceRoot, workspaceFilePath);
 
     // Use storage method to write (handles directory creation)
     // Add await here
@@ -1152,19 +1963,63 @@ export class SnapshotManager {
   }
 
   /**
-   * Refresh all open editors to show updated content after a restore.
-   * TODO: This might be better placed in extension.ts or a dedicated UI update module.
+   * Reloads open editors from disk after a restore, preserving the cursor and
+   * scroll position.
+   *
+   * The edit is applied per document rather than as one workspace-wide edit, so
+   * a single unreadable file cannot abort the refresh for the others.
    */
-  private async refreshOpenEditors() {
-    for (const editor of vscode.window.visibleTextEditors) {
-      try {
-        const document = editor.document;
+  private async refreshOpenEditors(divergentBuffers?: string[]) {
+    const workspaceRoot = this.storage.getWorkspaceRoot();
 
-        // Skip documents with unsaved changes
+    for (const editor of vscode.window.visibleTextEditors) {
+      const document = editor.document;
+
+      try {
+        // Only real files on disk have content to re-read. A diff view, an
+        // output channel or an untitled buffer has no fsPath to read.
+        if (document.uri.scheme !== 'file') {
+          continue;
+        }
+
+        // Never touch a buffer with unsaved changes: the replacement below is a
+        // full-document overwrite, so the user's edits would vanish.
         if (document.isDirty) {
+          // The disk copy was just replaced while this buffer still holds text
+          // the user has not saved. Skipping the re-sync is what keeps their
+          // edits alive; not reporting it is what left them with a workspace
+          // that matches no snapshot and no explanation.
+          if (workspaceRoot) {
+            divergentBuffers?.push(
+              path.relative(workspaceRoot, document.uri.fsPath),
+            );
+          }
           log(
             `Skipping refresh for ${document.uri.fsPath} due to unsaved changes`,
           );
+          continue;
+        }
+
+        let content: string;
+        try {
+          content = await fsPromises.readFile(document.uri.fsPath, 'utf8');
+        } catch (error) {
+          // A restore can delete the file that is still open, which is an
+          // expected outcome rather than a failure to report.
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === 'ENOENT') {
+            logVerbose(
+              `Skipping refresh for ${document.uri.fsPath}: the file no longer exists`,
+            );
+          } else {
+            log(`Failed to read ${document.uri.fsPath} for refresh: ${error}`);
+          }
+          continue;
+        }
+
+        // Nothing changed on disk, so there is no reason to replace the buffer
+        // and disturb the user's selection.
+        if (content === document.getText()) {
           continue;
         }
 
@@ -1172,26 +2027,129 @@ export class SnapshotManager {
         const selection = editor.selection;
         const visibleRanges = editor.visibleRanges;
 
-        // Read and update content
-        const content = await fsPromises.readFile(document.uri.fsPath, 'utf8');
         const fullRange = new vscode.Range(
           document.positionAt(0),
           document.positionAt(document.getText().length),
         );
-
         const edit = new vscode.WorkspaceEdit();
         edit.replace(document.uri, fullRange, content);
         await vscode.workspace.applyEdit(edit);
 
-        // Restore view state
+        // Restore view state. `visibleRanges` is empty for a document that is
+        // not laid out, and `visibleRanges[0]` would then be undefined.
         editor.selection = selection;
-        editor.revealRange(visibleRanges[0]);
+        if (visibleRanges.length > 0) {
+          editor.revealRange(visibleRanges[0]);
+        }
       } catch (error) {
         log(
           `Failed to refresh editor for ${editor.document.uri.fsPath}: ${error}`,
         );
       }
     }
+  }
+
+  /**
+   * The snapshots pruning would like to delete: the `excess` oldest, oldest
+   * first. This is the intent, before safety: whether they can actually go
+   * depends on what survives referencing them, which is why the pure
+   * `selectPrunableSnapshots` above still has the final say.
+   */
+  private pruneCandidates(maxSnapshots: number): string[] {
+    return [...this.snapshots]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(0, Math.max(0, this.snapshots.length - maxSnapshots))
+      .map((s) => s.id);
+  }
+
+  /**
+   * Put the pre-rewrite file maps of `originals` back.
+   *
+   * Memory has to match disk whenever a materialization was not persisted: the
+   * next enforcement pass reads the dependents out of these maps, and a
+   * materialized copy still in memory would hide the base the store still needs
+   * -- that pass would find no dependent, skip the save and purge the base.
+   */
+  private restoreOriginalFiles(
+    originals: Map<string, Snapshot['files']>,
+  ): void {
+    for (const [id, files] of originals) {
+      const target = this.snapshots.find((snapshot) => snapshot.id === id);
+      if (target) {
+        target.files = files;
+      }
+    }
+  }
+
+  /**
+   * Rewrites the delta entries of survivors that point into `pruned` into full
+   * content, resolving while the chain is still intact, so deleting those bases
+   * loses nothing. Cancels on the first unresolvable entry: a partially
+   * materialized list must not be persisted, so the caller reverts.
+   *
+   * Only entries carrying a `baseSnapshotId` are deltas. A `{ deleted: true }`
+   * marker records that the file was gone at that point and has no base to
+   * repair, so it keeps its marker.
+   *
+   * `originals` maps every touched snapshot id to its pre-rewrite file map, so
+   * a caller that cannot persist the rewrites can put memory back with
+   * `restoreOriginalFiles`. On `ok: false` they have already been restored
+   * here and there is nothing to persist.
+   */
+  private async materializeDependents(pruned: Set<string>): Promise<{
+    ok: boolean;
+    touched: Snapshot[];
+    originals: Map<string, Snapshot['files']>;
+  }> {
+    const originals = new Map<string, Snapshot['files']>();
+    const touched: Snapshot[] = [];
+    for (const snapshot of this.snapshots) {
+      if (pruned.has(snapshot.id)) {
+        continue;
+      }
+      let dirty = false;
+      for (const [relativePath, fileData] of Object.entries(snapshot.files)) {
+        if (fileData.deleted) {
+          // A tombstone is not a delta: it records that the file was gone at
+          // that point and has nothing to resolve, so it keeps its marker.
+          // Resolving it would either abort the whole materialization --
+          // `getSnapshotFileContent` answers null for a deleted entry -- or
+          // replace the marker with content for a file the snapshot says is
+          // gone.
+          continue;
+        }
+        if (!fileData.baseSnapshotId || !pruned.has(fileData.baseSnapshotId)) {
+          continue;
+        }
+        const content = await this.storage.getSnapshotFileContent(
+          snapshot.id,
+          relativePath,
+          this.snapshots,
+        );
+        if (content === null) {
+          // Only a real delta reaches this now (tombstones are skipped above),
+          // and a delta that does not resolve is either unreadable through its
+          // base or absent from it -- naming the base is what makes the message
+          // usable. "No rewrite is persisted" rather than "the store is
+          // untouched": the caller still prunes whatever nothing references.
+          log(
+            `Prune: cannot materialize ${relativePath} of ${snapshot.id}: base ${fileData.baseSnapshotId} is unreadable or does not record it; persisting no rewrite of the survivors.`,
+          );
+          this.restoreOriginalFiles(originals);
+          return { ok: false, touched: [], originals };
+        }
+        if (!originals.has(snapshot.id)) {
+          // Shallow copy is enough: only the rewritten keys are replaced below.
+          originals.set(snapshot.id, { ...snapshot.files });
+        }
+        snapshot.files[relativePath] = { content };
+        dirty = true;
+      }
+      if (dirty) {
+        touched.push(snapshot);
+      }
+    }
+    return { ok: true, touched, originals };
   }
 
   /**
@@ -1204,37 +2162,324 @@ export class SnapshotManager {
       return; // Limit not exceeded
     }
 
-    log(
-      `Snapshot limit (${maxSnapshots}) exceeded. Removing oldest snapshots.`,
+    // Try to make the excess prunable by materializing the survivors that
+    // depend on it. Success means the pure selector sees no dangling
+    // references; failure means we persist nothing and fall back to
+    // today's refusal behavior.
+    const candidates = this.pruneCandidates(maxSnapshots);
+    const materialization = await this.materializeDependents(
+      new Set(candidates),
     );
-    // Remove oldest snapshots from the beginning of the array
-    const toRemoveCount = this.snapshots.length - maxSnapshots;
-    const removedSnapshots = this.snapshots.splice(0, toRemoveCount);
+    if (materialization.ok) {
+      // Persist the rewrites before anything is deleted: a survivor whose base
+      // is gone cannot be rebuilt afterwards. Persisting can fail part-way --
+      // the saves that landed stay on disk, and every touched survivor is
+      // rolled back in memory below, so memory may lag disk, never lead it, and
+      // the next prune redoes them. Nothing is purged until all of them are
+      // written.
+      let persisted = 0;
+      try {
+        for (const snapshot of materialization.touched) {
+          await this.storage.saveSnapshotData(snapshot);
+          persisted += 1;
+        }
+      } catch (error) {
+        this.restoreOriginalFiles(materialization.originals);
+        log(
+          'Snapshot limit: the prune stopped. ' +
+            persisted +
+            ' of ' +
+            materialization.touched.length +
+            ' rebuilt survivor(s) were persisted before the failure: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The rewrites were rolled back in memory, so the next prune redoes them; nothing was deleted.',
+        );
+        return;
+      }
+    }
 
-    // Adjust current index since we removed items from the beginning
-    this.currentSnapshotIndex = Math.max(
-      -1,
-      this.currentSnapshotIndex - toRemoveCount,
-    );
-    log(
-      `Removed ${toRemoveCount} oldest snapshots. New current index: ${this.currentSnapshotIndex}`,
-    );
+    const removableIds = selectPrunableSnapshots(this.snapshots, maxSnapshots);
 
-    // Delete snapshot data using storage
-    // Add await inside map function
-    const deletePromises = removedSnapshots.map(
-      async (snapshot) => await this.storage.deleteSnapshotData(snapshot.id),
-    );
-    await Promise.all(deletePromises); // Wait for all deletions
+    if (removableIds.length === 0) {
+      log(
+        `Snapshot limit (${maxSnapshots}) exceeded but no snapshot is safe to prune: every candidate is referenced by a snapshot that would survive. Keeping ${this.snapshots.length} snapshots.`,
+      );
+      return;
+    }
+    const requested = this.snapshots.length - maxSnapshots;
+    if (removableIds.length < requested) {
+      log(
+        `Snapshot limit (${maxSnapshots}) exceeded by ${requested} but only ${removableIds.length} snapshot(s) are safe to prune. Keeping the rest to preserve referential integrity.`,
+      );
+    }
+
+    // Purge newest first and stop at the first failure: a candidate's base is
+    // its predecessor, so removing the newest first means a failure leaves the
+    // base of every surviving candidate in place, while deleting oldest-first --
+    // or continuing past the failure -- would remove the base of a candidate
+    // that has to stay. The refusal is reported, never rethrown: the snapshot
+    // this take wrote is already indexed and saved, and the excess is kept.
+    //
+    // Qualified: "newest" here is newest by timestamp, because this manager's
+    // load path sorts by it. After a backwards clock step a candidate's base can
+    // be newer by timestamp than the candidate itself, so the guarantee above is
+    // exact only in the shared core, which never reorders. Here it is
+    // best-effort, and the store's own order would be the fix if it is ever
+    // needed.
+    //
+    // A snapshot leaves `this.snapshots` only after its purge succeeded, so the
+    // index written below lists exactly what survives.
+    const purged: string[] = [];
+    for (const id of [...removableIds].reverse()) {
+      try {
+        await this.purgeSnapshot(id);
+      } catch (error) {
+        log(
+          'Snapshot limit: could not delete ' +
+            id +
+            ' while pruning to ' +
+            maxSnapshots +
+            ' snapshots: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The prune stops here; no older candidate is removed.',
+        );
+        break;
+      }
+      this.snapshots = this.snapshots.filter((snapshot) => snapshot.id !== id);
+      purged.push(id);
+    }
+
+    // Pruning takes from the oldest end, so it can remove the snapshot the
+    // workspace reflects. Identity survives reordering, which is why the
+    // reference is stored as an id: the old arithmetic adjustment of a stored
+    // position was only correct while the removed set was a prefix.
+    this.detachIfActiveSnapshotRemoved();
 
     // Update index since snapshots were removed
     await this.saveSnapshotIndex();
 
     // Emit event if snapshots were actually removed
-    if (removedSnapshots.length > 0) {
+    if (purged.length > 0) {
+      // Pruning removes deltas other snapshots may depend on, so rebuild the
+      // report before listeners render. (The early returns above do not change
+      // the list, so they need no refresh.)
+      this.refreshIntegrityReport();
       this._onDidChangeSnapshots.fire();
-      log('Fired onDidChangeSnapshots event after enforceSnapshotLimit');
+      log(
+        `Pruned ${purged.length} snapshot(s); ${this.snapshots.length} remain. Fired onDidChangeSnapshots event after enforceSnapshotLimit`,
+      );
     }
+  }
+
+  /**
+   * Remove the oldest snapshots until the store fits maxSnapshotStoreBytes.
+   *
+   * Called with the write lock already held, from takeSnapshotInternal; the
+   * public entry point is enforceSnapshotSizeLimitOnActivation.
+   *
+   * 0 disables the limit and the store is not measured at all in that case,
+   * which is what keeps activation as cheap as it was before this setting
+   * existed. The active snapshot is never a candidate, and a candidate is only
+   * deleted after materializeDependents has rewritten every surviving
+   * reference to it -- when that cannot be done nothing is deleted and the
+   * excess is kept.
+   *
+   * `justCreatedSnapshotId` is the snapshot the caller has this moment
+   * written. Its own trim must never delete it, and the loaded list is sorted
+   * by timestamp rather than by store order, so its position in the array is
+   * no evidence that it is the newest: it is excluded by id instead.
+   */
+  private async enforceSnapshotSizeLimitInternal(
+    justCreatedSnapshotId?: string,
+  ): Promise<SnapshotSizePruneResult> {
+    const limitBytes = getMaxSnapshotStoreBytes();
+    if (!(limitBytes > 0)) {
+      return {
+        bytesBefore: 0,
+        bytesAfter: 0,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
+    const sizes = this.storage.measureSnapshotStore();
+    if (sizes.totalBytes <= limitBytes) {
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
+    // Oldest first by timestamp, the order the count prune already uses
+    // (pruneCandidates and selectPrunableSnapshots), because the size
+    // selector consumes whatever order it is handed. The snapshot a take has
+    // just written is dropped by id, not by its position.
+    const byAge = [...this.snapshots]
+      .filter((snapshot) => snapshot.id !== justCreatedSnapshotId)
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    const candidates = selectSizePruneCandidates(
+      byAge,
+      sizes,
+      limitBytes,
+      this.activeSnapshotId,
+    );
+
+    if (candidates.length === 0) {
+      log(
+        'Size retention: the store holds ' +
+          sizes.totalBytes +
+          ' bytes against a ' +
+          limitBytes +
+          ' byte limit and no snapshot is removable; the active snapshot is never pruned.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: true,
+      };
+    }
+
+    const removable = new Set(candidates);
+    const materialization = await this.materializeDependents(removable);
+    if (!materialization.ok) {
+      log(
+        'Size retention: keeping ' +
+          this.snapshots.length +
+          ' snapshots. The store is over its ' +
+          limitBytes +
+          ' byte limit but a survivor of the ' +
+          candidates.length +
+          ' oldest cannot be rebuilt; nothing was deleted.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: sizes.totalBytes,
+        trimmed: [],
+        stillOverLimit: true,
+      };
+    }
+
+    // Persist the rewrites before anything is deleted: a survivor whose base is
+    // gone cannot be rebuilt afterwards. Persisting can fail part-way -- the
+    // saves that landed stay on disk, and every touched survivor is rolled back
+    // in memory below, so memory may lag disk, never lead it, and the next trim
+    // redoes them. Nothing is purged until all of them are written.
+    let persisted = 0;
+    try {
+      for (const survivor of materialization.touched) {
+        await this.storage.saveSnapshotData(survivor);
+        persisted += 1;
+      }
+    } catch (error) {
+      this.restoreOriginalFiles(materialization.originals);
+      const after = this.storage.measureSnapshotStore();
+      log(
+        'Size retention: the trim stopped. ' +
+          persisted +
+          ' of ' +
+          materialization.touched.length +
+          ' rebuilt survivor(s) were persisted before the failure: ' +
+          (error instanceof Error ? error.message : String(error)) +
+          '. The rewrites were rolled back in memory, so the next trim redoes them; nothing was deleted.',
+      );
+      return {
+        bytesBefore: sizes.totalBytes,
+        bytesAfter: after.totalBytes,
+        trimmed: [],
+        stillOverLimit: after.totalBytes > limitBytes,
+      };
+    }
+
+    // Purge newest first and stop at the first failure: a candidate's base is
+    // its predecessor, so removing the newest first means a failure leaves the
+    // base of every surviving candidate in place, while deleting oldest-first --
+    // or continuing past the failure -- would remove the base of a candidate
+    // that has to stay. A snapshot leaves `this.snapshots` only after its
+    // directory is gone, so the index written below lists exactly what survives.
+    //
+    // Qualified as in the count trim: "newest" is newest by timestamp here,
+    // because the load path sorts by it, so a backwards clock step can leave a
+    // candidate's base newer by timestamp than the candidate. The shared core,
+    // which never reorders, is exact; this manager is best-effort.
+    //
+    // No detachIfActiveSnapshotRemoved() here: the candidate selection excludes
+    // the active snapshot by construction, so the workspace cannot be left
+    // pointing at something that was just deleted.
+    const trimmed: string[] = [];
+    for (const id of [...candidates].reverse()) {
+      try {
+        await this.purgeSnapshot(id);
+      } catch (error) {
+        log(
+          'Size retention: could not delete ' +
+            id +
+            ' while trimming the store to ' +
+            limitBytes +
+            ' bytes: ' +
+            (error instanceof Error ? error.message : String(error)) +
+            '. The trim stops here; no older candidate is removed.',
+        );
+        break;
+      }
+      this.snapshots = this.snapshots.filter((snapshot) => snapshot.id !== id);
+      trimmed.push(id);
+    }
+
+    await this.saveSnapshotIndex();
+    this.refreshIntegrityReport();
+
+    const after = this.storage.measureSnapshotStore();
+    log(
+      'Size retention: trimmed ' +
+        trimmed.length +
+        ' snapshot(s); the store now holds ' +
+        after.totalBytes +
+        ' bytes against a ' +
+        limitBytes +
+        ' byte limit.',
+    );
+    this._onDidChangeSnapshots.fire();
+
+    return {
+      bytesBefore: sizes.totalBytes,
+      bytesAfter: after.totalBytes,
+      trimmed,
+      stillOverLimit: after.totalBytes > limitBytes,
+    };
+  }
+
+  /**
+   * Retention for a window that is opening.
+   *
+   * A store can already be over the configured size before anything is taken,
+   * and nothing else revisits it until the next take.
+   *
+   * A disabled limit returns before the load wait and before the write lock, so
+   * opening a window costs exactly what it did before this setting existed.
+   * With a limit configured, the load the constructor started is awaited first:
+   * loadSnapshots() fills the snapshot list asynchronously and an enforcement
+   * that ran ahead of it would read an empty list and silently do nothing.
+   */
+  public async enforceSnapshotSizeLimitOnActivation(): Promise<SnapshotSizePruneResult> {
+    // Read before anything else: 0 disables the limit, and nothing below it
+    // should run -- not the load wait, not the lock, not the store walk.
+    if (!(getMaxSnapshotStoreBytes() > 0)) {
+      return {
+        bytesBefore: 0,
+        bytesAfter: 0,
+        trimmed: [],
+        stillOverLimit: false,
+      };
+    }
+
+    await this.loadPromise;
+    return await this.withWriteLock(() =>
+      this.enforceSnapshotSizeLimitInternal(),
+    );
   }
 
   /**
@@ -1253,51 +2498,43 @@ export class SnapshotManager {
       description?: string;
     },
   ): Promise<boolean> {
-    log(`Updating context for snapshot: ${snapshotId}`);
+    return await this.withWriteLock(async () => {
+      log(`Updating context for snapshot: ${snapshotId}`);
 
-    // Find the snapshot
-    const index = this.snapshots.findIndex((s) => s.id === snapshotId);
-    if (index === -1) {
-      log(`Snapshot ${snapshotId} not found for context update.`);
-      throw new Error(`Snapshot with ID ${snapshotId} not found.`);
-    }
+      const index = this.snapshots.findIndex((s) => s.id === snapshotId);
+      if (index === -1) {
+        log(`Snapshot ${snapshotId} not found for context update.`);
+        throw new Error(`Snapshot with ID ${snapshotId} not found.`);
+      }
 
-    const snapshot = this.snapshots[index];
+      const snapshot = this.snapshots[index];
 
-    // Update each field if provided
-    if (contextUpdate.tags !== undefined) {
-      snapshot.tags = contextUpdate.tags;
-    }
+      if (contextUpdate.tags !== undefined) {
+        snapshot.tags = contextUpdate.tags;
+      }
+      if (contextUpdate.notes !== undefined) {
+        snapshot.notes = contextUpdate.notes;
+      }
+      if (contextUpdate.taskReference !== undefined) {
+        snapshot.taskReference = contextUpdate.taskReference;
+      }
+      if (contextUpdate.isFavorite !== undefined) {
+        snapshot.isFavorite = contextUpdate.isFavorite;
+      }
+      if (contextUpdate.description !== undefined) {
+        snapshot.description = contextUpdate.description;
+      }
 
-    if (contextUpdate.notes !== undefined) {
-      snapshot.notes = contextUpdate.notes;
-    }
-
-    if (contextUpdate.taskReference !== undefined) {
-      snapshot.taskReference = contextUpdate.taskReference;
-    }
-
-    if (contextUpdate.isFavorite !== undefined) {
-      snapshot.isFavorite = contextUpdate.isFavorite;
-    }
-
-    if (contextUpdate.description !== undefined) {
-      snapshot.description = contextUpdate.description;
-    }
-
-    // Save the updated snapshot
-    try {
-      await this.storage.saveSnapshotData(snapshot);
-      log(`Successfully updated context for snapshot ${snapshotId}`);
-
-      // Notify listeners of the change
-      this._onDidChangeSnapshots.fire();
-
-      return true;
-    } catch (error) {
-      log(`Error updating context for snapshot ${snapshotId}: ${error}`);
-      throw new Error(`Failed to update snapshot context: ${error}`);
-    }
+      try {
+        await this.storage.saveSnapshotData(snapshot);
+        log(`Successfully updated context for snapshot ${snapshotId}`);
+        this._onDidChangeSnapshots.fire();
+        return true;
+      } catch (error) {
+        log(`Error updating context for snapshot ${snapshotId}: ${error}`);
+        throw new Error(`Failed to update snapshot context: ${error}`);
+      }
+    });
   }
 
   // Removed deleteDirectory - handled by SnapshotStorage

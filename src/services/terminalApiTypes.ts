@@ -2,6 +2,22 @@ import * as vscode from 'vscode';
 import { Snapshot } from '../snapshotManager';
 
 /**
+ * What an indexSnapshots request selects.
+ *
+ * Absent **or empty** snapshotIds means every snapshot. An empty list used to
+ * be truthy, so the default CLI invocation took the explicit-ids branch and
+ * answered "Individual snapshot indexing not supported" -- a command that could
+ * never succeed.
+ */
+export interface IndexSnapshotsOptions {
+  snapshotIds?: string[];
+  /** Re-index snapshots recorded in the persisted indexed set. */
+  force?: boolean;
+  /** Delete each snapshot's vectors before indexing it. */
+  purgeFirst?: boolean;
+}
+
+/**
  * Comprehensive API interface for terminal and external tool integration
  */
 export interface TerminalApiInterface {
@@ -13,7 +29,10 @@ export interface TerminalApiInterface {
     id: string,
     options?: RestoreOptions,
   ): Promise<RestoreResponse>;
-  deleteSnapshot(id: string): Promise<boolean>;
+  deleteSnapshot(
+    id: string,
+    options?: { skipConfirm?: boolean },
+  ): Promise<boolean>;
   navigateSnapshot(direction: 'previous' | 'next'): Promise<NavigationResponse>;
 
   // Snapshot content operations
@@ -32,7 +51,7 @@ export interface TerminalApiInterface {
     query: string,
     options?: SearchOptions,
   ): Promise<SearchResult[]>;
-  indexSnapshots(snapshotIds?: string[]): Promise<IndexingResult>;
+  indexSnapshots(options?: IndexSnapshotsOptions): Promise<IndexingResult>;
 
   // Workspace operations
   getWorkspaceInfo(): Promise<WorkspaceInfo>;
@@ -72,6 +91,15 @@ export interface SnapshotResponse {
   success: boolean;
   snapshot?: Snapshot;
   error?: string;
+  /**
+   * True when nothing was recorded because the workspace was unchanged since
+   * the base snapshot.
+   *
+   * This is a refusal, not a failure: `success` is false because no snapshot
+   * exists to return, but a caller that only wants to know whether the store
+   * moved can tell it apart from a genuine error.
+   */
+  noChanges?: boolean;
   statistics?: {
     filesProcessed: number;
     filesChanged: number;
@@ -115,6 +143,18 @@ export interface RestoreResponse {
   filesSkipped: number;
   error?: string;
   conflicts?: string[]; // Files with unsaved changes
+  /**
+   * True when the snapshot could not be fully applied because part of its delta
+   * chain is missing. The restore still ran; `filesSkipped` and
+   * `refusedDeletions` say how much of it did.
+   *
+   * Without this, a partial restore was indistinguishable from a complete one:
+   * the response said `success: true` and the caller had no way to tell that
+   * some files were left at whatever the workspace already contained.
+   */
+  incomplete?: boolean;
+  /** Files left in place because an incomplete snapshot cannot prove they are extraneous. */
+  refusedDeletions?: number;
 }
 
 /**

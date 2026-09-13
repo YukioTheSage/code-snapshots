@@ -9,7 +9,7 @@ CodeLapse is the missing link between your IDE's autosave and Git's formal commi
 ## 🛠️ Two Powerful Tools, One Seamless Experience
 
 **🎯 VS Code Extension**: Visual, interactive snapshot management right in your editor
-**⚡ CLI Tool**: Automation-ready command-line interface for developers, AI agents, and CI/CD pipelines
+**⚡ CLI Tool**: Automation-ready command-line interface that works **standalone** or connected to VS Code
 
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/YukioTheSage.vscode-snapshots)](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
 [![Downloads](https://img.shields.io/visual-studio-marketplace/d/YukioTheSage.vscode-snapshots)](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
@@ -80,7 +80,7 @@ CodeLapse is the missing link between your IDE's autosave and Git's formal commi
 
 ### CLI Tool Installation
 
-> ⚠️ **Prerequisites**: The CLI requires the VS Code extension to be installed and running to function properly.
+> 💡 **Note**: The CLI can now run independently in **Standalone Mode**! The VS Code extension is optional but recommended for AI features and visual management.
 
 ```bash
 # Install globally via npm
@@ -148,8 +148,14 @@ codelapse status --json --silent
 
 - **📝 Branch Context**: Store Git branch/commit info with snapshots
 - **🔄 Git Commands**: Create commits directly from snapshots
-- **🛡️ Safety Net**: Auto-snapshot before Git operations
 - **🤝 Perfect Harmony**: Works alongside Git without conflicts
+
+> **Not implemented:** taking a snapshot *automatically* before `git pull`,
+> `git merge` or `git rebase` run from the VS Code Git UI. No such setting exists
+> (the previous `git.autoSnapshotBeforeOperation` did nothing and was removed),
+> and VS Code exposes no pre-operation hook. Take the snapshot explicitly with
+> Ctrl+Alt+S or `codelapse git auto-commit <operation>` before a destructive Git
+> operation. See the [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 </details>
 
@@ -273,11 +279,13 @@ fi
 
 ### 🚀 Key CLI Features
 
+- **🎯 Standalone Mode**: Run independently without the VS Code extension
 - **🔄 Complete Snapshot Management**: Create, list, restore, delete, and compare snapshots
-- **🔍 Semantic Search**: Natural language code search across all snapshots _(Experimental)_
-- **📊 Workspace Monitoring**: Real-time workspace state and file change tracking
-- **🤖 AI-Friendly**: JSON output, silent mode, and structured error handling
-- **⚡ Batch Operations**: Execute multiple commands from configuration files
+- **🤝 Git Integration**: Native commands to manage commits, branches, and compare with Git history
+- **⚙️ Configuration Management**: Unified settings shared with the extension
+- **🔍 Semantic Search**: Natural language code search across all snapshots _(Experimental, Requires Extension)_
+- **📊 Code Analysis & Chunking**: Evaluate code quality and extract context for AI agents
+- **🤖 AI-Friendly**: JSON output, silent mode, structured error handling, and batch operations
 - **🛡️ Safety Features**: Automatic backups, validation, and rollback capabilities
 - **📈 Real-time Events**: Stream workspace and snapshot events for reactive workflows
 
@@ -295,16 +303,19 @@ codelapse snapshot compare snap-1 snap-2 --files    # Compare snapshots
 
 # Semantic Search (Experimental)
 codelapse search query "authentication code" --limit 5
-codelapse search index --all                        # Build search index
+codelapse search index                              # Build search index
 
-# Workspace Management
-codelapse workspace info --json --silent            # Workspace information
+# Git Integration & Workspace
+codelapse git commit snapshot-123 -m "My commit"    # Create Git commit
+codelapse git compare snapshot-123                  # Compare vs Git
 codelapse workspace files --changed                 # Show changed files
+codelapse filter favorite                           # Show favorite snapshots
 
-# Utilities
-codelapse utility validate snapshot-123             # Validate snapshot
-codelapse utility export snap-123 --format zip     # Export snapshot
-codelapse batch commands.json --json --silent      # Batch operations
+# Configuration & Utilities
+codelapse config set maxSnapshots 100               # Set configuration
+codelapse chunk file src/main.ts                    # Create code chunks
+codelapse utility export snap-123 --format zip      # Export snapshot
+codelapse batch commands.json --json --silent       # Batch operations
 ```
 
 ### 🔗 Integration Examples
@@ -374,7 +385,9 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 | 📖 [User Guide](docs/USER_GUIDE.md)           | 🤝 [Git Integration](docs/GIT_COMPANION.md)    | 🔧 [Developer Guide](docs/DEVELOPER_GUIDE.md)           |
 | 🚀 [Quick Start](#-quick-start)               | ⚙️ [Configuration](#-configuration)            | 🗺️ [Roadmap](docs/ROADMAP.md)                           |
 | ⚡ [CLI Guide](cli/README.md)                  | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing) |
-| ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 🤖 [AI Agent Guidelines](cli/README.md#ai-agent-guidelines) | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
+| 🏗️ [Standalone Mode](STANDALONE_MODE.md)     | 🤖 [AI Guidelines](cli/README.md#ai-agent-guidelines) | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
+| ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 📦 [Core Package](shared/README.md)           | 💬 [Issues](https://github.com/YukioTheSage/code-snapshots/issues) |
+| 🛡️ [Security](SECURITY.md)       |                                                |                                                         |
 
 ---
 
@@ -395,7 +408,10 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 
 - `vscode-snapshots.git.addCommitInfo`: Store Git branch/commit with snapshots (default: `true`)
 - `vscode-snapshots.git.commitFromSnapshotEnabled`: Enable "Create Git Commit from Snapshot" command (default: `true`)
-- `vscode-snapshots.git.autoSnapshotBeforeOperation`: Auto-snapshot before Git pull/merge/rebase (default: `false`)
+
+> There is no setting for taking a snapshot *before* a Git operation. The previous
+> `git.autoSnapshotBeforeOperation` was removed because nothing ever invoked the
+> interception it configured. See the [open issues](https://github.com/YukioTheSage/code-snapshots/issues).
 
 </details>
 
@@ -414,9 +430,15 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 **Basic Settings:**
 
 - `vscode-snapshots.semanticSearch.enabled`: Enable semantic code search (default: `true`)
-- `vscode-snapshots.semanticSearch.chunkSize`: Maximum token size for code chunks (default: `200`)
-- `vscode-snapshots.semanticSearch.chunkOverlap`: Overlap between chunks in tokens (default: `50`)
+- `vscode-snapshots.semanticSearch.chunkSize`: Maximum number of **lines** per code chunk (default: `200`)
+- `vscode-snapshots.semanticSearch.chunkOverlap`: Overlap between adjacent chunks, in **lines** (default: `50`, clamped to `chunkSize - 5`)
 - `vscode-snapshots.semanticSearch.autoIndex`: Auto-index snapshots in background (default: `false`)
+- `vscode-snapshots.semanticSearch.embedding.model` / `.dimension`: Embedding model id and vector dimension (defaults: `gemini-embedding-2`, `3072`)
+
+> **There is no offline mode.** Semantic search needs *both* a Gemini API key
+> (embeddings) and a Pinecone API key (vector store). Indexing prompts for a
+> missing key and fails if you decline the prompt; it never falls back to a
+> local index.
 
 **🔑 API Key Management & Security:**
 
@@ -426,6 +448,14 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 - **Required Services**:
   - **Pinecone API Key**: For vector database storage and retrieval
   - **Gemini API Key**: For semantic code analysis and embeddings
+
+> ⚠️ **Not everything is in SecretStorage.** The API keys are. The CLI connection
+> file is not: on every activation the extension writes
+> `.vscode/codelapse-connection.json` inside your workspace, containing the IPC
+> auth token and socket path for the running session. It is listed in
+> `.gitignore`, so do not remove that entry, and treat any committed copy as a
+> leaked credential. The token is regenerated on every activation, so a stale
+> copy is inert.
 
 **🛡️ Security Best Practices:**
 
