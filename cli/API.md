@@ -1111,6 +1111,13 @@ Every entry is validated against the API allowlist before any command runs;
 a failing command is recorded as a failed entry and does not stop the batch.
 `success` is `true` only when every entry succeeded.
 
+The same contract applies one level down: a `batchSearch` or `batchAnalyze`
+payload carries `success: false` when every item in it failed, and a partial
+failure keeps `success: true` with the failed count in `failedQueries` /
+`failedOperations`. An entry that fails is reported with its reason — the
+payload's own `error`, the `message` of a structured error, or the counts when
+the payload carries neither.
+
 ```bash
 codelapse batch commands.json
 ```

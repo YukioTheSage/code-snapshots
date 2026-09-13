@@ -305,6 +305,12 @@ Each entry is validated against the API allowlist before anything runs, and
 `success` in the result reflects whether every command succeeded. A command
 that fails does not stop the rest of the batch.
 
+A batch **API** payload (`batchSearch`, `batchAnalyze`, sent through
+`codelapse api` or a batch file) reports `success: false` when **every** item
+failed; a partial failure keeps `success: true` and discloses the count in
+`failedQueries`/`failedOperations`. Branching on `success` alone is therefore
+safe: it is never `true` for a batch in which nothing worked.
+
 ## JSON Output Format
 
 All commands support `--json` flag for structured output suitable for automation and AI tools:

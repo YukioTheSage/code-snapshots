@@ -148,4 +148,39 @@ describe('batchExecute', () => {
       /top-level array|commands/i,
     );
   });
+
+  it('names the counts when an all-failed batch payload carries no message', async () => {
+    const client = clientDouble(async () => ({
+      success: false,
+      totalQueries: 2,
+      successfulQueries: 0,
+      failedQueries: 2,
+    }));
+
+    const results = await batchExecute(
+      [{ method: 'batchSearch' }, { method: 'batchAnalyze' }],
+      client,
+    );
+
+    // The handlers report an all-failed run as success: false with the counts
+    // as the only explanation; there is no 'error' field on that path.
+    // "command failed" told the user nothing.
+    expect(results.every((r) => !r.success)).toBe(true);
+    expect(results[0].error).toBe('2 of 2 item(s) failed');
+  });
+
+  it('unwraps a structured error instead of printing [object Object]', async () => {
+    const client = clientDouble(async () => ({
+      success: false,
+      error: {
+        message: 'operations array is required',
+        code: 'BATCH_ANALYZE_ERROR',
+      },
+    }));
+
+    const results = await batchExecute([{ method: 'batchAnalyze' }], client);
+
+    expect(results[0].success).toBe(false);
+    expect(results[0].error).toBe('operations array is required');
+  });
 });

@@ -294,7 +294,10 @@ describe('CliConnectorService - Batch Operations', () => {
         data,
       );
 
-      expect(result.success).toBe(true);
+      // Every analyzeChunk operation fails here (the snapshot lookup is not
+      // stubbed in this test), so the batch verdict is false. What this test
+      // pins is the chunking stride and the metadata, asserted below.
+      expect(result.success).toBe(false);
       expect(result.totalOperations).toBe(10);
       expect(result.results).toHaveLength(10);
       expect(result.metadata.parallel).toBe(true);
@@ -429,7 +432,9 @@ describe('CliConnectorService - Batch Operations', () => {
         'valid maxConcurrency 2 never returned',
       );
 
-      expect(result.success).toBe(true);
+      // As above: the operations themselves fail, so the batch is a failure.
+      // The assertions below are about the stride covering each entry once.
+      expect(result.success).toBe(false);
       expect(result.totalOperations).toBe(5);
       expect(result.metadata.maxConcurrency).toBe(2);
 
@@ -523,7 +528,9 @@ describe('CliConnectorService - Batch Operations', () => {
         'maxRetries 0 was rejected',
       );
 
-      expect(result.success).toBe(true);
+      // The single operation was rejected, so the batch is a failure; that
+      // maxRetries 0 was accepted is asserted by the call count below.
+      expect(result.success).toBe(false);
       expect(result.failedOperations).toBe(1);
       // The operation ran once and was never re-executed.
       expect(
@@ -668,7 +675,10 @@ describe('CliConnectorService - Batch Operations', () => {
         data,
       );
 
-      expect(result.success).toBe(true);
+      // The only recorded operation failed and the loop stopped, so the batch
+      // is a failure: "1 of 1 failed" must not read as success just because two
+      // were requested.
+      expect(result.success).toBe(false);
       expect(result.totalOperations).toBe(2);
       expect(result.results).toHaveLength(1); // Should stop after first failure
       expect(result.results[0].success).toBe(false);
@@ -721,7 +731,8 @@ describe('CliConnectorService - Batch Operations', () => {
         data,
       );
 
-      expect(result.success).toBe(true);
+      // The single operation timed out, so the batch is a failure.
+      expect(result.success).toBe(false);
       expect(result.results[0].success).toBe(false);
       expect(result.results[0].error.message).toContain('timeout');
     });
@@ -1045,7 +1056,8 @@ describe('CliConnectorService - Batch Operations', () => {
 
       const result = await (cliConnectorService as any).handleBatchSearch(data);
 
-      expect(result.success).toBe(true);
+      // The single query timed out, so the batch is a failure.
+      expect(result.success).toBe(false);
       expect(result.results[0].success).toBe(false);
       expect(result.results[0].error.message).toContain('timeout');
     });

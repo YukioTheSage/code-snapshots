@@ -47,6 +47,21 @@ const mockGetConfiguration = jest.fn().mockReturnValue({
   ],
 };
 
+/** The private batch handlers these tests exercise, reached through a cast. */
+interface BatchHandlers {
+  handleBatchAnalyze(data: unknown): Promise<Record<string, unknown>>;
+  handleBatchSearch(data: unknown): Promise<Record<string, unknown>>;
+}
+
+/**
+ * A typed way to reach the handlers the CLI dispatches to. The rest of this
+ * file casts the service to `any`; these tests do not, because the repo's lint
+ * warning budget sits exactly at its ceiling and an `any` here would break it.
+ */
+function batchHandlers(service: CliConnectorService): BatchHandlers {
+  return service as unknown as BatchHandlers;
+}
+
 describe('Batch Operations Integration Tests', () => {
   let cliConnectorService: CliConnectorService;
   let mockTerminalApiService: jest.Mocked<TerminalApiService>;
@@ -338,6 +353,52 @@ describe('Batch Operations Integration Tests', () => {
         mockSemanticSearchService.searchCodeEnhanced,
       ).toHaveBeenCalledTimes(4);
     });
+
+    it('reports an all-failed search batch as a failure', async () => {
+      mockSemanticSearchService.searchCodeEnhanced.mockRejectedValue(
+        new Error('vector store unreachable'),
+      );
+
+      const result = await batchHandlers(cliConnectorService).handleBatchSearch(
+        {
+          queries: [
+            { id: 'q1', query: 'authentication' },
+            { id: 'q2', query: 'pagination' },
+          ],
+          parallel: false,
+        },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.failedQueries).toBe(2);
+      expect(result.successfulQueries).toBe(0);
+    });
+
+    it('keeps a partially failed search batch a success', async () => {
+      mockSemanticSearchService.searchCodeEnhanced.mockImplementation(
+        async (options) => {
+          if (options.query === 'bad') {
+            throw new Error('query blew up');
+          }
+          return [];
+        },
+      );
+
+      const result = await batchHandlers(cliConnectorService).handleBatchSearch(
+        {
+          queries: [
+            { id: 'q1', query: 'good' },
+            { id: 'q2', query: 'bad' },
+          ],
+          parallel: false,
+        },
+      );
+
+      // One of two failed: the counts disclose it and the batch is not a lie.
+      expect(result.success).toBe(true);
+      expect(result.failedQueries).toBe(1);
+      expect(result.successfulQueries).toBe(1);
+    });
   });
 
   describe('Error Handling and Recovery', () => {
@@ -406,7 +467,10 @@ describe('Batch Operations Integration Tests', () => {
         continueOnError: true,
       });
 
-      expect(result.success).toBe(true);
+      // Every operation timed out, so the batch failed. This assertion used to
+      // pin success: true beside failedOperations: 5, which is the lie 09.1 is
+      // about.
+      expect(result.success).toBe(false);
       expect(result.failedOperations).toBe(5); // All should timeout
       result.results.forEach((r: any) => {
         expect(r.success).toBe(false);
@@ -449,6 +513,63 @@ describe('Batch Operations Integration Tests', () => {
       expect(result.success).toBe(true);
       expect(result.performance.memoryUsage).toBeDefined();
       expect(result.performance.memoryUsage.heapUsed).toBeGreaterThan(0);
+    });
+
+    it('reports an all-failed analysis batch as a failure', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockRejectedValue(
+        new Error('snapshot store offline'),
+      );
+
+      const operations = Array.from({ length: 3 }, (_, i) => ({
+        id: 'op' + i,
+        type: 'analyzeFile',
+        data: { filePath: 'file' + i + '.ts', snapshotId: 'snap1' },
+      }));
+
+      const result = await batchHandlers(
+        cliConnectorService,
+      ).handleBatchAnalyze({
+        operations,
+        parallel: false,
+      });
+
+      // Nothing succeeded, so the envelope must not claim success: the CLI
+      // branches on exactly this field.
+      expect(result.success).toBe(false);
+      expect(result.failedOperations).toBe(3);
+      expect(result.successfulOperations).toBe(0);
+    });
+
+    it('keeps a partially failed batch a success and discloses the count', async () => {
+      mockTerminalApiService.getSnapshotFileContent.mockImplementation(
+        (_snapshotId: string, filePath: string) =>
+          filePath === 'bad.ts'
+            ? Promise.reject(new Error('unreadable'))
+            : Promise.resolve('content'),
+      );
+
+      const result = await batchHandlers(
+        cliConnectorService,
+      ).handleBatchAnalyze({
+        operations: [
+          {
+            id: 'ok',
+            type: 'analyzeFile',
+            data: { filePath: 'good.ts', snapshotId: 'snap1' },
+          },
+          {
+            id: 'bad',
+            type: 'analyzeFile',
+            data: { filePath: 'bad.ts', snapshotId: 'snap1' },
+          },
+        ],
+        parallel: false,
+      });
+
+      // One of two failed. The run is not a lie, and the count says so.
+      expect(result.success).toBe(true);
+      expect(result.failedOperations).toBe(1);
+      expect(result.successfulOperations).toBe(1);
     });
   });
 

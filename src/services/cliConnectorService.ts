@@ -2840,7 +2840,12 @@ export class CliConnectorService implements vscode.Disposable {
       const failedOperationsCount = results.filter((r) => !r.success).length;
 
       return {
-        success: true,
+        // A batch in which every item failed is a failure. The counts already
+        // disclose a partial failure, so a partial batch stays true -- and an
+        // empty batch never reaches here (it returns above).
+        success: !(
+          results.length > 0 && failedOperationsCount === results.length
+        ),
         totalOperations: operations.length,
         successfulOperations,
         failedOperations: failedOperationsCount,
@@ -3180,7 +3185,11 @@ export class CliConnectorService implements vscode.Disposable {
       const failedQueriesCount = results.filter((r) => !r.success).length;
 
       return {
-        success: true,
+        // Same contract as handleBatchAnalyze. The verdict comes from the
+        // results that were actually recorded, not from the requested count:
+        // with continueOnError false the loop stops early, and "1 of 1 failed"
+        // must not read as success just because 3 were requested.
+        success: !(results.length > 0 && failedQueriesCount === results.length),
         totalQueries: processedQueries.length,
         originalQueryCount: queries.length,
         deduplicatedCount: queries.length - processedQueries.length,
