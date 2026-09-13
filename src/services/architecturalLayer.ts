@@ -27,13 +27,20 @@ import { ArchitecturalLayer } from '../types/enhancedChunking';
  *   3. otherwise "unknown".
  */
 
+/**
+ * The split in `tokenize` breaks on `_`, so the brief's `__tests__` and
+ * `__mocks__` samples arrive as the tokens `tests` and `mocks`; `mocks` is
+ * listed instead of the `__mocks__` literal, which could never fire. The
+ * `__tests__` literal is kept because the brief names it and is inert -
+ * `tests` already covers every path it would have matched.
+ */
 const TEST_TOKENS = new Set([
   'test',
   'tests',
   'spec',
   'specs',
   '__tests__',
-  '__mocks__',
+  'mocks',
   'e2e',
   'fixtures',
 ]);

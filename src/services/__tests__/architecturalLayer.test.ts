@@ -24,6 +24,15 @@ describe('classifyArchitecturalLayer', () => {
     // Segment aware, not substring aware: "apiary" is not an "api".
     ['src/apiary/hive.ts', 'unknown'],
     ['README', 'unknown'],
+    // The tokenizer splits on `_`, so `__mocks__` arrives as the token
+    // `mocks`; without that token a mock directory was not a test directory.
+    ['src/__mocks__/api.ts', 'test'],
+    ['src/services/__mocks__/api.ts', 'test'],
+    // The segment-aware set's `/domain/` -> "business" mapping: the token wins
+    // over the layer the word names.
+    ['src/domain/order.ts', 'business'],
+    // The tokenizer splits on `-`, so a hyphenated `api` is a whole token.
+    ['src/api-client.ts', 'presentation'],
   ])('classifies %s as %s', (filePath, expected) => {
     expect(classifyArchitecturalLayer(filePath)).toBe(expected);
   });
