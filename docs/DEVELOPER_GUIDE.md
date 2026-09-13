@@ -72,8 +72,10 @@ npm run lint:fix
 # Lint budget - the warning ceiling may only fall, never rise
 npm run lint:budget
 
-# Formatting
-npm run format
+# Formatting (TypeScript only; markdown is not checked)
+npm run format        # rewrite files in place
+npm run format:check  # CI check, fails on any diff
+cd cli && npm run format:check && cd ..
 
 # Package extension
 npm run package
