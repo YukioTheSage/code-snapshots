@@ -894,23 +894,30 @@ export class QueryProcessor {
     // Filter by language if specified. The pattern is matched against the
     // result file path, its basename and each of its path segments
     // (`filePathMatchesPattern` in `../utils/pathMatching`), which is what makes
-    // the bare "*.ts" form select every TypeScript file in any directory.
+    // the bare "*.ts" form select every TypeScript file in any directory. A
+    // language with no known extension gets no include filter at all: the old
+    // '*' fallback produced '*.*', which reads as "everything" while dropping
+    // every dotless path (Makefile, Dockerfile, LICENSE).
     if (context.language) {
-      filters.includeFilePatterns = [
-        `*.${this.getFileExtensionForLanguage(context.language)}`,
-      ];
+      const extension = this.getFileExtensionForLanguage(context.language);
+      if (extension) {
+        filters.includeFilePatterns = [`*.${extension}`];
+      }
     }
 
-    // Exclude test files for implementation searches (unless specifically looking for tests)
+    // Exclude test files for implementation searches (unless specifically
+    // looking for tests). The patterns name tests rather than test substrings:
+    // under the segment rule a "*test*" also matched src/latest/index.ts and
+    // src/contest/entry.ts. The brace-expanded directory form stays a single
+    // segment, which is the shape that rule can match.
     if (
       intent.primary === 'find_implementation' &&
       !intent.secondary.includes('testing')
     ) {
       filters.excludeFilePatterns = [
-        '*test*',
-        '*spec*',
         '*.test.*',
         '*.spec.*',
+        '{test,tests,__tests__,spec,__spec__}',
       ];
     }
 
@@ -1068,9 +1075,9 @@ export class QueryProcessor {
   }
 
   /**
-   * Get file extension for programming language
+   * Get file extension for programming language, if we map that language.
    */
-  private getFileExtensionForLanguage(language: string): string {
+  private getFileExtensionForLanguage(language: string): string | undefined {
     const extensions: Record<string, string> = {
       javascript: 'js',
       typescript: 'ts',
@@ -1084,7 +1091,7 @@ export class QueryProcessor {
       ruby: 'rb',
     };
 
-    return extensions[language.toLowerCase()] || '*';
+    return extensions[language.toLowerCase()];
   }
 
   /**

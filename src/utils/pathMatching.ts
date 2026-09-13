@@ -55,11 +55,12 @@ export function pathMatchesPattern(
  *
  * The pattern is matched against the full path, and then against every single
  * path segment. Both shapes a caller actually writes need this: a pattern such
- * as "src/**\/*.ts" matches the whole path, while "*.ts" and "*test*" - the two
- * forms `QueryProcessor.determineFilters` produces - contain a "*" that cannot
- * cross a separator, so a bare minimatch of "src/services/userService.ts"
- * against "*.ts" is false. Segment matching also catches a directory name,
- * which is what the exclude rule needs: "*test*" must drop
+ * as "src/**\/*.ts" matches the whole path, while "*.ts" and the
+ * brace-expanded "{test,__tests__}" - the shapes
+ * `QueryProcessor.determineFilters` produces - cannot: a "*" does not cross a
+ * separator, so a bare minimatch of "src/services/userService.ts" against
+ * "*.ts" is false. Segment matching also catches a directory name, which is
+ * what the exclude rule needs: "{test,__tests__}" must drop
  * "…/__tests__/helpers.ts", not only "…/user.test.ts".
  */
 export function filePathMatchesPattern(
