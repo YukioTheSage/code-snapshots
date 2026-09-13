@@ -214,8 +214,9 @@ describe('applySnapshotRestore store-deletion guard', () => {
       expect(result.deleted).toEqual(['extra.ts']);
     } else {
       // A case-sensitive filesystem: this is a different directory, not the
-      // store, so it stays ordinary workspace content.
-      expect(result.deleted).toEqual([caseVariantRel, 'extra.ts']);
+      // store, so it stays ordinary workspace content and is deleted like any
+      // other file, in the order the workspace listed it.
+      expect(result.deleted).toEqual(['extra.ts', caseVariantRel]);
     }
   });
 });
