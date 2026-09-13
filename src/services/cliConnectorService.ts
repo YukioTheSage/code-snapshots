@@ -498,12 +498,22 @@ export class CliConnectorService implements vscode.Disposable {
         case 'getSnapshot':
           result = await this.terminalApiService.getSnapshot(data.id);
           break;
-        case 'restoreSnapshot':
-          result = await this.terminalApiService.restoreSnapshot(
-            data.id,
-            data.options,
-          );
+        case 'restoreSnapshot': {
+          // The CLI sends `{ id, options }`, but an older CLI flattened its
+          // options to the top level of `data`. Reading only `data.options`
+          // silently dropped --backup/--files for those callers, so both shapes
+          // are accepted.
+          const options = data.options ?? data;
+          // Strict boolean, mirroring `deleteSnapshot` below: this flag
+          // disarms the unsaved-changes guard on a destructive IPC path, so
+          // only a real `true` may do it -- "true", 1 and {} fail closed and
+          // leave the guard armed.
+          result = await this.terminalApiService.restoreSnapshot(data.id, {
+            ...options,
+            skipConfirm: options?.skipConfirm === true,
+          });
           break;
+        }
         case 'deleteSnapshot':
           // The last place `skipConfirm` can be lost on its way from the CLI
           // to the dialog: forwarding only `data.id` left

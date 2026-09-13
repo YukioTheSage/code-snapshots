@@ -20,7 +20,7 @@ Before diving into specific issues, run these quick checks:
 # Mac: Cmd+Alt+D
 
 # CLI diagnostics
-codelapse status --verbose --json --silent
+codelapse status --verbose --json
 codelapse --version
 ```
 
@@ -314,10 +314,10 @@ codelapse --version
    codelapse status --verbose
    
    # Extended timeout test
-   codelapse status --timeout 15000 --json --silent
+   codelapse status --timeout 15000 --json
    
    # Check workspace info
-   codelapse workspace info --json --silent
+   codelapse workspace info --json
    ```
 
 3. **Port/Socket Issues**:
@@ -339,7 +339,7 @@ codelapse --version
 1. **Increase Timeout**:
    ```bash
    # Use longer timeout for slow operations
-   codelapse snapshot create "Test" --timeout 30000 --json --silent
+   codelapse snapshot create "Test" --timeout 30000 --json
    
    # Set global timeout
    codelapse --timeout 15000 status
@@ -353,23 +353,26 @@ codelapse --version
 3. **Large Workspace Handling**:
    ```bash
    # Use selective operations for large workspaces
-   codelapse snapshot create "Selective" --files "src/,tests/" --json --silent
+   codelapse snapshot create "Selective" --files "src/,tests/" --json
    
    # Limit result sets
-   codelapse snapshot list --limit 10 --json --silent
+   codelapse snapshot list --limit 10 --json
    ```
 
 #### Problem: JSON parsing errors in automation
-**Symptoms**: Scripts fail with "Invalid JSON" errors
+**Symptoms**: Scripts fail with "Invalid JSON" errors, usually because the captured output is empty
 
 **Solutions**:
 1. **Proper Flag Usage**:
+   The empty output comes from the flags themselves: `--silent` suppresses the
+   payload as well, so combining it with `--json` prints nothing for most
+   commands and `jq` then fails on the empty input.
    ```bash
-   # Always use --json --silent for automation
-   codelapse snapshot list --json --silent
+   # Use --json alone for automation
+   codelapse snapshot list --json
    
    # Validate JSON before parsing
-   RESULT=$(codelapse status --json --silent)
+   RESULT=$(codelapse status --json)
    if echo "$RESULT" | jq empty 2>/dev/null; then
      echo "Valid JSON"
    else
@@ -380,7 +383,7 @@ codelapse --version
 2. **Error Handling**:
    ```bash
    # Robust error handling
-   RESULT=$(codelapse snapshot create "Test" --json --silent 2>/dev/null || echo '{"success":false,"error":"Command failed"}')
+   RESULT=$(codelapse snapshot create "Test" --json 2>/dev/null || echo '{"success":false,"error":"Command failed"}')
    SUCCESS=$(echo "$RESULT" | jq -r '.success')
    
    if [ "$SUCCESS" = "true" ]; then
@@ -420,7 +423,7 @@ codelapse --version
 3. **Key Validation and Testing**:
    ```bash
    # Test API connectivity with caution (uses real API calls)
-   codelapse search index --json --silent
+   codelapse search index --json
    ```
 
 4. **Alternative: Disable Semantic Search**:
@@ -440,10 +443,10 @@ codelapse --version
 1. **Build Search Index (Security Warning)**:
    ```bash
    # CLI: Index all snapshots (CAUTION: sends code to external services)
-   codelapse search index --all --json --silent
+   codelapse search index --all --json
    
    # CLI: Index specific snapshots only (more secure approach)
-   codelapse search index --snapshots "snapshot-123,snapshot-124" --json --silent
+   codelapse search index --snapshots "snapshot-123,snapshot-124" --json
    ```
    
    - **VS Code**: Use "Snapshots: Index All Snapshots for Search" command
@@ -621,7 +624,7 @@ If security concerns outweigh benefits, completely disable semantic search:
 1. **Integrity Check**:
    ```bash
    # CLI integrity validation
-   codelapse utility validate snapshot-123 --json --silent
+   codelapse utility validate snapshot-123 --json
    ```
 
 2. **Manual Verification**:
@@ -732,7 +735,9 @@ setting that makes it do so.
    ```
 
 2. **Headless Operation**:
-   - Use `--json --silent` flags consistently
+   - Use `--json` alone: `--silent` suppresses the JSON payload too, so
+     combining the two prints nothing for most commands. Reach for `--silent`
+     only when the exit code is the whole result
    - Avoid interactive prompts
    - Handle timeouts appropriately
 
@@ -788,25 +793,25 @@ setting that makes it do so.
 codelapse status --verbose
 
 # Extended diagnostics
-codelapse status --timeout 30000 --json --silent
+codelapse status --timeout 30000 --json
 
 # Workspace verification
-codelapse workspace info --json --silent
+codelapse workspace info --json
 
 # API method testing
-codelapse api getSnapshots --data '{"limit": 1}' --json --silent
+codelapse api getSnapshots --data '{"limit": 1}' --json
 ```
 
 #### Performance Testing
 ```bash
 # Measure command execution time
-time codelapse snapshot list --json --silent
+time codelapse snapshot list --json
 
 # Test with different timeouts
-codelapse snapshot create "Performance test" --timeout 10000 --json --silent
+codelapse snapshot create "Performance test" --timeout 10000 --json
 
 # Batch operation testing
-echo '[{"method": "getSnapshots", "data": {"limit": 5}}]' | codelapse batch --json --silent
+echo '[{"method": "getSnapshots", "data": {"limit": 5}}]' | codelapse batch --json
 ```
 
 ---
@@ -856,14 +861,14 @@ npm --version
 ```bash
 # CLI version and status
 codelapse --version
-codelapse status --verbose --json --silent
+codelapse status --verbose --json
 
 # Environment details
 echo $PATH  # Unix/Mac
 echo %PATH%  # Windows
 
 # Workspace information
-codelapse workspace info --json --silent
+codelapse workspace info --json
 ```
 
 ---

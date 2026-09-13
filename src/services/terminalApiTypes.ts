@@ -131,6 +131,19 @@ export interface RestoreOptions {
   createBackupSnapshot?: boolean;
   silent?: boolean;
   selectedFiles?: string[]; // Restore only specific files
+  /**
+   * The non-interactive caller's answer to the unsaved-changes guard: when a
+   * restore would overwrite a dirty editor buffer, `true` lets it proceed and
+   * anything else (including the flag being absent) makes it refuse and report
+   * the conflicts instead. `restoreSnapshot` never prompts a modal, because a
+   * headless caller has no way to answer one.
+   *
+   * It arrives over IPC from the CLI's `-y/--yes`, and from `snapshot delete`'s
+   * sibling plumbing, which it does not control -- so it is coerced to a strict
+   * boolean at the socket, where a malformed truthy value could otherwise
+   * disarm a data-loss guard.
+   */
+  skipConfirm?: boolean;
 }
 
 /**

@@ -103,7 +103,7 @@ npm install -g codelapse-cli
 npx codelapse-cli --help
 
 # Verify installation and connection
-codelapse status --json --silent
+codelapse status --json
 ```
 
 ### First steps
@@ -220,18 +220,18 @@ codelapse snapshot show snapshot-123 --files --content src/auth.ts
 **Safety-First AI Operations**
 ```bash
 # 1. ALWAYS create backup before AI operations
-BACKUP_ID=$(codelapse snapshot create "AI: Pre-operation backup" --tags "backup,ai" --json | tail -n 1 | jq -r '.snapshot.id')
+BACKUP_ID=$(codelapse snapshot create "AI: Pre-operation backup" --tags "backup,ai" --json | jq -r '.snapshot.id')
 
 # 2. Execute AI operations with error handling
-if codelapse snapshot restore snapshot-123 --backup --json --silent; then
+if codelapse snapshot restore snapshot-123 --backup --silent; then
   echo "✅ Operation successful"
 else
   echo "❌ Operation failed, restoring backup"
-  codelapse snapshot restore "$BACKUP_ID" --json --silent
+  codelapse snapshot restore "$BACKUP_ID" --silent
 fi
 
 # 3. Document completed work
-codelapse snapshot create "AI: Completed refactoring task" --tags "complete,ai" --favorite --json --silent
+codelapse snapshot create "AI: Completed refactoring task" --tags "complete,ai" --favorite --silent
 ```
 
 **Batch Processing & Real-time Monitoring**
@@ -245,7 +245,7 @@ cat > ai-workflow.json << EOF
 ]
 EOF
 
-codelapse batch ai-workflow.json --json --silent
+codelapse batch ai-workflow.json --json
 
 # Monitor workspace changes for reactive workflows
 codelapse watch --events snapshots,workspace --json | while read -r event; do
@@ -263,28 +263,28 @@ done
 ```bash
 # Pre-deployment snapshot with Git context
 codelapse snapshot create "Pre-deployment: $(git rev-parse --short HEAD)" \
-  --tags "deployment,$(git branch --show-current)" --json --silent
+  --tags "deployment,$(git branch --show-current)" --silent
 
 # Validate the workspace the CLI sees before deployment
 codelapse workspace info --json
 
 # Create release snapshot with version tagging
 codelapse snapshot create "Release v$(cat package.json | jq -r .version)" \
-  --tags "release,production" --favorite --json --silent
+  --tags "release,production" --favorite --silent
 ```
 
 **Automated Testing Workflows**
 ```bash
 # Create test checkpoint
-codelapse snapshot create "Before test run" --tags "test,checkpoint" --json --silent
+codelapse snapshot create "Before test run" --tags "test,checkpoint" --silent
 
 # Run tests and capture results
 if npm test; then
-  codelapse snapshot create "Tests passed: $(date)" --tags "test,success" --json --silent
+  codelapse snapshot create "Tests passed: $(date)" --tags "test,success" --silent
 else
-  codelapse snapshot create "Tests failed: $(date)" --tags "test,failure" --json --silent
+  codelapse snapshot create "Tests failed: $(date)" --tags "test,failure" --silent
   # Optionally restore to last known good state
-  codelapse snapshot restore last-good-snapshot --backup --json --silent
+  codelapse snapshot restore last-good-snapshot --backup --silent
 fi
 ```
 
@@ -306,7 +306,7 @@ fi
 
 ```bash
 # Connection & Status
-codelapse status --json --silent                    # Check extension connection
+codelapse status --silent                           # Check extension connection
 
 # Snapshot Operations
 codelapse snapshot create "My changes" --tags "wip" # Create snapshot
@@ -328,7 +328,7 @@ codelapse filter favorites                          # List favorite snapshots
 codelapse config set maxSnapshots 100               # Set configuration
 codelapse chunk file src/main.ts                    # Create code chunks
 codelapse utility export snap-123 --format zip      # Export snapshot
-codelapse batch commands.json --json --silent       # Batch operations
+codelapse batch commands.json --json                # Batch operations
 ```
 
 ### 🔗 Integration Examples
@@ -353,13 +353,13 @@ jobs:
         run: npm install -g codelapse-cli
       
       - name: Create pre-test snapshot
-        run: codelapse snapshot create "CI: Pre-test snapshot" --tags "ci,test" --json --silent
+        run: codelapse snapshot create "CI: Pre-test snapshot" --tags "ci,test" --silent
       
       - name: Run tests
         run: npm test
       
       - name: Create post-test snapshot
-        run: codelapse snapshot create "CI: Post-test snapshot" --tags "ci,success" --json --silent
+        run: codelapse snapshot create "CI: Post-test snapshot" --tags "ci,success" --silent
 ```
 
 </details>
@@ -378,13 +378,13 @@ COPY . /app
 WORKDIR /app
 
 # Create deployment snapshot
-RUN codelapse snapshot create "Docker: Pre-build snapshot" --tags "docker,build" --json --silent || true
+RUN codelapse snapshot create "Docker: Pre-build snapshot" --tags "docker,build" --silent || true
 
 # Build application
 RUN npm install && npm run build
 
 # Create post-build snapshot
-RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,complete" --json --silent || true
+RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,complete" --silent || true
 ```
 
 </details>

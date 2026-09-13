@@ -36,7 +36,7 @@ This section covers common issues related to [specific area/feature] and their s
 3. **Verify resolution**: How to confirm the fix worked
    ```bash
    # Verification command
-   codelapse status --json --silent
+   codelapse status --json
    ```
 
 **Expected Result**: What should happen after applying the fix
@@ -116,7 +116,7 @@ codelapse --version
 codelapse status --verbose
 
 # Recent activity
-codelapse snapshot list --limit 5 --json --silent
+codelapse snapshot list --limit 5 --json
 
 # Configuration check
 codelapse config validate

@@ -982,7 +982,9 @@ export class SnapshotManager {
     }
 
     const after = this.storage.measureSnapshotStore();
-    console.log(
+    // A diagnostic, not a failure: stdout is the CLI's machine-readable
+    // channel for --json payloads, so the trim report goes to stderr.
+    console.error(
       'Retention: trimmed ' +
         trimmed.length +
         ' snapshot(s); the store now holds ' +

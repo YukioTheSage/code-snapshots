@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AutoSnapshotRule, ConfigManager } from 'codelapse-core';
 import { minimatch } from 'minimatch';
+import * as path from 'path';
 import { SnapshotManager, Snapshot } from '../snapshotManager';
 import { resolveSetting } from '../configSource';
 import { DiagnosticsService } from './diagnosticsService';
@@ -530,7 +531,69 @@ export class TerminalApiService implements TerminalApiInterface {
         };
       }
 
-      // Create backup snapshot if requested
+      // Guard the unsaved work this restore would overwrite. This scans every
+      // visible editor rather than only the active one, and only counts files
+      // the restore actually touches: a dirty buffer elsewhere is not at risk,
+      // and warning about it would train callers to ignore the refusal.
+      //
+      // Runs before the optional backup below: a backup exists to protect the
+      // restore, so a restore that is refused must not leave one behind.
+      const workspaceRoot = this.snapshotManager.getWorkspaceRoot();
+      const affectedPaths = new Set<string>(
+        options.selectedFiles ?? Object.keys(snapshot.files),
+      );
+      const conflicts: string[] = [];
+      if (workspaceRoot) {
+        for (const editor of vscode.window.visibleTextEditors) {
+          if (!editor.document.isDirty) {
+            continue;
+          }
+          // Same workspace-relative derivation as the command's guard: the
+          // snapshot keys and `selectedFiles` are relative to the workspace
+          // root, so an absolute path would never match.
+          const relativePath = path.relative(
+            workspaceRoot,
+            editor.document.uri.fsPath,
+          );
+          if (affectedPaths.has(relativePath)) {
+            conflicts.push(relativePath);
+          }
+        }
+      }
+
+      // The refusal is the answer. This path is driven over IPC, where a modal
+      // would hang a headless caller, so `-y/--yes` (skipConfirm) is the only
+      // thing that may accept the loss; anything else fails closed.
+      //
+      // Only an explicit boolean `skipConfirm` arms the guard: it is the CLI
+      // restore contract's answer to this question, and the IPC dispatcher
+      // always sends a coerced one. Internal callers -- the public API and
+      // `createGitCommitFromSnapshot`'s `{ silent: true }` -- are not part of
+      // that contract and never asked, so they keep the previous behaviour of
+      // restoring and reporting the conflicts.
+      if (
+        typeof options.skipConfirm === 'boolean' &&
+        options.skipConfirm !== true &&
+        conflicts.length > 0
+      ) {
+        log(
+          `TerminalApiService: Refusing to restore snapshot ${id}: unsaved changes in ${conflicts.join(
+            ', ',
+          )}`,
+        );
+        return {
+          success: false,
+          filesRestored: 0,
+          filesSkipped: 0,
+          conflicts,
+          error: `Snapshot restore would discard unsaved changes in: ${conflicts.join(
+            ', ',
+          )}. Save them, or pass -y/--yes to restore anyway.`,
+        };
+      }
+
+      // Create backup snapshot if requested. After the guard, so a refusal
+      // leaves no backup behind: no restore, no backup.
       let backupSnapshotId: string | undefined;
       if (options.createBackupSnapshot) {
         const backupResponse = await this.takeSnapshot({
@@ -541,12 +604,6 @@ export class TerminalApiService implements TerminalApiInterface {
         if (backupResponse.success && backupResponse.snapshot) {
           backupSnapshotId = backupResponse.snapshot.id;
         }
-      }
-
-      // Check for unsaved changes
-      const conflicts: string[] = [];
-      if (vscode.window.activeTextEditor?.document.isDirty) {
-        conflicts.push(vscode.window.activeTextEditor.document.fileName);
       }
 
       // Perform the restore

@@ -116,7 +116,10 @@ export class SnapshotStorage {
     currentIndex: number;
   } | null> {
     if (!this.snapshotDirectory) {
-      console.log('Cannot load snapshots, storage directory not initialized.');
+      // stdout is the CLI's JSON data channel; diagnostics belong on stderr.
+      console.error(
+        'Cannot load snapshots, storage directory not initialized.',
+      );
       return { snapshots: [], currentIndex: -1 };
     }
 
@@ -132,7 +135,11 @@ export class SnapshotStorage {
           'snapshot index',
         );
       } else {
-        console.log('Snapshot index file not found. Starting with empty state.');
+        // Not an error, but still a diagnostic: stdout carries only the
+        // machine-readable payload, and this notice fires on every fresh store.
+        console.error(
+          'Snapshot index file not found. Starting with empty state.',
+        );
         return { snapshots: [], currentIndex: -1 };
       }
     } catch (error) {

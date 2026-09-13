@@ -24,19 +24,17 @@ itself. The bash examples need `jq`; the PowerShell examples do not.
 
 ## The contract
 
-- **Output flags.** `--json` prints one JSON object on stdout, and it is the only
-  JSON there - but it is not always the _first_ line. In standalone mode, a
-  workspace whose snapshot store does not exist yet gets a plain-text notice on
-  stdout (`Snapshot index file not found. Starting with empty state.`) ahead of
-  the payload, so select the JSON line instead of assuming line 1. The notice
-  stops once a snapshot-writing command has created the store; `status` does not
-  create it, so running `status` first is not a workaround. `--silent`
-  suppresses banners, spinners **and the JSON envelope** for every command
-  routed through the shared result printer (`snapshot list`, `snapshot create`,
-  `config get`, ...). The suppression is not absolute: `status` and
-  `snapshot show` write their JSON directly on their success paths and `api`
-  always does, `watch` and `diagnostics logs --follow` stream to stdout, and
-  the fatal handlers print their JSON error even under `--silent`.
+- **Output flags.** `--json` prints one JSON object on stdout and nothing
+  else: stdout carries only the payload. Diagnostics - including the storage
+  notices standalone mode writes while the snapshot store does not exist yet,
+  such as `Snapshot index file not found. Starting with empty state.` - go to
+  stderr, so a parser reads the payload directly instead of picking a line out
+  of prose. `--silent` suppresses banners, spinners **and the JSON envelope**
+  for every command routed through the shared result printer (`snapshot list`,
+  `snapshot create`, `config get`, ...). The suppression is not absolute:
+  `status` and `snapshot show` write their JSON directly on their success paths
+  and `api` always does, `watch` and `diagnostics logs --follow` stream to
+  stdout, and the fatal handlers print their JSON error even under `--silent`.
   **Use `--json` alone.**
 - **Exit status.** The process exits 0 when the payload's top-level `success` is
   `true` and 1 when it is `false` - for every command, including `api` and
@@ -65,10 +63,11 @@ itself. The bash examples need `jq`; the PowerShell examples do not.
   `--help` documents can skip one: `snapshot delete` skips its confirmation with
   `-y, --yes` (there `--force` means "delete even when a later snapshot cannot be
   rebuilt from it"), and `files restore` uses `-f, --force`. Not every command has
-  such a flag, so never assume `--silent` or `--force` answers one. One declared
-  flag does nothing: `snapshot restore` accepts `-y, --yes` but never forwards
-  it, and restore never prompts on the CLI in either mode, so there is no
-  confirmation for the flag to skip.
+  such a flag, so never assume `--silent` or `--force` answers one. The
+  `-y, --yes` on `snapshot restore` is for a different purpose: over IPC it
+  accepts discarding unsaved editor changes - without it the extension refuses
+  a restore that would overwrite them and names the files. Standalone mode has
+  no editor state to protect, so the flag is a no-op there.
 - **Snapshot ids.** Any unambiguous prefix or fragment resolves to a full id, so
   `snapshot show 1789120661991` works for `snapshot-1789120661991-fe3a3996`; an
   ambiguous abbreviation is refused with the list of candidates. Discover ids
@@ -129,11 +128,10 @@ codelapse status --json || exit 1
 # 2. Read the workspace before you touch it.
 codelapse workspace info --json || exit 1
 
-# 3. Create the backup and capture its id. --json prints one JSON object, but a
-#    plain-text storage notice can precede it on a first run, so keep only the
-#    line that parses as JSON (jq's fromjson? ignores the other lines).
+# 3. Create the backup and capture its id. --json prints the payload on stdout,
+#    so jq reads it directly.
 backup_id=$(codelapse snapshot create "Backup before refactor" --tags backup --json \
-  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+  | jq -r '.snapshot.id // empty')
 [ -n "$backup_id" ] || exit 1
 
 # 4. Make the changes (your edits here).
@@ -153,10 +151,10 @@ if ($LASTEXITCODE -ne 0) { throw 'CodeLapse is not reachable' }
 codelapse workspace info --json | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'workspace info failed' }
 
-# 3. Create the backup and capture its id. A plain-text storage notice can
-#    precede the JSON on a first run, so keep the line that starts with '{'.
+# 3. Create the backup and capture its id. --json prints the payload on stdout,
+#    so it converts directly.
 $backup = codelapse snapshot create 'Backup before refactor' --tags backup --json |
-  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+  ConvertFrom-Json
 if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
 $backupId = $backup.snapshot.id
 
@@ -181,7 +179,7 @@ live source of truth when this table and the installed binary disagree.
 | `codelapse snapshot create <description> [-t, --tags a,b] [-n, --notes t] [-r, --task-ref t] [-f, --favorite] [-s, --selective --files a,b]` | `snapshot.id`                                                                                                      | standalone             |
 | `codelapse snapshot list [-t, --tags a,b] [-f, --favorites] [-l, --limit n] [--since <date>]`                                                | `snapshots[]`, `total`                                                                                             | standalone             |
 | `codelapse snapshot show <id> [--files] [--content <path>]`                                                                                  | one snapshot, or file content                                                                                      | standalone             |
-| `codelapse snapshot restore <id> [--backup] [--files a,b] [-y, --yes]`                                                                       | restore result; `-y, --yes` is declared but never forwarded, and restore does not prompt, so the flag does nothing | standalone             |
+| `codelapse snapshot restore <id> [--backup] [--files a,b] [-y, --yes]`                                                                       | restore result; `-y, --yes` accepts discarding unsaved editor changes over IPC; else refused, naming the file list | standalone             |
 | `codelapse snapshot compare <id1> <id2> [--files]`                                                                                           | `comparison`, `summary`                                                                                            | standalone             |
 | `codelapse snapshot delete <id> [-y, --yes] [--force]`                                                                                       | deletion result                                                                                                    | standalone             |
 | `codelapse workspace info`                                                                                                                   | `workspace.root`, `config` (standalone)                                                                            | standalone             |
@@ -225,7 +223,7 @@ verify_changes() { return 0; }
 codelapse status --json > /dev/null
 
 backup_id=$(codelapse snapshot create "Backup before modifying $target" --tags backup,file-mod --json \
-  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+  | jq -r '.snapshot.id // empty')
 [ -n "$backup_id" ] || { echo 'no snapshot id returned' >&2; exit 1; }
 
 # ... edit $target here ...
@@ -249,7 +247,7 @@ codelapse status --json | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'CodeLapse is not reachable' }
 
 $backup = codelapse snapshot create "Backup before modifying $target" --tags backup,file-mod --json |
-  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+  ConvertFrom-Json
 if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
 $backupId = $backup.snapshot.id
 
@@ -277,7 +275,7 @@ files='src/auth.ts src/api.ts src/service.ts'
 verify_changes() { return 0; }
 
 backup_id=$(codelapse snapshot create "Backup before multi-file refactor" --tags backup,refactor --json \
-  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+  | jq -r '.snapshot.id // empty')
 [ -n "$backup_id" ] || exit 1
 
 for file in $files; do
@@ -301,7 +299,7 @@ $files = @('src/auth.ts', 'src/api.ts', 'src/service.ts')
 function Test-Changes { param($File) $true }
 
 $backup = codelapse snapshot create 'Backup before multi-file refactor' --tags backup,refactor --json |
-  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+  ConvertFrom-Json
 if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
 $backupId = $backup.snapshot.id
 
@@ -339,18 +337,18 @@ cat > commands.json <<'JSON'
 JSON
 
 backup_id=$(codelapse snapshot create "BATCH: backup before batch" --tags backup,batch --json \
-  | jq -Rr 'fromjson? | objects | .snapshot.id // empty' | tail -n 1)
+  | jq -r '.snapshot.id // empty')
 [ -n "$backup_id" ] || exit 1
 
 result=$(codelapse batch commands.json --json)
 batch_status=$?
-failed=$(printf '%s' "$result" | jq -Rr 'fromjson? | objects | .failed // empty' | tail -n 1)
-total=$(printf '%s' "$result" | jq -Rr 'fromjson? | objects | .total // empty' | tail -n 1)
+failed=$(printf '%s' "$result" | jq -r '.failed // empty')
+total=$(printf '%s' "$result" | jq -r '.total // empty')
 
 if [ "$batch_status" -ne 0 ] && [ -z "$failed" ]; then
   # Exit 1 without a `failed` count means nothing ran: the file is missing or
   # malformed, or an entry was refused by the API allowlist.
-  reason=$(printf '%s' "$result" | jq -Rr 'fromjson? | objects | .error // "no error reported"' | tail -n 1)
+  reason=$(printf '%s' "$result" | jq -r '.error // "no error reported"')
   echo "batch did not run: $reason" >&2
   codelapse snapshot create "FAILED: batch did not run" --tags failed,batch --json > /dev/null
   exit 1
@@ -384,11 +382,11 @@ $commands = @'
 [IO.File]::WriteAllText((Join-Path $PWD 'commands.json'), $commands)
 
 $backup = codelapse snapshot create 'BATCH: backup before batch' --tags backup,batch --json |
-  Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+  ConvertFrom-Json
 if (-not $backup.success) { throw "Backup failed: $($backup.error)" }
 $backupId = $backup.snapshot.id
 
-$result = codelapse batch commands.json --json | Where-Object { $_ -match '^\{' } | ConvertFrom-Json
+$result = codelapse batch commands.json --json | ConvertFrom-Json
 $batchStatus = $LASTEXITCODE
 
 if ($batchStatus -ne 0 -and $null -eq $result.failed) {
@@ -424,7 +422,7 @@ as done.
 - Never run `search` or `search-enhanced` on sensitive code (see the warning at
   the top).
 - Never assume a global `--mode`; mode is automatic.
-- Never parse the human-readable output; use `--json` and select the JSON line.
+- Never parse the human-readable output; use `--json` and parse the payload.
 - Never reuse a snapshot id you did not observe in `snapshot list --json`.
 - Never continue past a failed backup: restore, then stop and report.
 

@@ -23,10 +23,10 @@ export type ClientMode = 'standalone' | 'ipc' | 'auto';
  * The methods the standalone switch below can serve.
  *
  * Declared rather than inferred from the switch so the dispatcher can decide
- * *before* dispatching: a method that is absent can still be answered by a
- * running extension, and that is the only way `filter`, `rules` and
- * `diagnostics` work at all. The capability guard test fails if this set and
- * the switch ever disagree.
+ * *before* dispatching: a method that is absent is only ever served by a
+ * running extension. Search, analysis, chunking, `watch` and the workspace
+ * state/files commands work that way and only that way. The capability guard
+ * test fails if this set and the switch ever disagree.
  */
 export const STANDALONE_METHODS: ReadonlySet<string> = new Set([
   'takeSnapshot',
@@ -323,9 +323,12 @@ export class UnifiedClient {
         standaloneOptions,
       );
     } else if (this.activeMode === 'ipc') {
+      // The extension reads `data.options` (`cliConnectorService.ts`), so the
+      // options stay nested: flattening them here is what silently dropped
+      // `--backup`/`--files` over IPC.
       await this.ipcClient.callApi('restoreSnapshot', {
         id: snapshotId,
-        ...options,
+        options,
       });
     } else {
       throw new Error('Client not initialized');
@@ -335,11 +338,22 @@ export class UnifiedClient {
   /**
    * Delete snapshot
    */
-  public async deleteSnapshot(snapshotId: string): Promise<void> {
+  public async deleteSnapshot(
+    snapshotId: string,
+    options?: { skipConfirm?: boolean; force?: boolean },
+  ): Promise<void> {
     if (this.activeMode === 'standalone' && this.standaloneHandler) {
       await this.standaloneHandler.deleteSnapshot(snapshotId);
     } else if (this.activeMode === 'ipc') {
-      await this.ipcClient.callApi('deleteSnapshot', { id: snapshotId });
+      // The extension reads both flags at the top level of `data`
+      // (`cliConnectorService.ts`) and never a nested object. They are sent as
+      // strict booleans, and always sent, so the wire shape does not depend on
+      // whether the caller passed options.
+      await this.ipcClient.callApi('deleteSnapshot', {
+        id: snapshotId,
+        skipConfirm: options?.skipConfirm === true,
+        force: options?.force === true,
+      });
     } else {
       throw new Error('Client not initialized');
     }
@@ -611,8 +625,16 @@ export class UnifiedClient {
           return await this.restoreSnapshot(restoreId, restoreOpts);
         }
 
-        case 'deleteSnapshot':
-          return await this.deleteSnapshot(payload.id || payload);
+        case 'deleteSnapshot': {
+          // Forward the whole payload to the typed method, which puts
+          // `skipConfirm` and `force` on the wire: passing only
+          // `payload.id` dropped both flags, so `snapshot delete -y` still
+          // raised the extension's modal. A bare id string is also accepted.
+          const deleteId = typeof payload === 'string' ? payload : payload.id;
+          const deleteOptions =
+            typeof payload === 'string' ? undefined : payload;
+          return await this.deleteSnapshot(deleteId, deleteOptions);
+        }
 
         case 'compareSnapshots': {
           // Handle { snapshotId1, snapshotId2 } or { id1, id2 }
