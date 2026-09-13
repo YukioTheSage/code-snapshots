@@ -7,6 +7,52 @@ import { CodeChunk } from './codeChunker';
 import { isInteractiveUiDisabled } from '../headless';
 import path = require('path');
 
+/**
+ * A failure raised by this module about the provider's *response*, not by the
+ * provider itself: currently the empty-vector guard shared by both embedding
+ * loops.
+ *
+ * It has a type of its own because the retry decision must never read a
+ * message this module wrote. The guard interpolates `chunk.id`, and ids are
+ * `${snapshotId}_${path}_${startLine}-${endLine}_${sha1}` (`buildChunkId`),
+ * so a chunk starting on source line 429 produced a deterministic failure
+ * whose message contained "429" — which `errMsg.includes('429')` read as a
+ * rate limit and retried three times with backoff. A type cannot be forged by
+ * a chunk id.
+ *
+ * Module-private on purpose: the retry path is the only thing that classifies
+ * it, and both loops still surface the same `Failed to embed ...` message to
+ * callers they always did.
+ */
+class EmbeddingResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmbeddingResponseError';
+  }
+}
+
+/**
+ * Whether a failure thrown by the provider client is a rate limit.
+ *
+ * Only ever handed an error thrown by the `embedContent` call, and never one
+ * of this module's own {@link EmbeddingResponseError} failures: the provider
+ * is the only author whose message may be read here.
+ *
+ * The message is read because it is all the SDK offers. `@google/genai`
+ * 0.10.0 wraps every 4xx — 400, 401, 403, 404 and 429 alike — in a
+ * `ClientError` that carries no status field (probed: its own properties are
+ * `stack,message,cause,name`) and is not exported from the package, so a real
+ * 429 is only the text `got status: 429 Too Many Requests. {...}`. Matching
+ * the token `429` rather than the substring keeps a status apart from digits
+ * buried inside a longer number.
+ */
+function isProviderRateLimitError(error: unknown): boolean {
+  if (error instanceof EmbeddingResponseError) {
+    return false;
+  }
+  return error instanceof Error && /\b429\b/.test(error.message);
+}
+
 export class EmbeddingService {
   /**
    * Model ids are read through getModelId rather than captured in a field: a
@@ -159,7 +205,7 @@ export class EmbeddingService {
         // is truthy, so this chunk was served the empty vector on every retry
         // and `upsertVectors` threw "Embedding not found" for it permanently.
         if (embedding.length === 0) {
-          throw new Error(
+          throw new EmbeddingResponseError(
             `Embedding provider returned an empty vector for chunk ${chunk.id}`,
           );
         }
@@ -171,7 +217,10 @@ export class EmbeddingService {
         return embedding;
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        if (attempt < this.MAX_RETRY_ATTEMPTS && errMsg.includes('429')) {
+        if (
+          attempt < this.MAX_RETRY_ATTEMPTS &&
+          isProviderRateLimitError(error)
+        ) {
           log(
             `Rate limit hit embedding chunk ${chunk.id}, retry #${attempt} after backoff`,
           );
@@ -257,7 +306,7 @@ export class EmbeddingService {
         // vector, and returning it made the vector store query with zero
         // dimensions and match nothing.
         if (embedding.length === 0) {
-          throw new Error(
+          throw new EmbeddingResponseError(
             'Embedding provider returned an empty vector for the search query',
           );
         }
@@ -269,7 +318,10 @@ export class EmbeddingService {
       } catch (error: unknown) {
         // Error handling as in original
         const errMsg = error instanceof Error ? error.message : String(error);
-        if (attempt < this.MAX_RETRY_ATTEMPTS && errMsg.includes('429')) {
+        if (
+          attempt < this.MAX_RETRY_ATTEMPTS &&
+          isProviderRateLimitError(error)
+        ) {
           log(
             `Rate limit hit for search query, retry #${attempt} after backoff`,
           );
