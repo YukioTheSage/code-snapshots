@@ -213,6 +213,9 @@ describe('CliConnectorService - Batch Operations', () => {
           uri: { fsPath: '/test/workspace' },
         },
       ],
+      // The constructor stores a chunker-settings listener; a wholesale
+      // workspace replacement must expose the API it registers.
+      onDidChangeConfiguration: jest.fn(() => ({ dispose: jest.fn() })),
     };
 
     cliConnectorService = new CliConnectorService(

@@ -25,6 +25,50 @@ export function getMaxSnapshots(): number {
     : 50;
 }
 
+/** Fallbacks for the chunker settings; they match the schema defaults in `package.json`. */
+export const DEFAULT_SEMANTIC_SEARCH_CHUNK_SIZE = 200;
+export const DEFAULT_SEMANTIC_SEARCH_CHUNK_OVERLAP = 50;
+
+/**
+ * Reads a numeric setting, ignoring a stored value of the wrong type.
+ *
+ * `.vscode/codelapse.json` is written by the CLI and can be hand-edited, and
+ * `resolveSetting` casts a shared-file value to the caller's type without
+ * checking it. A string would reach the chunker's clamp, and
+ * `Math.max(10, NaN)` is `NaN`: a chunk size of `NaN` produces no chunks at all.
+ */
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * The semantic-search chunker's line-count settings.
+ *
+ * Read through `resolveSetting` rather than a raw `getConfiguration` call, so a
+ * value explicitly set in VS Code keeps winning over `.vscode/codelapse.json`
+ * (the D1 precedence) and so `manifestConsistency.test.ts` can see the declared
+ * key being read.
+ */
+export function getSemanticSearchChunkSize(): number {
+  return asNumber(
+    resolveSetting(
+      'semanticSearch.chunkSize',
+      DEFAULT_SEMANTIC_SEARCH_CHUNK_SIZE,
+    ).value,
+    DEFAULT_SEMANTIC_SEARCH_CHUNK_SIZE,
+  );
+}
+
+export function getSemanticSearchChunkOverlap(): number {
+  return asNumber(
+    resolveSetting(
+      'semanticSearch.chunkOverlap',
+      DEFAULT_SEMANTIC_SEARCH_CHUNK_OVERLAP,
+    ).value,
+    DEFAULT_SEMANTIC_SEARCH_CHUNK_OVERLAP,
+  );
+}
+
 /**
  * Reads a byte count, ignoring a stored value of the wrong type.
  *

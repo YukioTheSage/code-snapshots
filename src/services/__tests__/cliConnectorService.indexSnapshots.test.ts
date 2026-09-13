@@ -59,6 +59,9 @@ describe('CliConnectorService - indexSnapshots options', () => {
 
     (vscode as unknown as { workspace?: unknown }).workspace = {
       workspaceFolders: [{ uri: { fsPath: '/test/workspace' } }],
+      // The constructor stores a chunker-settings listener; a wholesale
+      // workspace replacement must expose the API it registers.
+      onDidChangeConfiguration: jest.fn(() => ({ dispose: jest.fn() })),
     };
 
     cliConnectorService = new CliConnectorService(mockTerminalApiService, {

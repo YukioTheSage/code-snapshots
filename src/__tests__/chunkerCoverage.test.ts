@@ -3,12 +3,18 @@ import * as vscode from 'vscode';
 
 function configureChunker(chunkSize: number, chunkOverlap: number) {
   (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-    get: (key: string, fallback?: unknown) =>
-      key === 'chunkSize'
+    // `resolveSetting` reads the whole dotted key (`semanticSearch.chunkSize`);
+    // the pre-resolver constructor passed the leaf to a scoped configuration.
+    get: (key: string, fallback?: unknown) => {
+      const leaf = key.includes('.')
+        ? key.slice(key.lastIndexOf('.') + 1)
+        : key;
+      return leaf === 'chunkSize'
         ? chunkSize
-        : key === 'chunkOverlap'
+        : leaf === 'chunkOverlap'
         ? chunkOverlap
-        : fallback,
+        : fallback;
+    },
     update: jest.fn(),
   });
 }

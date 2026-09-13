@@ -1,9 +1,12 @@
-import * as vscode from 'vscode';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as javaParser from 'java-parser';
 import * as Parser from 'web-tree-sitter'; // Added tree-sitter for better parsing
 import { log, logVerbose } from '../logger';
+import {
+  getSemanticSearchChunkOverlap,
+  getSemanticSearchChunkSize,
+} from '../config';
 
 /**
  * Builds a vector-store record key for a chunk.
@@ -69,31 +72,17 @@ interface AstNode {
 }
 
 export class CodeChunker {
-  private readonly chunkSize: number;
-  private readonly chunkOverlap: number;
+  // Not readonly: `refreshConfig` re-reads both when the setting changes, which
+  // is what removes the Reload Window requirement.
+  private chunkSize = 0;
+  private chunkOverlap = 0;
   private treeSitterParsers: Map<string, Parser.Parser> = new Map();
   private parserInitialized = false;
 
   constructor() {
-    const config = vscode.workspace.getConfiguration(
-      'vscode-snapshots.semanticSearch',
-    );
-
-    // These are LINE counts, not token counts, and they are the fallback used
-    // when the key is absent. The manifest declares the same values as the
-    // schema defaults (`semanticSearch.chunkSize` 200, `chunkOverlap` 100 --
-    // see package.json), and in a real host the schema default is what `.get`
-    // returns, so the two must agree. They did not: the fallbacks said 250/100
-    // while the manifest said 200/50, so no reader could tell which number was
-    // live. Behaviour is unchanged -- 200/50 is what the host has always
-    // resolved to.
-    this.chunkSize = Math.max(10, config.get<number>('chunkSize', 200));
-
-    // Overlap is clamped to leave at least 5 lines of progress per chunk.
-    this.chunkOverlap = Math.max(
-      0,
-      Math.min(config.get<number>('chunkOverlap', 50), this.chunkSize - 5),
-    );
+    // Resolution lives in `refreshConfig`, which the owning services also call
+    // from their configuration listener; one path for both reads.
+    this.refreshConfig();
 
     // Only log in non-test environment
     if (process.env.NODE_ENV !== 'test') {
@@ -108,6 +97,24 @@ export class CodeChunker {
         log(`Parser initialization error: ${error}`);
       });
     }
+  }
+
+  /**
+   * Re-read the chunker's line-count settings.
+   *
+   * Both values are captured in fields rather than read per chunking run, so
+   * without this a changed setting only applied after a Reload Window. The
+   * services that own a chunker call it from a
+   * `workspace.onDidChangeConfiguration` listener.
+   */
+  public refreshConfig(): void {
+    // The clamps are the constructor's: at least ten lines per chunk, and an
+    // overlap that leaves at least five lines of progress.
+    this.chunkSize = Math.max(10, getSemanticSearchChunkSize());
+    this.chunkOverlap = Math.max(
+      0,
+      Math.min(getSemanticSearchChunkOverlap(), this.chunkSize - 5),
+    );
   }
 
   /**

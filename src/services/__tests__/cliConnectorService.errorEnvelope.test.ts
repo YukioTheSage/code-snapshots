@@ -26,6 +26,9 @@ describe('IPC envelope for a failing handler', () => {
     } as unknown as TerminalApiService;
     (vscode.workspace as any) = {
       workspaceFolders: [{ uri: { fsPath: '/test/workspace' } }],
+      // The constructor stores a chunker-settings listener; a wholesale
+      // workspace replacement must expose the API it registers.
+      onDidChangeConfiguration: jest.fn(() => ({ dispose: jest.fn() })),
     };
     service = new CliConnectorService(terminalApi, {
       extension: { packageJSON: { version: '1.0.0' } },

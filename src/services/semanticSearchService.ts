@@ -167,6 +167,8 @@ export class SemanticSearchService implements vscode.Disposable {
   private disposed = false;
   /** The snapshot-change subscription, released by `dispose()`. */
   private snapshotChangeSubscription: vscode.Disposable | undefined;
+  /** Released by `dispose()`. Re-reads the chunker settings on a config change. */
+  private chunkerConfigSubscription: vscode.Disposable | undefined;
 
   // Cache of which snapshots have been indexed
   private indexedSnapshots: Set<string> = new Set();
@@ -194,6 +196,25 @@ export class SemanticSearchService implements vscode.Disposable {
     this.enhancedCodeChunker = new EnhancedCodeChunker();
     this.queryProcessor = new QueryProcessor();
     this.resultManager = new ResultManager();
+
+    // Both chunkers capture their line-count settings at construction. Without
+    // this listener an edited chunkSize or chunkOverlap only applied after a
+    // Reload Window. One listener for both instances.
+    this.chunkerConfigSubscription = vscode.workspace.onDidChangeConfiguration(
+      (event) => {
+        if (
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkSize',
+          ) ||
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkOverlap',
+          )
+        ) {
+          this.codeChunker.refreshConfig();
+          this.enhancedCodeChunker.refreshConfig();
+        }
+      },
+    );
 
     this.initialize();
 
@@ -1636,6 +1657,8 @@ export class SemanticSearchService implements vscode.Disposable {
     this.disposed = true;
     this.snapshotChangeSubscription?.dispose();
     this.snapshotChangeSubscription = undefined;
+    this.chunkerConfigSubscription?.dispose();
+    this.chunkerConfigSubscription = undefined;
     this.processingQueue = [];
     this.isProcessing = false;
     this.performanceMetrics.clear();

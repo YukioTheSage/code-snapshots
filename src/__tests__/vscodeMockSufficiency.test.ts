@@ -45,11 +45,25 @@ describe('vscode mock sufficiency', () => {
   });
 
   it('honours an explicit configuration override', () => {
-    (vscode.workspace.getConfiguration as jest.Mock).mockReturnValueOnce({
-      get: (key: string, fallback?: unknown) =>
-        key === 'chunkSize' ? 40 : key === 'chunkOverlap' ? 10 : fallback,
+    const override = {
+      // `resolveSetting` reads the whole dotted key (`semanticSearch.chunkSize`).
+      get: (key: string, fallback?: unknown) => {
+        const leaf = key.includes('.')
+          ? key.slice(key.lastIndexOf('.') + 1)
+          : key;
+        return leaf === 'chunkSize'
+          ? 40
+          : leaf === 'chunkOverlap'
+          ? 10
+          : fallback;
+      },
       update: jest.fn(),
-    });
+    };
+    // One `getConfiguration` call per setting, so two `Once` values keep the
+    // shared mock's default in place for every later test in this file.
+    (vscode.workspace.getConfiguration as jest.Mock)
+      .mockReturnValueOnce(override)
+      .mockReturnValueOnce(override);
 
     const chunker = new CodeChunker();
     expect((chunker as unknown as { chunkSize: number }).chunkSize).toBe(40);

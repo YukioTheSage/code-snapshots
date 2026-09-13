@@ -173,6 +173,8 @@ export class CliConnectorService implements vscode.Disposable {
   private socketBuffers: Map<net.Socket, string> = new Map();
   private authToken: string;
   private logUnsubscribe?: () => void;
+  /** Released by `dispose()`. Re-reads the chunker settings on a config change. */
+  private chunkerConfigSubscription?: vscode.Disposable;
   private logStreaming = false;
   private terminalApiService: TerminalApiService;
   private context: vscode.ExtensionContext;
@@ -214,6 +216,23 @@ export class CliConnectorService implements vscode.Disposable {
     this.enhancedCodeChunker = new EnhancedCodeChunker();
     this.queryProcessor = new QueryProcessor();
     this.resultManager = new ResultManager();
+
+    // The chunker captures its line-count settings at construction; re-reading
+    // them when the setting changes is what removes the Reload Window step.
+    this.chunkerConfigSubscription = vscode.workspace.onDidChangeConfiguration(
+      (event) => {
+        if (
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkSize',
+          ) ||
+          event.affectsConfiguration(
+            'vscode-snapshots.semanticSearch.chunkOverlap',
+          )
+        ) {
+          this.enhancedCodeChunker.refreshConfig();
+        }
+      },
+    );
 
     // Create platform-specific socket path
     const workspaceId = this.getWorkspaceId();
@@ -3653,6 +3672,8 @@ export class CliConnectorService implements vscode.Disposable {
 
     this.logUnsubscribe?.();
     this.logUnsubscribe = undefined;
+    this.chunkerConfigSubscription?.dispose();
+    this.chunkerConfigSubscription = undefined;
     this.logStreaming = false;
 
     // Close all connections
