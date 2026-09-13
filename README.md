@@ -15,6 +15,19 @@ CodeLapse is the missing link between your IDE's autosave and Git's formal commi
 [![Downloads](https://img.shields.io/visual-studio-marketplace/d/YukioTheSage.vscode-snapshots)](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
 [![Rating](https://img.shields.io/visual-studio-marketplace/r/YukioTheSage.vscode-snapshots)](https://marketplace.visualstudio.com/items?itemName=YukioTheSage.vscode-snapshots)
 
+<details>
+<summary><strong>📑 Table of Contents</strong></summary>
+
+- [🎯 Why CodeLapse?](#-why-codelapse)
+- [🚀 Quick Start](#-quick-start)
+- [✨ Features at a Glance](#-features-at-a-glance)
+- [🖥️ CLI Tool - Automation & Integration Ready](#️-cli-tool---automation--integration-ready)
+- [📚 Documentation & Support](#-documentation--support)
+- [⚙️ Configuration](#️-configuration)
+- [📋 System Requirements](#-system-requirements)
+
+</details>
+
 ---
 
 ## 🎯 Why CodeLapse?
@@ -331,10 +344,10 @@ jobs:
   test-with-codelapse:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
       
       - name: Install CodeLapse CLI
         run: npm install -g codelapse-cli
@@ -355,7 +368,7 @@ jobs:
 <summary><strong>Docker Integration</strong></summary>
 
 ```dockerfile
-FROM node:18-alpine
+FROM node:20-alpine
 
 # Install CodeLapse CLI
 RUN npm install -g codelapse-cli
@@ -383,9 +396,9 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 | **Getting Started**                           | **Advanced Usage**                             | **Development**                                         |
 | --------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------- |
 | 📖 [User Guide](docs/USER_GUIDE.md)           | 🤝 [Git Integration](docs/GIT_COMPANION.md)    | 🔧 [Developer Guide](docs/DEVELOPER_GUIDE.md)           |
-| 🚀 [Quick Start](#-quick-start)               | ⚙️ [Configuration](#-configuration)            | 🗺️ [Roadmap](docs/ROADMAP.md)                           |
-| ⚡ [CLI Guide](cli/README.md)                  | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing) |
-| 🏗️ [Standalone Mode](STANDALONE_MODE.md)     | 🤖 [AI Guidelines](cli/README.md#ai-agent-guidelines) | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
+| 🚀 [Quick Start](#-quick-start)               | ⚙️ [Configuration](#️-configuration)           | 🗺️ [Roadmap](docs/ROADMAP.md)                           |
+| ⚡ [CLI Guide](cli/README.md)                  | 🔬 [Semantic Search](docs/SEMANTIC_ROADMAP.md) | 🤝 [Contributing](docs/DEVELOPER_GUIDE.md#contributing-to-codelapse) |
+| 🏗️ [Standalone Mode](STANDALONE_MODE.md)     | 🤖 [AI Guidelines](cli/AI_GUIDE.md)            | 📦 [NPM Package](https://www.npmjs.com/package/codelapse-cli) |
 | ❓ [Troubleshooting](docs/TROUBLESHOOTING.md) | 📦 [Core Package](shared/README.md)           | 💬 [Issues](https://github.com/YukioTheSage/code-snapshots/issues) |
 | 🛡️ [Security](SECURITY.md)       |                                                |                                                         |
 
@@ -416,16 +429,37 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 </details>
 
 <details>
+<summary><strong>📚 All Settings Reference</strong></summary>
+
+| Setting | Type | Default | Purpose |
+| ------- | ---- | ------- | ------- |
+| `vscode-snapshots.snapshotLocation` | string | `.snapshots` | Where snapshots are stored, relative to the workspace root |
+| `vscode-snapshots.maxSnapshots` | number | `50` | Maximum number of snapshots to keep |
+| `vscode-snapshots.maxSnapshotStoreBytes` | number | `0` | Maximum bytes the snapshot store may occupy; `0` disables the limit and the oldest snapshots are pruned first |
+| `vscode-snapshots.autoSnapshotInterval` | number | `0` | Interval for automatic snapshots in minutes (`0` disables) |
+| `vscode-snapshots.loggingEnabled` | boolean | `true` | Enable detailed logging |
+| `vscode-snapshots.verboseLogging` | boolean | `false` | Enable more detailed verbose logging |
+| `vscode-snapshots.git.addCommitInfo` | boolean | `true` | Store Git branch and commit hash with each snapshot |
+| `vscode-snapshots.git.commitFromSnapshotEnabled` | boolean | `true` | Enable "Create Git Commit from Snapshot" |
+| `vscode-snapshots.autoSnapshot.rules` | array | `[]` | Rules for file-specific auto-snapshots |
+| `vscode-snapshots.showOnlyChangedFiles` | boolean | `true` | Show only changed files in the snapshot view |
+| `vscode-snapshots.ux.showWelcomeOnStartup` | boolean | `true` | Show the welcome message for first-time users |
+| `vscode-snapshots.ux.showKeyboardShortcutHints` | boolean | `true` | Show keyboard shortcut hints |
+| `vscode-snapshots.ux.useAnimations` | boolean | `true` | Show the gutter direction indicator while navigating snapshots |
+| `vscode-snapshots.ux.confirmRestoreOperations` | boolean | `true` | Ask before restoring a snapshot (does not control the unsaved-change prompt) |
+| `vscode-snapshots.semanticSearch.enabled` | boolean | `true` | Enable semantic search (requires Gemini and Pinecone keys) |
+| `vscode-snapshots.semanticSearch.chunkSize` | number | `200` | Maximum lines per code chunk |
+| `vscode-snapshots.semanticSearch.chunkOverlap` | number | `50` | Overlap between adjacent chunks, clamped to `chunkSize - 5` |
+| `vscode-snapshots.semanticSearch.autoIndex` | boolean | `false` | Index snapshots in the background automatically |
+| `vscode-snapshots.semanticSearch.embedding.model` | string | `gemini-embedding-2` | Embedding model id; Google retires model ids on a published schedule |
+| `vscode-snapshots.semanticSearch.embedding.dimension` | number | `3072` | Vector dimension; must match the dimension the index was created with |
+
+</details>
+
+<details>
 <summary><strong>🔬 Semantic Search Settings (Experimental)</strong></summary>
 
-> ⚠️ **EXPERIMENTAL FEATURE - SECURITY RISKS**:
->
-> - **Data Privacy**: Your code is sent to external AI services (Pinecone, Gemini)
-> - **API Key Security**: Third-party services require API keys with potential access risks
-> - **Network Exposure**: Code content transmitted over internet to external providers
-> - **Quota Costs**: API usage may incur charges on your accounts
-> - **Functionality Changes**: Features may change or be removed without notice
-> - **NOT RECOMMENDED** for proprietary, sensitive, or confidential codebases
+> ⚠️ **EXPERIMENTAL FEATURE - SECURITY RISKS**: See the [experimental feature warning](#-why-codelapse) above - network exposure and API quota costs apply, and it is **not recommended** for proprietary, sensitive, or confidential codebases.
 
 **Basic Settings:**
 
@@ -487,9 +521,10 @@ Ready to dive deeper? Here's where to go next:
 
 ## 📋 System Requirements
 
-- **VS Code**: Version 1.60.0 or higher
+- **VS Code**: version 1.85.0 or higher (declared as `engines.vscode: ^1.85.0`)
 - **Platform**: Windows, macOS, or Linux
-- **Optional**: API keys for semantic search features
+- **CLI only**: Node.js 18.15.0 or higher
+- **Optional**: Gemini and Pinecone API keys for semantic search
 
 ---
 
