@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [ main ]
 
+# Least privilege for GITHUB_TOKEN. Every job only reads the repository --
+# checkout, install, build, type-check, test, package -- so the workflow-level
+# default is narrowed here rather than repeated per job. Without this block the
+# token carries the repository default, which is broader than any step needs
+# (CodeQL actions/missing-workflow-permissions, alerts 1-3).
+permissions:
+  contents: read
+
 jobs:
   # `codelapse-core` is declared as `file:shared` in the root package and as
   # `file:../shared` in cli/, so `npm ci` does not install a published copy: npm
