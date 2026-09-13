@@ -1,6 +1,6 @@
 {
   "name": "codelapse-core",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Shared core functionality for CodeLapse CLI and VS Code extension",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
