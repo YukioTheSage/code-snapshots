@@ -111,9 +111,10 @@ Both CLI and extension share configuration through `.vscode/codelapse.json`:
 }
 ```
 
-> `git.autoSnapshotBeforeOperation` is accepted by the schema and can be set with
-> `codelapse config set`, but nothing reads it, so it has no effect. It is omitted
-> here for that reason. See [Known Issues](docs/KNOWN_ISSUES.md).
+> `git.autoSnapshotBeforeOperation` was removed: it was accepted by the schema
+> and settable, but nothing read it. A configuration file that still carries the
+> key keeps loading, and `codelapse config set git.autoSnapshotBeforeOperation <value>`
+> now fails with "Invalid configuration key path".
 
 **Fallback chain**:
 1. `.vscode/codelapse.json` (shared file)

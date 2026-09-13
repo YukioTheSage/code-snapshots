@@ -586,8 +586,6 @@ export interface GitConfigSettings {
   addCommitInfo: boolean;
   /** Enable creating commits from snapshots */
   commitFromSnapshotEnabled: boolean;
-  /** Auto-snapshot before Git operations */
-  autoSnapshotBeforeOperation: boolean;
 }
 
 /**

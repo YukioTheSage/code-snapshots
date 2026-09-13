@@ -15,7 +15,6 @@ export interface ConfigSettings {
   git: {
     addCommitInfo: boolean;
     commitFromSnapshotEnabled: boolean;
-    autoSnapshotBeforeOperation: boolean;
   };
   autoSnapshot: {
     rules: Array<{

@@ -235,7 +235,6 @@ interface CodelapseConfig {
   maxSnapshots: number;
   git: {
     addCommitInfo: boolean;
-    autoSnapshotBeforeOperation: boolean;
   };
   semanticSearch?: {
     enabled: boolean;
@@ -247,11 +246,10 @@ interface CodelapseConfig {
 }
 ```
 
-> `git.autoSnapshotBeforeOperation` is part of the type, is validated and is
-> settable, but **nothing reads it** — neither the extension (where the VS Code
-> setting and its dead command interception were removed) nor the CLI. Setting it
-> has no effect. `git.addCommitInfo` is read. See
-> [Known Issues](../docs/KNOWN_ISSUES.md).
+> An earlier version declared `git.autoSnapshotBeforeOperation`, defaulted it,
+> validated it and made it settable; nothing ever read it, so it was removed
+> rather than given a standalone-only meaning. A configuration file that still
+> carries the key keeps loading — unknown keys are ignored.
 
 ## Configuration
 

@@ -22,7 +22,6 @@ export interface CodelapseConfig {
   autoSnapshot: AutoSnapshotConfig;
   git: {
     addCommitInfo: boolean;
-    autoSnapshotBeforeOperation: boolean;
   };
   semanticSearch?: {
     enabled: boolean;
@@ -45,7 +44,6 @@ export const DEFAULT_CONFIG: CodelapseConfig = {
   },
   git: {
     addCommitInfo: true,
-    autoSnapshotBeforeOperation: false,
   },
   semanticSearch: {
     enabled: false,

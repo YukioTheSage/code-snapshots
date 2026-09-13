@@ -116,15 +116,6 @@ export function validatePartialCodelapseConfig(
     if ('addCommitInfo' in value.git && value.git.addCommitInfo !== undefined) {
       assertBoolean(value.git.addCommitInfo, `${context}.git.addCommitInfo`);
     }
-    if (
-      'autoSnapshotBeforeOperation' in value.git &&
-      value.git.autoSnapshotBeforeOperation !== undefined
-    ) {
-      assertBoolean(
-        value.git.autoSnapshotBeforeOperation,
-        `${context}.git.autoSnapshotBeforeOperation`,
-      );
-    }
   }
 
   if ('autoSnapshot' in value && value.autoSnapshot !== undefined) {
