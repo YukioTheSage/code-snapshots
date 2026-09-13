@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `codelapse-core` is built from the linked `shared/` directory: `npm ci`
   links the checkout but does not compile it.
 
+## [0.9.5]
+
+Shipped without separate release notes: no version tag was made for it and no
+per-change record was kept. `package.json` declared 0.9.5 from `ad4a26e`
+(2025-08-07) until the next release version was declared, and `34c8d0a`
+records that the version had already been published by then. It is listed here
+for completeness rather than reconstructed from guesswork.
+
 ## [2.0.0]
 
 ### Added
