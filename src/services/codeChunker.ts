@@ -1671,13 +1671,23 @@ export class CodeChunker {
             ),
           ].join('\n');
 
-          // Add the chunk with context
+          // Add the chunk with context. The reported range covers the text that
+          // was embedded, not just the current chunk: the first line of
+          // `overlapContent` is `fileLines[prevContextStartLine]` and its last is
+          // `fileLines[currentChunk.endLine]`. Reporting only the current chunk
+          // pointed every consumer of the range -- the CLI snippet, a search
+          // result's startLine, and the range that names the chunk id -- at lines
+          // that had not been ranked. The `// ...` line stands for the elided
+          // middle, so the reported range is a superset of the embedded text.
+          // The range cannot represent the embedded text exactly: the separator is
+          // not a line of the file, and the elided middle it stands for lies
+          // inside the range but is absent from the content.
           finalChunks.push(
             this.createChunk(
               currentChunk.filePath,
               overlapContent,
               currentChunk.snapshotId,
-              currentChunk.startLine,
+              prevContextStartLine,
               currentChunk.endLine,
               currentChunk.metadata.language,
               currentChunk.metadata.symbols || [],
