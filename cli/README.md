@@ -1281,9 +1281,6 @@ codelapse workspace state --json --silent
 # Build search index
 codelapse search index --json --silent
 
-# Check index status
-codelapse search index --json --silent
-
 # Rebuild index for specific snapshots
 codelapse search index --snapshots "snapshot-123,snapshot-124" --json --silent
 ```
