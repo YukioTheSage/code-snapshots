@@ -32,10 +32,15 @@ codelapse <command> --help
 - `--silent` - Silent mode - no spinners, banners or progress output. It
   suppresses the JSON envelope as well: `--json --silent` prints no JSON
   payload for every command routed through the shared result printer (verified
-  for `snapshot list`, `snapshot create` and `config get`). Three commands are
-  the exception - `status`, `snapshot show <id>` and `api <method>` each write
-  their JSON directly and ignore `--silent`. Storage notices can still reach
-  stdout; they are described under JSON Output Format.
+  for `snapshot list`, `snapshot create` and `config get`). The suppression
+  is not absolute. `status` and `snapshot show <id>` print their JSON directly
+  on their success paths and `api <method>` always does; on failure the first
+  two route through the shared printer and go quiet. `watch` and
+  `diagnostics logs --follow` stream, so their events reach stdout whatever
+  `--silent` says. The `uncaughtException` and top-level fatal handlers print
+  their JSON error even under `--silent`. Storage notices can still reach
+  stdout;
+  they are described under JSON Output Format.
 
   **In automation, use `--json` alone.** Progress and warnings go to stderr, and
   stdout carries the payload plus any notice the storage layer writes (storage
@@ -67,8 +72,9 @@ codelapse <command> --help
 > CodeLapse extension over IPC. With no extension running the CLI falls back to
 > **standalone mode**, which implements snapshot operations (create, list with
 > `--tags`/`--favorites`/`--limit`/`--since`, show, restore, delete, compare,
-> navigate), config, file-level operations, `filter`, `rules`, `diagnostics`,
-> `workspace info`, and the `git` operations that need only a repository —
+> navigate), config, file-level operations, `filter`, `rules`, `diagnostics`
+> (except `diagnostics logs --follow`), `workspace info`, and the `git`
+> operations that need only a repository —
 > against `.snapshots/` directly.
 > It does *not* implement `workspace state` / `workspace files`,
 > `utility validate` / `utility export`, the `search` commands, `analyze`, or
@@ -76,8 +82,11 @@ codelapse <command> --help
 > `Method <name> is not available in standalone mode and no CodeLapse extension
 > answered over IPC (<connection error>). Start VS Code with the CodeLapse
 > extension enabled, or use one of: <methods>`
-> rather than returning anything invented. Start VS Code with the extension
-> active to use them.
+> rather than returning anything invented. `diagnostics logs --follow` is the
+> exception that needs the extension inside an otherwise standalone group: it
+> fails with "Streaming logs requires the CodeLapse extension over IPC;
+> standalone mode has no log source." rather than the `Method <name>` message.
+> Start VS Code with the extension active to use them.
 >
 > `git info`, `git branches` and the git write operations need a runnable
 > `git` executable; when it cannot be run the command fails with
