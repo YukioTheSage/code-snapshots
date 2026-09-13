@@ -1095,13 +1095,18 @@ export class QueryProcessor {
    * Get the file patterns for a programming language, if this map names it.
    *
    * The keys are the labels the chunker produces for these files
-   * (`codeChunker.ts`'s extension map: `csharp` and `cpp`, not the display
-   * forms `c#`/`c++`), and each language lists every extension the chunker
-   * indexes under it, so a javascript search keeps .jsx, .mjs and .cjs and a
-   * typescript search keeps .tsx. The store holds those chunks under those
-   * language names, and a narrower pattern dropped them silently. A language
-   * this map does not name gets no include filter: it is the set of languages a
-   * `--languages` search is expected to name, not the chunker's full list.
+   * (`codeChunker.ts`'s extension map: `csharp` and `cpp`) plus the display
+   * spellings a caller may type instead (`c#`, `c++`). The lookup is keyed on
+   * the caller's raw string and the CLI splits free text without normalizing
+   * it, so both spellings have to be here; dropping the aliases made
+   * `--languages c#` return every language instead of filtering. Each key
+   * lists every extension the chunker can file under that language -- `h`
+   * included for cpp, because a C++-looking header is indexed as cpp -- so a
+   * javascript search keeps .jsx, .mjs and .cjs and a typescript search keeps
+   * .tsx. The store holds those chunks under those language names, and a
+   * narrower pattern dropped them silently. A language this map does not name
+   * gets no include filter: it is the set of languages a `--languages` search
+   * is expected to name, not the chunker's full list.
    */
   private getFilePatternsForLanguage(language: string): string[] {
     const extensions: Record<string, string[]> = {
@@ -1110,7 +1115,9 @@ export class QueryProcessor {
       python: ['py'],
       java: ['java'],
       csharp: ['cs'],
-      cpp: ['cpp', 'hpp', 'cxx'],
+      'c#': ['cs'],
+      cpp: ['cpp', 'hpp', 'cxx', 'h'],
+      'c++': ['cpp', 'hpp', 'cxx', 'h'],
       go: ['go'],
       rust: ['rs'],
       php: ['php'],

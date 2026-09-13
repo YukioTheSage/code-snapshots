@@ -386,29 +386,37 @@ describe('the language pattern map', () => {
     ]);
   });
 
-  it('keys on the language labels the chunker produces, not display aliases', async () => {
+  it('keys on the chunker labels and on the display spellings callers type', async () => {
     const csharp = await new QueryProcessor().processQuery(
       'find authentication code',
       { language: 'csharp' },
     );
     expect(csharp.filters.includeFilePatterns).toEqual(['*.cs']);
 
+    // The lookup is keyed on the caller's raw string and the CLI splits free
+    // text without normalizing it, so the display spellings have to work
+    // beside the chunker's labels: dropping them made `--languages c#` return
+    // every language instead of filtering.
+    const aliasCsharp = await new QueryProcessor().processQuery(
+      'find authentication code',
+      { language: 'c#' },
+    );
+    expect(aliasCsharp.filters.includeFilePatterns).toEqual(['*.cs']);
+
+    // `.h` is included for cpp because a C++-looking header is indexed as
+    // `cpp` (`codeChunker.ts` detects it); a cpp search that dropped `*.h` lost
+    // those headers.
+    const cppPatterns = ['*.cpp', '*.hpp', '*.cxx', '*.h'];
     const cpp = await new QueryProcessor().processQuery(
       'find authentication code',
       { language: 'cpp' },
     );
-    expect(cpp.filters.includeFilePatterns).toEqual([
-      '*.cpp',
-      '*.hpp',
-      '*.cxx',
-    ]);
+    expect(cpp.filters.includeFilePatterns).toEqual(cppPatterns);
 
-    // `c#` and `c++` are display names the chunker never emits, so they cannot
-    // match a produced language and must not read as supported keys.
-    const alias = await new QueryProcessor().processQuery(
+    const aliasCpp = await new QueryProcessor().processQuery(
       'find authentication code',
-      { language: 'c#' },
+      { language: 'c++' },
     );
-    expect(alias.filters.includeFilePatterns).toBeUndefined();
+    expect(aliasCpp.filters.includeFilePatterns).toEqual(cppPatterns);
   });
 });
