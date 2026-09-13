@@ -324,6 +324,39 @@ describe('indexAllSnapshots reporting', () => {
     ]);
     expect(messages).toEqual(['Processing snapshot 1 of 1']);
   });
+
+  it('does not let a failing corrective persist abort the remaining snapshots', async () => {
+    const { service, workspaceState } = buildService(
+      [{ id: 'a' }, { id: 'b' }],
+      ['a'],
+    );
+    (
+      service as unknown as { vectorDatabaseService: unknown }
+    ).vectorDatabaseService = {
+      deleteSnapshotVectors: jest.fn(async () => undefined),
+    };
+    // With purgeFirst the purge resolves before the index fails, so the catch
+    // rewrites the persisted set. That corrective write is the first update and
+    // the success-path persist for 'b' is the second.
+    workspaceState.update = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('persist failed'))
+      .mockResolvedValue(undefined);
+
+    const outcome = await service.indexAllSnapshots({ purgeFirst: true });
+
+    // A persist that cannot be corrected is a reason to log, not to abandon the
+    // run: the throw used to escape the catch and abort every remaining
+    // snapshot, losing the failure report for the ones that did run.
+    expect(
+      (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot,
+    ).toHaveBeenCalledWith('b');
+    expect(outcome.attempted).toBe(2);
+    expect(outcome.succeeded).toBe(1);
+    expect(outcome.failed).toEqual([
+      { snapshotId: 'a', error: expect.stringContaining('boom a') },
+    ]);
+  });
 });
 
 describe('TerminalApiService.indexSnapshots reporting', () => {
@@ -426,6 +459,8 @@ describe('TerminalApiService.indexSnapshots reporting', () => {
     ['an object', { ids: ['a'] }],
     ['null', null],
     ['a non-string element', ['a', 5]],
+    ['a blank string element', ['']],
+    ['a whitespace-only element', ['  ']],
   ])(
     'refuses %s as snapshotIds with a clean error',
     async (_label, snapshotIds) => {

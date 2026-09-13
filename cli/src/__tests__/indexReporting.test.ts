@@ -118,4 +118,35 @@ describe('SearchCommands.index reporting', () => {
     expect(payload.error).toMatch(/--all.*--snapshots|--snapshots.*--all/);
     expect(getFailure()).toBe(true);
   });
+
+  it.each([
+    ['an empty string', ''],
+    ['a bare comma', ','],
+  ])(
+    'refuses %s for --snapshots instead of indexing every snapshot',
+    async (_label, snapshots) => {
+      mockClient.callApi = jest.fn();
+
+      // A present-but-empty list used to parse to no ids, which is the same
+      // payload as omitting the flag: the command then indexed everything --
+      // and with --force --purge, the migration command, it purged and
+      // re-embedded the whole workspace.
+      await searchCommands.index({ snapshots, json: true });
+
+      expect(mockClient.callApi).not.toHaveBeenCalled();
+      const payload = printedPayload();
+      expect(payload.success).toBe(false);
+      expect(payload.error).toMatch(/--snapshots/);
+      expect(getFailure()).toBe(true);
+    },
+  );
+
+  it('refuses an empty --snapshots even beside --all, before any call', async () => {
+    mockClient.callApi = jest.fn();
+
+    await searchCommands.index({ all: true, snapshots: '', json: true });
+
+    expect(mockClient.callApi).not.toHaveBeenCalled();
+    expect(printedPayload().success).toBe(false);
+  });
 });

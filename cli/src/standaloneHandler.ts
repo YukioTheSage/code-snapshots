@@ -1529,7 +1529,9 @@ export class StandaloneHandler {
     const snapshot = await this.snapshotManager.getSnapshot(snapshotId);
 
     if (!snapshot) {
-      throw new Error('Snapshot ' + snapshotId + ' not found');
+      // Byte-identical to the IPC handler's message, trailing period included:
+      // both modes must report the same thing for the same failure.
+      throw new Error('Snapshot ' + snapshotId + ' not found.');
     }
 
     const includeFileList = options?.includeFileList === true;

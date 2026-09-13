@@ -979,10 +979,24 @@ export class SemanticSearchService implements vscode.Disposable {
               // on purgeFirst: if the delete itself failed, the old vectors are
               // intact and the snapshot really is still indexed.
               this.indexedSnapshots.delete(snapshotId);
-              await this.context.workspaceState.update(
-                'semanticSearch.indexedSnapshots',
-                Array.from(this.indexedSnapshots),
-              );
+              // The correction is best-effort: if the persist itself is what
+              // failed, a second throw here would escape the catch, abort every
+              // remaining snapshot and lose this run's failure report. The
+              // in-memory set is corrected either way.
+              try {
+                await this.context.workspaceState.update(
+                  'semanticSearch.indexedSnapshots',
+                  Array.from(this.indexedSnapshots),
+                );
+              } catch (persistError) {
+                log(
+                  `Error persisting the corrected indexed set: ${
+                    persistError instanceof Error
+                      ? persistError.message
+                      : String(persistError)
+                  }`,
+                );
+              }
             }
             log(`Error indexing snapshot ${snapshotId}: ${message}`);
           }

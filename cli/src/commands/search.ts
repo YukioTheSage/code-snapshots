@@ -289,13 +289,30 @@ export class SearchCommands {
   }
 
   async index(options: any): Promise<void> {
-    const snapshotIds: string[] =
-      typeof options?.snapshots === 'string' && options.snapshots.length > 0
-        ? options.snapshots
-            .split(',')
-            .map((id: string) => id.trim())
-            .filter((id: string) => id.length > 0)
-        : [];
+    // 'Named' is not the same as 'carried ids': --snapshots '' and
+    // --snapshots ',' both parse to zero ids, and reading that as an omitted
+    // flag would index everything -- which, with --force --purge, purges and
+    // re-embeds the whole workspace. A named-but-empty list is refused before
+    // any call, in the same shape as the --all + --snapshots contradiction.
+    const snapshotsNamed = typeof options?.snapshots === 'string';
+    const snapshotIds: string[] = snapshotsNamed
+      ? options.snapshots
+          .split(',')
+          .map((id: string) => id.trim())
+          .filter((id: string) => id.length > 0)
+      : [];
+
+    if (snapshotsNamed && snapshotIds.length === 0) {
+      printResult(
+        {
+          success: false,
+          error:
+            'Pass at least one id with --snapshots, or omit it to index every snapshot.',
+        },
+        options,
+      );
+      return;
+    }
 
     // --all is the explicit spelling of the default. Naming a list and asking
     // for all of them at once is a contradiction, not a preference.

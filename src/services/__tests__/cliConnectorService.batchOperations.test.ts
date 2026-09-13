@@ -317,9 +317,12 @@ describe('CliConnectorService - Batch Operations', () => {
 
       // Every analyzeChunk operation fails here (the snapshot lookup is not
       // stubbed in this test), so the batch verdict is false. What this test
-      // pins is the chunking stride and the metadata, asserted below.
+      // pins is the chunking stride and the metadata, asserted below. The count
+      // pins the premise: if a later setup change let an operation succeed, the
+      // verdict would flip and this test must say so through the counts.
       expect(result.success).toBe(false);
       expect(result.totalOperations).toBe(10);
+      expect(result.failedOperations).toBe(10);
       expect(result.results).toHaveLength(10);
       expect(result.metadata.parallel).toBe(true);
       expect(result.metadata.maxConcurrency).toBe(3);
@@ -454,9 +457,11 @@ describe('CliConnectorService - Batch Operations', () => {
       );
 
       // As above: the operations themselves fail, so the batch is a failure.
-      // The assertions below are about the stride covering each entry once.
+      // The count pins that premise; the assertions below are about the stride
+      // covering each entry once.
       expect(result.success).toBe(false);
       expect(result.totalOperations).toBe(5);
+      expect(result.failedOperations).toBe(5);
       expect(result.metadata.maxConcurrency).toBe(2);
 
       // Every operation is processed exactly once: the chunk stride still

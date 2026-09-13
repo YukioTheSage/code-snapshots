@@ -1057,7 +1057,11 @@ export function buildProgram(): Command {
     .command('auto-commit <operation>')
     .description('Create an auto-snapshot before a Git operation')
     .option('-d, --description <desc>', 'Snapshot description')
-    .option('-u, --include-untracked', 'Include untracked files', false)
+    .option(
+      '-u, --include-untracked',
+      'Recorded in the notes only (no effect on captured files)',
+      false,
+    )
     .action(gitCommands.autoSnapshotBeforeOperation.bind(gitCommands));
 
   gitCmd

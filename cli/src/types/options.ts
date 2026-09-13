@@ -280,7 +280,12 @@ export interface GitCommitOptions extends BaseCommandOptions {
 export interface GitAutoSnapshotOptions extends BaseCommandOptions {
   /** Description for the auto-snapshot */
   description?: string;
-  /** Include untracked files */
+  /**
+   * Recorded in the snapshot notes only: it does not change which files the
+   * snapshot captures, because untracked files are captured either way. The
+   * same-named option on `git commit` is implemented and stages untracked
+   * paths; this one has no staging step to affect.
+   */
   includeUntracked?: boolean;
 }
 

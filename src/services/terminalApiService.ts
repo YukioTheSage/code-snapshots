@@ -866,11 +866,17 @@ export class TerminalApiService implements TerminalApiInterface {
       // be filtered away there and silently index the whole workspace. Only an
       // absent key means 'every snapshot': JSON null is a value that failed to
       // carry ids, not an omission, and is rejected like any other non-array.
+      // A blank or whitespace-only element is refused as well: it survives the
+      // shape check, is filtered away inside the service, and would then mean
+      // 'every snapshot' -- the same silent degradation the null rejection
+      // exists to prevent.
       const snapshotIds = options.snapshotIds;
       if (
         snapshotIds !== undefined &&
         (!Array.isArray(snapshotIds) ||
-          snapshotIds.some((id) => typeof id !== 'string'))
+          snapshotIds.some(
+            (id) => typeof id !== 'string' || id.trim().length === 0,
+          ))
       ) {
         throw new Error('snapshotIds must be an array of strings');
       }

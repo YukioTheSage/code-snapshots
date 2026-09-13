@@ -135,7 +135,11 @@ describe('standalone compareSnapshotWithGitCommit', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(fixture.root, { recursive: true, force: true });
+    // A beforeEach failure leaves 'fixture' unset; without this guard the
+    // TypeError here would mask the real error and leak the temp repository.
+    if (fixture) {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it('classifies added, modified and deleted files against a real commit', async () => {
@@ -216,12 +220,18 @@ describe('standalone compareSnapshotWithGitCommit', () => {
     // Commit the working tree exactly as snapshot 2 recorded it. Compared
     // against THIS commit every snapshot path is unchanged -- which is the
     // assertion: a comparison that quietly asked about the working tree (or
-    // HEAD's status) instead of the named commit would still see the changes
-    // it reported a moment ago against commit A, and could not answer [].
+    // HEAD's status) instead of the named commit would answer from a tree that
+    // no longer matches, and could not answer [].
     git(root, 'add', '--', 'src/added.ts', 'assets/logo.png');
     git(root, 'commit', '--quiet', '-a', '-m', 'commit B');
     const commitB = git(root, 'rev-parse', 'HEAD');
     expect(commitB).not.toBe(commitA);
+
+    // Dirty a tracked file AFTER commit B, so the working tree and the commit
+    // disagree for the rest of this test. The previous fixture left the two
+    // identical, so a working-tree read could accidentally answer [] as well;
+    // now only a comparison that reads commit B's tree can.
+    fs.appendFileSync(path.join(root, 'src', 'added.ts'), '// dirty\n');
 
     const result = await handler.compareSnapshotWithGitCommit({
       snapshotId,
@@ -344,6 +354,8 @@ describe('standalone compareSnapshotWithGitCommit', () => {
         snapshotId: 'missing',
         commitHash: commitA,
       }),
-    ).rejects.toThrow('Snapshot missing not found');
+      // The Error form compares the message exactly, so the trailing period
+      // the IPC handler's twin carries is part of the pinned parity.
+    ).rejects.toThrow(new Error('Snapshot missing not found.'));
   });
 });

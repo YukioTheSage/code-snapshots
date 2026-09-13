@@ -69,7 +69,11 @@ describe('standalone autoSnapshotBeforeGitOperation', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(root, { recursive: true, force: true });
+    // A beforeEach failure leaves 'root' unset; without this guard the
+    // TypeError here would mask the real error and leak the temp directory.
+    if (root) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('takes a snapshot the Auto view classifies, without a git binary', async () => {

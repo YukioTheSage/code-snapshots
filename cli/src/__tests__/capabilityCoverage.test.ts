@@ -26,7 +26,9 @@ function standaloneSwitchCases(): Set<string> {
   const start = source.indexOf("if (this.activeMode === 'standalone')");
   const end = source.indexOf("} else if (this.activeMode === 'ipc')", start);
   const body = source.slice(start, end);
-  return new Set([...body.matchAll(/case '([A-Za-z]+)'/g)].map((m) => m[1]));
+  return new Set(
+    [...body.matchAll(/case '([A-Za-z0-9_]+)'/g)].map((m) => m[1]),
+  );
 }
 
 function ipcCases(): Set<string> {
@@ -34,7 +36,9 @@ function ipcCases(): Set<string> {
   const start = source.indexOf('private async handleCliRequest');
   const end = source.indexOf('Unknown method', start);
   const body = source.slice(start, end);
-  return new Set([...body.matchAll(/case '([A-Za-z]+)'/g)].map((m) => m[1]));
+  return new Set(
+    [...body.matchAll(/case '([A-Za-z0-9_]+)'/g)].map((m) => m[1]),
+  );
 }
 
 describe('CLI capability coverage', () => {
@@ -67,16 +71,24 @@ describe('CLI capability coverage', () => {
     ]);
   });
 
-  it('serves the two git methods in standalone as well as over IPC', () => {
-    // Both were allowlisted, documented and served by the extension, but absent
-    // from STANDALONE_METHODS, so with no extension running 'git auto-commit'
-    // and 'git compare' died in the per-method IPC fallback.
-    for (const method of [
-      'autoSnapshotBeforeGitOperation',
-      'compareSnapshotWithGitCommit',
-    ]) {
+  // The two methods are named in the test title so a regression says WHICH one
+  // is missing: the original loop failed with a bare 'Expected true / Received
+  // false' and no method name.
+  it.each(['autoSnapshotBeforeGitOperation', 'compareSnapshotWithGitCommit'])(
+    'serves %s in standalone as well as over IPC',
+    (method) => {
+      // Both were allowlisted, documented and served by the extension, but absent
+      // from STANDALONE_METHODS, so with no extension running 'git auto-commit'
+      // and 'git compare' died in the per-method IPC fallback.
       expect(standalone.has(method)).toBe(true);
       expect(ipc.has(method)).toBe(true);
-    }
+    },
+  );
+
+  it('leaves KNOWN_UNSERVED empty, so nothing is explained away', () => {
+    // Empty is the goal the plan states; an entry here is a decision, not a
+    // backlog item. Without this assertion an entry could be added silently and
+    // the 'serves every allowlisted method' test above would still pass.
+    expect([...KNOWN_UNSERVED]).toEqual([]);
   });
 });
