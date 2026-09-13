@@ -26,6 +26,7 @@ import {
 import { SemanticSearchResult } from './semanticSearchService';
 import { QualityMetrics, ContextInfo } from '../types/enhancedChunking';
 import { DEFAULT_QUALITY_METRICS, toRatio } from './qualityScale';
+import { filePathMatchesPattern } from '../utils/pathMatching';
 
 /**
  * Ranking configuration for multi-criteria ranking
@@ -618,6 +619,32 @@ export class ResultManager {
       if (criteria.excludeCodeSmells && criteria.excludeCodeSmells.length > 0) {
         // This would need to be implemented with actual code smell detection
         // For now, we'll skip this filter
+      }
+
+      // File path patterns. The producer is
+      // `QueryProcessor.determineFilters`, which sets `includeFilePatterns` from
+      // the language context and `excludeFilePatterns` for
+      // `find_implementation`; before this both were written and read nowhere,
+      // so "exclude test files for implementation searches" was configuration
+      // reading as a working rule.
+      if (
+        criteria.includeFilePatterns &&
+        criteria.includeFilePatterns.length > 0 &&
+        !criteria.includeFilePatterns.some((pattern: string) =>
+          filePathMatchesPattern(result.filePath, pattern),
+        )
+      ) {
+        return false;
+      }
+
+      if (
+        criteria.excludeFilePatterns &&
+        criteria.excludeFilePatterns.length > 0 &&
+        criteria.excludeFilePatterns.some((pattern: string) =>
+          filePathMatchesPattern(result.filePath, pattern),
+        )
+      ) {
+        return false;
       }
 
       return true;

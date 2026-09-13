@@ -49,3 +49,32 @@ export function pathMatchesPattern(
 
   return false;
 }
+
+/**
+ * Tests a workspace-relative file path against one glob pattern.
+ *
+ * The pattern is matched against the full path, and then against every single
+ * path segment. Both shapes a caller actually writes need this: a pattern such
+ * as "src/**\/*.ts" matches the whole path, while "*.ts" and "*test*" - the two
+ * forms `QueryProcessor.determineFilters` produces - contain a "*" that cannot
+ * cross a separator, so a bare minimatch of "src/services/userService.ts"
+ * against "*.ts" is false. Segment matching also catches a directory name,
+ * which is what the exclude rule needs: "*test*" must drop
+ * "…/__tests__/helpers.ts", not only "…/user.test.ts".
+ */
+export function filePathMatchesPattern(
+  filePath: string,
+  pattern: string,
+): boolean {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  const normalizedPattern = pattern.replace(/\\/g, '/');
+  const minimatchOptions = { dot: true };
+
+  if (minimatch(normalizedPath, normalizedPattern, minimatchOptions)) {
+    return true;
+  }
+
+  return normalizedPath
+    .split('/')
+    .some((segment) => minimatch(segment, normalizedPattern, minimatchOptions));
+}

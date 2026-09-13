@@ -891,7 +891,10 @@ export class QueryProcessor {
       filters.qualityThreshold = 0.7;
     }
 
-    // Filter by language if specified
+    // Filter by language if specified. The pattern is matched against the
+    // result file path, its basename and each of its path segments
+    // (`filePathMatchesPattern` in `../utils/pathMatching`), which is what makes
+    // the bare "*.ts" form select every TypeScript file in any directory.
     if (context.language) {
       filters.includeFilePatterns = [
         `*.${this.getFileExtensionForLanguage(context.language)}`,
