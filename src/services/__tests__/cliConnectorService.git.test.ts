@@ -684,6 +684,10 @@ describe('CliConnectorService git methods', () => {
         expect.objectContaining({
           description: 'Auto-snapshot before merge',
           silent: true,
+          // 'auto-snapshot' is not in treeView's classifier list, so the
+          // snapshot this path created was filed under Manual. The tag set is
+          // the contract. 'auto' is the tag the classifier reads.
+          tags: ['auto', 'git'],
         }),
       );
     });

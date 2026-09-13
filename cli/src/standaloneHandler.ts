@@ -1303,6 +1303,21 @@ export class StandaloneHandler {
   }
 
   /**
+   * Validate a required string field of a CLI payload.
+   *
+   * Mirrors CliConnectorService.requireNonEmptyString so both modes answer a
+   * malformed request with the same message.
+   */
+  private requirePayloadString(value: unknown, field: string): string {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(
+        'Missing or invalid "' + field + '": expected a non-empty string.',
+      );
+    }
+    return value;
+  }
+
+  /**
    * Get comprehensive git branch info
    */
   public getGitBranchInfo(): GitBranchInfo {
@@ -1408,6 +1423,57 @@ export class StandaloneHandler {
       }`;
 
     return git.createCommit(message);
+  }
+
+  /**
+   * Take the snapshot 'codelapse git auto-commit' promises.
+   *
+   * Needs no Git binary: the operation is a label for the description and the
+   * notes, and the snapshot is an ordinary capture of the working tree. The
+   * payload mirrors the extension's autoSnapshotBeforeGitOperation handler --
+   * { snapshot: { id, description } } -- so commands/git.ts prints the same
+   * thing in either mode.
+   *
+   * The ['auto', 'git'] tags are the same set the extension writes: 'auto' is
+   * what treeView.isAutoSnapshot classifies on, and both modes must use the
+   * same value or they drift apart again.
+   */
+  public async autoSnapshotBeforeGitOperation(options: {
+    operation?: string;
+    description?: string;
+    includeUntracked?: boolean;
+  }): Promise<{ snapshot: { id: string; description: string } }> {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+
+    const operation = this.requirePayloadString(
+      options?.operation,
+      'operation',
+    );
+    const includeUntracked = options?.includeUntracked === true;
+    const description =
+      typeof options?.description === 'string' &&
+      options.description.trim().length > 0
+        ? options.description
+        : 'Auto-snapshot before ' + operation;
+
+    const snapshot = await this.takeSnapshot({
+      description,
+      tags: ['auto', 'git'],
+      notes:
+        'Created automatically before the git operation "' +
+        operation +
+        '" (includeUntracked: ' +
+        includeUntracked +
+        ').',
+    });
+
+    // No completeness guard here, unlike the IPC handler: that one consumes an
+    // envelope whose snapshot is optional, while SnapshotManager.takeSnapshot is
+    // typed to return a Snapshot and defaults an empty description. A guard
+    // against a value the type forbids would be unreachable code.
+    return { snapshot: { id: snapshot.id, description: snapshot.description } };
   }
 
   /**

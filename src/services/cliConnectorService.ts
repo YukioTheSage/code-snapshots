@@ -1193,7 +1193,11 @@ export class CliConnectorService implements vscode.Disposable {
 
     const response = await this.terminalApiService.takeSnapshot({
       description,
-      tags: ['auto-snapshot', 'git'],
+      // 'auto-snapshot' is not in treeView.isAutoSnapshot's list, so every
+      // snapshot this path created was filed under Manual. 'auto' is the tag
+      // the classifier reads, and both modes use the same set so they cannot
+      // drift apart again.
+      tags: ['auto', 'git'],
       notes: `Created automatically before the git operation "${operation}" (includeUntracked: ${includeUntracked}).`,
       silent: true,
     });
