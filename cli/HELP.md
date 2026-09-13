@@ -79,7 +79,7 @@ codelapse <command> --help
 - `codelapse search query <query>` - Semantic search across snapshots
 - `codelapse search behavioral <description>` - Search by behavioral description
 - `codelapse search pattern <pattern-type>` - Search for design patterns
-- `codelapse search index [--all] [--snapshots <ids>] [--force] [--purge]` - Index snapshots for search. With no flags every snapshot that is not already indexed is indexed; `--snapshots` names specific ones; `--force` re-indexes snapshots already recorded as indexed; `--purge` deletes each snapshot's vectors before indexing it, which is what makes a re-index replace the old chunk ids instead of mixing with them.
+- `codelapse search index [--all] [--snapshots <ids>] [--force] [--purge]` - Index snapshots for search. With no flags every snapshot that is not already indexed is indexed; `--snapshots` names specific ones; `--force` re-indexes snapshots already recorded as indexed; `--purge` deletes each snapshot's vectors before indexing it so a re-index replaces the old chunk ids instead of mixing with them. Since plan 11 the index path purges a snapshot's vectors before upserting unconditionally, so `--purge` is accepted and kept for compatibility but is a no-op.
 - `codelapse analyze chunk <chunk-id>` - Analyze a specific code chunk ⚠️ **placeholder data** (see below)
 - `codelapse analyze file <file-path>` - Analyze a complete file (derived from the snapshot's real content)
 - `codelapse analyze quality <target>` - Analyze code quality metrics ⚠️ **placeholder data**
