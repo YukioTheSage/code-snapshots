@@ -1086,22 +1086,35 @@ export class SemanticSearchService implements vscode.Disposable {
           processed++;
           attempted++;
 
-          // Taken from the purge outcome, not from the await resolving. A
-          // purge that failed or was skipped (no stored credentials, or no
-          // index to delete from) leaves the old vectors in the store, so that
-          // snapshot is still indexed and its mark must survive.
-          let purged = false;
+          // Whether this snapshot's vectors may already be gone if a later step
+          // of the same try block throws. Only entering `indexSnapshot` sets it:
+          // its upsert purges the snapshot's vectors before it writes any batch
+          // (plan 11), and that purge runs after `ensureInitialized`, which can
+          // create the index and obtain the credentials the explicit `--purge`
+          // below deliberately refuses to prompt for. A purge the explicit call
+          // *skipped* can therefore still have happened by the time
+          // `indexSnapshot` throws.
+          //
+          // The explicit purge is deliberately not part of this flag: if it
+          // throws, it never reached the store, the vectors are intact and the
+          // mark must survive. Its outcome is not consulted here any more
+          // either - `indexSnapshot` may purge after a skip just as it may
+          // after a delete, so the outcome cannot change the decision.
+          let vectorsMayBeGone = false;
           try {
             if (options.purgeFirst === true) {
               // A re-index without this mixes the old and the new chunk id sets
               // for the same snapshot. Plan 11 also makes the upsert itself
               // idempotent; this call stays correct either way.
-              const purge =
-                await this.vectorDatabaseService.deleteSnapshotVectors(
-                  snapshotId,
-                );
-              purged = purge.purged;
+              await this.vectorDatabaseService.deleteSnapshotVectors(
+                snapshotId,
+              );
             }
+
+            // Over-dropping is the safe direction: it costs one unnecessary
+            // re-index on the next run, where keeping the mark would let a later
+            // non-forced run report 'already indexed' over an empty store.
+            vectorsMayBeGone = true;
             await this.indexSnapshot(snapshotId);
             this.indexedSnapshots.add(snapshotId);
             // Persist updated indexed snapshots
@@ -1111,13 +1124,13 @@ export class SemanticSearchService implements vscode.Disposable {
             const message =
               error instanceof Error ? error.message : String(error);
             failed.push({ snapshotId, error: message });
-            if (purged) {
-              // The vectors are gone but the snapshot was not re-indexed, so a
-              // persisted mark would make every later selection skip it and
+            if (vectorsMayBeGone) {
+              // The vectors may be gone but the snapshot was not re-indexed, so
+              // a persisted mark would make every later selection skip it and
               // report it as already indexed over an empty store. Forget it so
-              // the next run retries. Guarded on the delete having happened, not
-              // on purgeFirst: if the delete itself failed, the old vectors are
-              // intact and the snapshot really is still indexed.
+              // the next run retries. Guarded on the regions that can have
+              // deleted vectors, not on purgeFirst: if the explicit purge
+              // itself threw, it never reached the store and the mark stays.
               this.indexedSnapshots.delete(snapshotId);
               // The correction is best-effort: if the persist itself is what
               // failed, a second throw here would escape the catch, abort every

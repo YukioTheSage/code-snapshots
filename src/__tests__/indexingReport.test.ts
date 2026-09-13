@@ -292,16 +292,16 @@ describe('indexAllSnapshots reporting', () => {
     expect(indexSnapshot).not.toHaveBeenCalled();
   });
 
-  it('keeps the indexed mark when the purge was skipped, so a failed re-index cannot fake an empty store', async () => {
-    const { service } = buildService([{ id: 'a' }], []);
+  it('drops the indexed mark when a skipped purge is followed by a failed re-index', async () => {
+    const { service, workspaceState } = buildService([{ id: 'a' }], []);
     (
       service as unknown as { indexedSnapshots: Set<string> }
     ).indexedSnapshots.add('a');
     (
       service as unknown as { vectorDatabaseService: unknown }
     ).vectorDatabaseService = {
-      // The store could not be reached without prompting, so nothing was
-      // removed: the vectors are still there and the mark is still true.
+      // The explicit purge deliberately does not prompt and does not create
+      // the index, so it can skip here.
       deleteSnapshotVectors: jest.fn(async () => ({
         purged: false,
         skippedReason: 'no-credentials',
@@ -317,9 +317,13 @@ describe('indexAllSnapshots reporting', () => {
       purgeFirst: true,
     });
 
-    // A skip is not a purge. Treating the resolved await as one dropped the
-    // mark for a snapshot whose vectors are still in the store -- the opposite
-    // lie from the one the mark was introduced to prevent.
+    // A skipped *explicit* purge is no longer evidence that the vectors are
+    // still there: `indexSnapshot`'s upsert purges unconditionally, after
+    // `ensureInitialized` has created the index and produced the credentials
+    // that the explicit call refused to prompt for. The caller cannot see how
+    // far the callee got, so a throw from `indexSnapshot` drops the mark. The
+    // cost is one unnecessary re-index if the vectors did survive; keeping the
+    // mark over an empty store is the worse lie.
     expect(outcome.failed).toEqual([
       { snapshotId: 'a', error: expect.stringContaining('boom a') },
     ]);
@@ -327,7 +331,11 @@ describe('indexAllSnapshots reporting', () => {
       (
         service as unknown as { indexedSnapshots: Set<string> }
       ).indexedSnapshots.has('a'),
-    ).toBe(true);
+    ).toBe(false);
+    expect(workspaceState.update).toHaveBeenCalledWith(
+      'semanticSearch.indexedSnapshots',
+      [],
+    );
   });
 
   it('still forgets the mark after a real purge when the re-index failed', async () => {
@@ -349,6 +357,35 @@ describe('indexAllSnapshots reporting', () => {
 
     // The vectors are gone and the snapshot was not re-indexed, so the mark
     // must go: the plan-09 correction still applies to a purge that happened.
+    expect(
+      (
+        service as unknown as { indexedSnapshots: Set<string> }
+      ).indexedSnapshots.has('a'),
+    ).toBe(false);
+    expect(workspaceState.update).toHaveBeenCalledWith(
+      'semanticSearch.indexedSnapshots',
+      [],
+    );
+  });
+
+  it('forgets the mark when a forced re-index fails after the upsert purged', async () => {
+    const { service, workspaceState } = buildService([{ id: 'a' }], ['a']);
+    (
+      service as unknown as { indexedSnapshots: Set<string> }
+    ).indexedSnapshots.add('a');
+
+    // No purgeFirst: on this path the only purge is the one `upsertVectors`
+    // performs before it writes a batch (plan 11).
+    const outcome = await service.indexAllSnapshots({ force: true });
+
+    // The upsert purges before it writes anything, so a throw out of
+    // `indexSnapshot` may already have deleted the vectors. The flag used to
+    // come only from the explicit purge, so it stayed false here and the mark
+    // survived a failure that had emptied the store -- after which a later
+    // non-forced run answered 'already indexed' over nothing.
+    expect(outcome.failed).toEqual([
+      { snapshotId: 'a', error: expect.stringContaining('boom a') },
+    ]);
     expect(
       (
         service as unknown as { indexedSnapshots: Set<string> }
