@@ -906,10 +906,12 @@ export class QueryProcessor {
     }
 
     // Exclude test files for implementation searches (unless specifically
-    // looking for tests). The patterns name tests rather than test substrings:
-    // under the segment rule a "*test*" also matched src/latest/index.ts and
-    // src/contest/entry.ts. The brace-expanded directory form stays a single
-    // segment, which is the shape that rule can match.
+    // looking for tests). The patterns name the directory conventions and the
+    // test-file suffixes rather than test substrings: under the segment rule a
+    // "*test*" also matched src/latest/index.ts and src/contest/entry.ts, and a
+    // bare convention such as "testing" or "specs" has to be listed to match
+    // at all. The brace-expanded directory form stays a single segment, which
+    // is the shape that rule can match.
     if (
       intent.primary === 'find_implementation' &&
       !intent.secondary.includes('testing')
@@ -917,7 +919,7 @@ export class QueryProcessor {
       filters.excludeFilePatterns = [
         '*.test.*',
         '*.spec.*',
-        '{test,tests,__tests__,spec,__spec__}',
+        '{test,tests,__tests__,testing,spec,specs,__specs__,__spec__}',
       ];
     }
 

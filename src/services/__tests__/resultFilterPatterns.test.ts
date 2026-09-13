@@ -91,7 +91,7 @@ describe('the producer excludes test paths, not substrings', () => {
   const testPatterns = [
     '*.test.*',
     '*.spec.*',
-    '{test,tests,__tests__,spec,__spec__}',
+    '{test,tests,__tests__,testing,spec,specs,__specs__,__spec__}',
   ];
 
   it('emits test-specific patterns for an implementation search', async () => {
@@ -128,6 +128,34 @@ describe('the producer excludes test paths, not substrings', () => {
     ]);
   });
 
+  it('separates directory conventions from substrings in one pass', async () => {
+    const results = [
+      makeResult('src/latest/index.ts', 0.95),
+      makeResult('src/testing/helpers.ts', 0.9),
+      makeResult('src/contest/entry.ts', 0.85),
+      makeResult('src/specs/helpers.ts', 0.8),
+      makeResult('src/inspector/panel.ts', 0.75),
+      makeResult('src/__specs__/helpers.ts', 0.7),
+      makeResult('src/perspective/view.ts', 0.65),
+    ];
+
+    const processed = await new QueryProcessor().processQuery(
+      'find implementation of authentication',
+      { language: 'typescript' },
+    );
+
+    // Both directions of the boundary in one result set: the three
+    // conventions are dropped, the four substrings are not. A set that
+    // reintroduced substring matching would lose latest/contest, and a set
+    // that forgot an alternative would keep testing/specs/__specs__.
+    expect(await filterWith(results, processed.filters)).toEqual([
+      'src/latest/index.ts',
+      'src/contest/entry.ts',
+      'src/inspector/panel.ts',
+      'src/perspective/view.ts',
+    ]);
+  });
+
   it('excludes real test files and test directories', async () => {
     const results = [
       makeResult('src/services/userService.ts', 0.95),
@@ -136,8 +164,11 @@ describe('the producer excludes test paths, not substrings', () => {
       makeResult('src/test/helpers.ts', 0.84),
       makeResult('src/tests/helpers.ts', 0.8),
       makeResult('src/__tests__/helpers.ts', 0.76),
-      makeResult('src/spec/helpers.ts', 0.72),
-      makeResult('src/__spec__/helpers.ts', 0.68),
+      makeResult('src/testing/helpers.ts', 0.72),
+      makeResult('src/spec/helpers.ts', 0.68),
+      makeResult('src/specs/helpers.ts', 0.64),
+      makeResult('src/__specs__/helpers.ts', 0.64),
+      makeResult('src/__spec__/helpers.ts', 0.64),
     ];
 
     const processed = await new QueryProcessor().processQuery(
