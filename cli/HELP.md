@@ -50,9 +50,9 @@ codelapse <command> --help
 > operations that need only a repository — against `.snapshots/` directly.
 > It does *not* implement `workspace state` / `workspace files`, the
 > `analyze`, `chunk`, `search index`, `rules`, `filter` and `diagnostics` API
-> methods, or the git operations that compare against commits. Those fail with
-> an explicit "not supported in standalone mode" error rather than returning
-> anything invented. Start VS Code with the extension active to use them.
+> methods. Those fail with an explicit "not supported in standalone mode" error
+> rather than returning anything invented. Start VS Code with the extension
+> active to use them.
 >
 > `git info`, `git branches` and the git write operations need a runnable
 > `git` executable; when it cannot be run the command fails with
@@ -79,16 +79,16 @@ codelapse <command> --help
 - `codelapse search query <query>` - Semantic search across snapshots
 - `codelapse search behavioral <description>` - Search by behavioral description
 - `codelapse search pattern <pattern-type>` - Search for design patterns
-- `codelapse search index` - Index snapshots for search. Indexes every snapshot that is not already indexed; `--snapshots <ids>` names specific ones, `--force` re-indexes ones already indexed, and `--purge` deletes a snapshot's vectors before re-indexing it.
+- `codelapse search index [--all] [--snapshots <ids>] [--force] [--purge]` - Index snapshots for search. With no flags every snapshot that is not already indexed is indexed; `--snapshots` names specific ones; `--force` re-indexes snapshots already recorded as indexed; `--purge` deletes each snapshot's vectors before indexing it, which is what makes a re-index replace the old chunk ids instead of mixing with them.
 - `codelapse analyze chunk <chunk-id>` - Analyze a specific code chunk ⚠️ **placeholder data** (see below)
 - `codelapse analyze file <file-path>` - Analyze a complete file (derived from the snapshot's real content)
 - `codelapse analyze quality <target>` - Analyze code quality metrics ⚠️ **placeholder data**
 
 ### Git Integration
 - `codelapse git commit <snapshot-id>` - Create Git commit from snapshot
-- `codelapse git auto-commit <operation>` - Auto-snapshot before Git operations (requires the extension; not available in standalone mode)
+- `codelapse git auto-commit <operation>` - Auto-snapshot before Git operations
 - `codelapse git info` - Get Git repository information
-- `codelapse git compare <snapshot-id> <commit-hash>` - Compare with Git commit (requires the extension; not available in standalone mode)
+- `codelapse git compare <snapshot-id> <commit-hash>` - Compare a snapshot with a Git commit
 
 ### Auto-Snapshot Rules
 - `codelapse rules list` - List auto-snapshot rules

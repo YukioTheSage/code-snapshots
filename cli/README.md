@@ -828,9 +828,10 @@ Create a Git commit from a snapshot.
 ```
 
 #### `auto-commit <operation>`
-Create an auto-snapshot before a Git operation. **Requires the extension** — this
-method is not implemented in standalone mode, where it fails with
-`Method autoSnapshotBeforeGitOperation not supported in standalone mode`.
+Create an auto-snapshot before a Git operation. Works in both modes. Standalone
+takes the snapshot itself — no `git` binary is needed, because the operation is a
+label for the snapshot description — and returns the same payload the extension
+returns: `{ snapshot: { id, description } }`, tagged `['auto', 'git']`.
 - `-d, --description <desc>`: Snapshot description.
 - `-u, --include-untracked`: Include untracked files.
 
@@ -1038,7 +1039,7 @@ When a command fails, it returns a standardized JSON error object:
 }
 ```
 
-**Solution**: Build search index with `codelapse search index --all`.
+**Solution**: Build search index with `codelapse search index`.
 
 ### Error Handling Best Practices
 
@@ -1278,7 +1279,7 @@ codelapse workspace state --json --silent
 **Solutions**:
 ```bash
 # Build search index
-codelapse search index --all --json --silent
+codelapse search index --json --silent
 
 # Check index status
 codelapse search index --json --silent

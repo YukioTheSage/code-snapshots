@@ -263,15 +263,15 @@ that is not already indexed.
 codelapse search index
 codelapse search index --snapshots snapshot-1,snapshot-2
 codelapse search index --force
-codelapse search index --snapshots snapshot-1 --purge
+codelapse search index --snapshots snapshot-123 --purge
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--all` | Index every snapshot (the default) |
+| `--all` | Index every snapshot (the default; cannot be combined with `--snapshots`) |
 | `--snapshots <ids>` | Index specific snapshots (comma-separated IDs) |
-| `--force` | Re-index snapshots that are already indexed |
-| `--purge` | Delete a snapshot's vectors before re-indexing it |
+| `--force` | Re-index snapshots that are already recorded as indexed |
+| `--purge` | Delete each snapshot's vectors before indexing it |
 
 `--all` together with `--snapshots` is refused before the extension is called.
 
@@ -588,10 +588,10 @@ codelapse git commit snapshot-123 --branch feature/auth --push
 
 #### `git auto-commit <operation>`
 
-Create an auto-snapshot before a Git operation. **Requires a running extension** —
-`autoSnapshotBeforeGitOperation` is not implemented in standalone mode, where this
-command exits 1 with `Method autoSnapshotBeforeGitOperation not supported in
-standalone mode`.
+Works in both modes. Standalone takes the snapshot itself — no `git` binary is
+needed, because the operation is a label for the snapshot description — and
+returns the same payload the extension returns:
+`{ snapshot: { id, description } }`, tagged `['auto', 'git']`.
 
 ```bash
 codelapse git auto-commit merge
@@ -623,6 +623,13 @@ codelapse git compare snapshot-123 abc1234 --files
 | Option | Description |
 |--------|-------------|
 | `--files` | Show file-level changes |
+
+Works in both modes; standalone reads the commit through the shared
+`GitIntegration`. As in the extension, the comparison walks the paths the
+snapshot records, so a file the commit contains but the snapshot never saw cannot
+be reported, and a well-formed commit hash that does not resolve in the
+repository reads as "every snapshot file was added" — pass a hash you have
+resolved.
 
 #### `git branches`
 
@@ -1169,7 +1176,7 @@ running) and reading the resulting envelope.
 | File operations | Yes | Yes |
 | Filtering & metadata (`filter …`) | **No** | Yes |
 | Configuration | Yes | Yes |
-| Git integration | **Partly** — `commit`, `info` work; `auto-commit` and `compare` require IPC | Yes |
+| Git integration | Yes | Yes |
 | Workspace info (`workspace info`) | Yes | Yes |
 | Workspace state (`workspace state`/`files`) | No | Yes |
 | Utility tasks (`export`, `validate`) | No | Yes |

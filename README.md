@@ -303,7 +303,7 @@ codelapse snapshot compare snap-1 snap-2 --files    # Compare snapshots
 
 # Semantic Search (Experimental)
 codelapse search query "authentication code" --limit 5
-codelapse search index --all                        # Build search index
+codelapse search index                              # Build search index
 
 # Git Integration & Workspace
 codelapse git commit snapshot-123 -m "My commit"    # Create Git commit

@@ -230,9 +230,25 @@ interface SnapshotFilter {
 ### CodelapseConfig
 
 ```typescript
+interface AutoSnapshotRule {
+  pattern: string;
+  intervalMinutes: number;
+  enabled?: boolean;
+}
+
+interface AutoSnapshotConfig {
+  rules: AutoSnapshotRule[];
+}
+
 interface CodelapseConfig {
   snapshotLocation: string;
   maxSnapshots: number;
+  /**
+   * Maximum bytes the snapshot store may occupy. 0 disables the limit, which is
+   * the default, so turning it on can never surprise an existing store.
+   */
+  maxSnapshotStoreBytes: number;
+  autoSnapshot: AutoSnapshotConfig;
   git: {
     addCommitInfo: boolean;
   };
@@ -265,6 +281,10 @@ The package reads configuration from multiple sources:
 {
   "snapshotLocation": ".snapshots",
   "maxSnapshots": 50,
+  "maxSnapshotStoreBytes": 0,
+  "autoSnapshot": {
+    "rules": []
+  },
   "git": {
     "addCommitInfo": true
   }

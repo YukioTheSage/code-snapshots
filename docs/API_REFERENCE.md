@@ -496,7 +496,7 @@ interface IndexResponse {
 
 **Example:**
 ```bash
-codelapse search index --all --json --silent
+codelapse search index --json --silent
 ```
 
 ## Workspace API
@@ -786,7 +786,7 @@ codelapse api takeSnapshot --data '{"description": "Direct API call", "tags": ["
 | Error Code | Description | Solution |
 |------------|-------------|----------|
 | `API_KEY_MISSING` | Search API key not configured | Configure API key or disable search |
-| `INDEX_NOT_FOUND` | Search index not built | Run `search index --all` |
+| `INDEX_NOT_FOUND` | Search index not built | Run `search index` |
 | `SEARCH_SERVICE_ERROR` | External search service error | Check API key and network connectivity |
 
 ### Workspace Errors
