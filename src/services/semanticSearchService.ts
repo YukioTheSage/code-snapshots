@@ -862,9 +862,20 @@ export class SemanticSearchService implements vscode.Disposable {
    * consuming topK slots on hits that were then discarded. Failing before the
    * bookkeeping leaves the snapshot marked as indexed so a later attempt can
    * retry, and the error is propagated for the caller to report.
+   *
+   * A skipped purge is bookkeeping, not a failure: the vectors were never
+   * there, so the snapshot is removed from the index record and the skip is
+   * logged.
    */
   async deleteSnapshotIndexing(snapshotId: string): Promise<void> {
-    await this.vectorDatabaseService.deleteSnapshotVectors(snapshotId);
+    const purge = await this.vectorDatabaseService.deleteSnapshotVectors(
+      snapshotId,
+    );
+    if (!purge.purged) {
+      log(
+        `Snapshot ${snapshotId} removed from the search index bookkeeping without a vector purge (${purge.skippedReason}).`,
+      );
+    }
 
     this.indexedSnapshots.delete(snapshotId);
     // Persist removal
@@ -978,19 +989,21 @@ export class SemanticSearchService implements vscode.Disposable {
           processed++;
           attempted++;
 
-          // Set only once the delete has actually resolved. A purge that failed
-          // leaves the old vectors in the store, so that snapshot is still
-          // indexed and its mark must survive.
+          // Taken from the purge outcome, not from the await resolving. A
+          // purge that failed or was skipped (no stored credentials, or no
+          // index to delete from) leaves the old vectors in the store, so that
+          // snapshot is still indexed and its mark must survive.
           let purged = false;
           try {
             if (options.purgeFirst === true) {
               // A re-index without this mixes the old and the new chunk id sets
               // for the same snapshot. Plan 11 also makes the upsert itself
               // idempotent; this call stays correct either way.
-              await this.vectorDatabaseService.deleteSnapshotVectors(
-                snapshotId,
-              );
-              purged = true;
+              const purge =
+                await this.vectorDatabaseService.deleteSnapshotVectors(
+                  snapshotId,
+                );
+              purged = purge.purged;
             }
             await this.indexSnapshot(snapshotId);
             this.indexedSnapshots.add(snapshotId);

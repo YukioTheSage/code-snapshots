@@ -35,6 +35,17 @@ export interface SearchResult {
   metadata: CodeChunkMetadata;
 }
 
+/**
+ * What a vector purge did. A purge is skipped when the store cannot be reached
+ * without prompting for credentials or creating an index; the caller reports the
+ * skip instead of treating it as a failure, because the snapshot is deleted
+ * either way and there is nothing to remove.
+ */
+export interface VectorPurgeOutcome {
+  purged: boolean;
+  skippedReason?: 'no-credentials' | 'index-not-found';
+}
+
 export class VectorDatabaseService {
   private readonly INDEX_NAME = 'codelapse-snapshots';
   private readonly DIMENSION = 3072; // Must match Gemini's embedding dimension
@@ -351,6 +362,46 @@ export class VectorDatabaseService {
   }
 
   /**
+   * Attach to the workspace index using only credentials that are already
+   * stored, and only when the index already exists.
+   *
+   * The delete path must not prompt and must not create the index:
+   * `promptForCredentials` blocks on a modal in a real window and never settles
+   * in a headless host, and an index is a provisioned cloud resource that a
+   * delete has no business creating. Index creation and credential prompting
+   * stay on the explicit index and search paths, which call `ensureInitialized`.
+   */
+  private async attachToExistingIndex(): Promise<
+    'ready' | 'no-credentials' | 'index-not-found'
+  > {
+    if (this.pineconeClient && this.index) {
+      return 'ready';
+    }
+
+    // The constructor string form (workspace scope only) has no credentials
+    // manager at all, so the read is guarded rather than assumed.
+    if (typeof this.credentialsManager?.getPineconeApiKey !== 'function') {
+      return 'no-credentials';
+    }
+
+    const apiKey = await this.credentialsManager.getPineconeApiKey();
+    if (!apiKey) {
+      return 'no-credentials';
+    }
+
+    const client = new Pinecone({ apiKey });
+    const indexList = await client.listIndexes();
+    const indexNames = indexList.indexes?.map((index) => index.name) || [];
+    if (!indexNames.includes(this.INDEX_NAME)) {
+      return 'index-not-found';
+    }
+
+    this.pineconeClient = client;
+    this.index = client.Index(this.INDEX_NAME);
+    return 'ready';
+  }
+
+  /**
    * Deletes all vectors for a snapshot.
    *
    * Pinecone's v5 data-plane API has no `delete()`. It exposes `deleteAll`,
@@ -359,9 +410,22 @@ export class VectorDatabaseService {
    * (the compiled SDK does `requestOptions.filter = options`). Passing a
    * wrapper filters on a metadata field literally named `filter`, matches no
    * vector, returns HTTP 200 and silently deletes nothing.
+   *
+   * Returns what the purge did. A skip — no stored credentials, or no index to
+   * attach to — is reported, not thrown, because there is nothing to remove and
+   * the snapshot is deleted regardless.
    */
-  async deleteSnapshotVectors(snapshotId: string): Promise<void> {
-    await this.ensureInitialized();
+  async deleteSnapshotVectors(snapshotId: string): Promise<VectorPurgeOutcome> {
+    const attachment = await this.attachToExistingIndex();
+    if (attachment !== 'ready') {
+      // Reported, not thrown: there is nothing to remove, and the snapshot is
+      // deleted regardless. This log line is what stops the skip being silent.
+      log(
+        `Skipping vector purge for snapshot ${snapshotId} (${attachment}). No stored vectors were removed.`,
+      );
+      return { purged: false, skippedReason: attachment };
+    }
+
     const idx = this.getIndex();
 
     const deleteMany = (idx as unknown as { deleteMany?: unknown }).deleteMany;
@@ -386,6 +450,8 @@ export class VectorDatabaseService {
       log(`Error deleting vectors for snapshot ${snapshotId}: ${error}`);
       throw new Error(`Failed to delete vectors for snapshot: ${error}`);
     }
+
+    return { purged: true };
   }
 
   /**

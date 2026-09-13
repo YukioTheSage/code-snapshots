@@ -99,7 +99,7 @@ describe('SemanticSearchService.deleteSnapshotIndexing', () => {
   });
 
   it('clears the snapshot only after the store confirms', async () => {
-    const deleteVectors = jest.fn().mockResolvedValue(undefined);
+    const deleteVectors = jest.fn().mockResolvedValue({ purged: true });
     const { service, workspaceState } = await buildService(deleteVectors);
     (service as any).indexedSnapshots.add('snap-a');
     (service as any).processingQueue = ['snap-a', 'snap-b'];
