@@ -46,19 +46,22 @@ describe('standalone git commit from a snapshot', () => {
   beforeEach(() => {
     useRealFileSystem();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelapse-gitcommit-'));
+    const gitIntegration = new GitIntegration(root);
+    const handler = new StandaloneHandler();
+    (handler as any).workspaceRoot = root;
+    (handler as any).gitIntegration = gitIntegration;
+    // Assigned before the first git command, not after it: a setup failure must
+    // leave THIS root where afterEach can find it. Assigned at the end, a
+    // failing `git init` would leave the previous test's (already removed) root
+    // in the variable and leak the directory mkdtemp just created.
+    fixture = { root, handler, gitIntegration };
+
     // A real repository with a local identity and no signing, so the fixture
     // commits on a machine with a global git configuration -- or none at all.
     git(root, 'init', '--quiet', '--initial-branch=main');
     git(root, 'config', 'user.name', 'CodeLapse Test');
     git(root, 'config', 'user.email', 'codelapse-test@example.invalid');
     git(root, 'config', 'commit.gpgsign', 'false');
-
-    const gitIntegration = new GitIntegration(root);
-    const handler = new StandaloneHandler();
-    (handler as any).workspaceRoot = root;
-    (handler as any).gitIntegration = gitIntegration;
-
-    fixture = { root, handler, gitIntegration };
   });
 
   afterEach(() => {
@@ -162,6 +165,9 @@ describe('standalone git commit from a snapshot', () => {
     // before the staging log is dereferenced, so the regression reports itself
     // instead of surfacing as a TypeError on an empty call list.
     expect(stageAll).not.toHaveBeenCalled();
+    // Named before the dereference, for the same reason: an empty staging list
+    // is a failed expectation, not a TypeError on `calls[0]`.
+    expect(stageFiles).toHaveBeenCalledTimes(1);
     const staged = stageFiles.mock.calls[0][0];
     expect(staged).toEqual(expect.arrayContaining(['kept.txt', 'gone.txt']));
 
@@ -193,6 +199,7 @@ describe('standalone git commit from a snapshot', () => {
     // untracked and the default run leaves it out; the tracked change is what
     // gets staged and committed.
     expect(stageAll).not.toHaveBeenCalled();
+    expect(stageFiles).toHaveBeenCalledTimes(1);
     const staged = stageFiles.mock.calls[0][0];
     expect(staged).toContain('kept.txt');
     expect(staged).not.toContain('new.txt');
@@ -216,6 +223,7 @@ describe('standalone git commit from a snapshot', () => {
     });
 
     expect(stageAll).not.toHaveBeenCalled();
+    expect(stageFiles).toHaveBeenCalledTimes(1);
     const staged = stageFiles.mock.calls[0][0];
     expect(staged).toContain('new.txt');
     expect(treePaths('HEAD')).toEqual(['kept.txt', 'new.txt']);
