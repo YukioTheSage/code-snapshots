@@ -16,6 +16,7 @@ import {
   assertNoSymlinkPath,
   assertSufficientDiskSpace,
   ensureWithinDirectory,
+  generateDiffSummary,
   MAX_FILE_SIZE_BYTES,
 } from 'codelapse-core';
 import * as path from 'path';
@@ -1318,6 +1319,18 @@ export class StandaloneHandler {
   }
 
   /**
+   * Validate a commit hash before it reaches git. Mirrors the validation
+   * CliConnectorService applies to the same input, so both modes answer a
+   * malformed ref with the same message.
+   */
+  private requireCommitHash(value: unknown): string {
+    if (typeof value !== 'string' || !/^[a-fA-F0-9]{4,40}$/.test(value)) {
+      throw new Error('Invalid commit hash: "' + String(value) + '"');
+    }
+    return value;
+  }
+
+  /**
    * Get comprehensive git branch info
    */
   public getGitBranchInfo(): GitBranchInfo {
@@ -1474,6 +1487,132 @@ export class StandaloneHandler {
     // typed to return a Snapshot and defaults an empty description. A guard
     // against a value the type forbids would be unreachable code.
     return { snapshot: { id: snapshot.id, description: snapshot.description } };
+  }
+
+  /**
+   * Compare a snapshot's file contents with the tree of a commit.
+   *
+   * GitIntegration exposes no tree listing, so the walk is driven by the paths
+   * the snapshot records -- the same limitation the extension's handler
+   * documents: a file the commit contains but the snapshot never saw cannot be
+   * reported. getFileAtCommit returns null when that commit's tree does not
+   * contain the path, which is how a file is recognised as added or deleted.
+   */
+  public async compareSnapshotWithGitCommit(options: {
+    snapshotId: string;
+    commitHash: string;
+    includeFileList?: boolean;
+  }): Promise<{
+    differences: Array<{
+      file: string;
+      changeType: 'added' | 'modified' | 'deleted';
+      linesAdded?: number;
+      linesRemoved?: number;
+    }>;
+    fileChanges?: {
+      added: string[];
+      modified: string[];
+      deleted: string[];
+    };
+  }> {
+    if (!this.snapshotManager) {
+      throw new Error('Handler not initialized');
+    }
+
+    // Validated before anything is read: a malformed ref must not reach git and
+    // must not depend on there being a snapshot to look up.
+    const commitHash = this.requireCommitHash(options?.commitHash);
+    const git = this.ensureGit();
+    const snapshotId = await this.resolveSnapshotId(
+      this.requirePayloadString(options?.snapshotId, 'snapshotId'),
+    );
+    const snapshot = await this.snapshotManager.getSnapshot(snapshotId);
+
+    if (!snapshot) {
+      throw new Error('Snapshot ' + snapshotId + ' not found');
+    }
+
+    const includeFileList = options?.includeFileList === true;
+    const differences: Array<{
+      file: string;
+      changeType: 'added' | 'modified' | 'deleted';
+      linesAdded?: number;
+      linesRemoved?: number;
+    }> = [];
+    const fileChanges = {
+      added: [] as string[],
+      modified: [] as string[],
+      deleted: [] as string[],
+    };
+
+    const record = (
+      file: string,
+      changeType: 'added' | 'modified' | 'deleted',
+      counts?: { linesAdded: number; linesRemoved: number },
+    ): void => {
+      differences.push(
+        includeFileList && counts
+          ? { file, changeType, ...counts }
+          : { file, changeType },
+      );
+      fileChanges[changeType].push(file);
+    };
+
+    for (const [snapshotPath, fileData] of Object.entries(snapshot.files)) {
+      // Snapshots store the platform separator (getAllFiles builds keys with
+      // path.relative); a commit tree is addressed with forward slashes. The
+      // storage key stays untouched for the content lookup below.
+      const repositoryPath = snapshotPath.split(path.sep).join('/');
+      const committed = git.getFileAtCommit(commitHash, repositoryPath);
+
+      if (fileData.deleted) {
+        // The snapshot records the removal, not the content: only the commit
+        // can say how much was there.
+        if (committed !== null) {
+          record(repositoryPath, 'deleted', {
+            linesAdded: 0,
+            linesRemoved: generateDiffSummary(committed, '').deletions,
+          });
+        }
+        continue;
+      }
+
+      if (fileData.isBinary) {
+        // Binary content is not comparable through the text-based integration,
+        // so only the file's presence can be compared.
+        if (committed === null) {
+          record(repositoryPath, 'added');
+        }
+        continue;
+      }
+
+      const content = await this.snapshotManager.getSnapshotFileContent(
+        snapshotId,
+        snapshotPath,
+      );
+      if (content === null) {
+        // An unresolvable diff, or a file the store cannot reconstruct: there
+        // is nothing to compare it against, so it is not a difference.
+        continue;
+      }
+
+      if (committed === null) {
+        record(repositoryPath, 'added', {
+          linesAdded: generateDiffSummary('', content).additions,
+          linesRemoved: 0,
+        });
+      } else if (content !== committed) {
+        const summary = generateDiffSummary(committed, content);
+        record(repositoryPath, 'modified', {
+          linesAdded: summary.additions,
+          linesRemoved: summary.deletions,
+        });
+      }
+    }
+
+    differences.sort((a, b) => a.file.localeCompare(b.file));
+
+    return includeFileList ? { differences, fileChanges } : { differences };
   }
 
   /**
