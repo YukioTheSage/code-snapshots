@@ -166,8 +166,14 @@ export class TerminalApiService implements TerminalApiInterface {
 
       return snapshots;
     } catch (error) {
-      log(`TerminalApiService: Error getting snapshots: ${error}`);
-      return [];
+      // Throw instead of returning []: an empty array is what a successful
+      // search with no matches returns, so a broken snapshot store and "no
+      // snapshots" were indistinguishable. The IPC dispatcher wraps a throwing
+      // handler in { success: false, error }, which is how the CLI reports the
+      // failure and exits non-zero.
+      const message = error instanceof Error ? error.message : String(error);
+      log(`TerminalApiService: Error getting snapshots: ${message}`);
+      throw error instanceof Error ? error : new Error(message);
     }
   }
 
@@ -837,8 +843,12 @@ export class TerminalApiService implements TerminalApiInterface {
         },
       }));
     } catch (error) {
-      log(`TerminalApiService: Error searching snapshots: ${error}`);
-      return [];
+      // Same rule as getSnapshots, and it covers the two failures that used to
+      // look like "no matches": an unreachable vector store and an unavailable
+      // semantic search service.
+      const message = error instanceof Error ? error.message : String(error);
+      log(`TerminalApiService: Error searching snapshots: ${message}`);
+      throw error instanceof Error ? error : new Error(message);
     }
   }
 
