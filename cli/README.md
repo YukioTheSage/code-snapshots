@@ -8,10 +8,11 @@
 A comprehensive command-line interface for CodeLapse snapshots - bringing
 snapshot-driven development to your terminal for automation, AI integration
 and advanced workflows. Snapshot CRUD, file operations, `filter`, `rules`,
-`diagnostics`, config, the `git` family and `workspace info` run
-**standalone**, with no VS Code; semantic search, `analyze`, `chunk`,
-`watch`, `workspace state` / `workspace files` and `utility` need the
-extension running, and the extension UI has no CLI surface in either mode.
+`diagnostics` (except `diagnostics logs --follow`), config, the `git`
+family and `workspace info` run **standalone**, with no VS Code; semantic
+search, `analyze`, `chunk`, `watch`, `workspace state` / `workspace files`
+and `utility` need the extension running, and the extension UI has no CLI
+surface in either mode.
 The full matrix is in [API.md](API.md#mode-availability).
 
 > ⚠️ **EXPERIMENTAL FEATURE - SECURITY WARNING**: Semantic search is currently experimental with significant security and privacy risks:
@@ -46,7 +47,7 @@ The full matrix is in [API.md](API.md#mode-availability).
 
 ### Required Components
 
-- **Node.js**: Version 18.0.0 or higher
+- **Node.js**: Version 18.15.0 or higher (CI runs Node 20)
 - **Optional**: VS Code & CodeLapse Extension (required only for IPC mode and AI features)
 
 ### Modes of Operation
@@ -1113,12 +1114,16 @@ fi
 
 **Root Cause**: The method you called is one that standalone mode does not
 implement - the CLI itself does not need the extension. Snapshot CRUD, file
-operations, `filter`, `rules`, `diagnostics`, config, the `git` family and
-`workspace info` all run without it; only the commands marked *Extension* in
+operations, `filter`, `rules`, `diagnostics` (except `logs --follow`),
+config, the `git` family and `workspace info` all run without it; only the
+commands marked *Extension* in
 [API.md's mode matrix](API.md#mode-availability) need VS Code running. Those
 fail with `Method <name> is not available in standalone mode and no CodeLapse
 extension answered over IPC (<connection error>)` rather than returning
-invented data.
+invented data. `diagnostics logs --follow` is the one exception to that
+message - it needs the extension to stream and fails with "Streaming logs
+requires the CodeLapse extension over IPC; standalone mode has no log source."
+instead.
 
 **Solutions**:
 
@@ -1490,10 +1495,10 @@ jobs:
   snapshot-workflow:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
       
       # Install CodeLapse CLI
       - name: Install CodeLapse CLI
@@ -1605,7 +1610,7 @@ pipeline {
 
 ```dockerfile
 # Dockerfile for CodeLapse-enabled development
-FROM node:18-alpine
+FROM node:20-alpine
 
 # Install CodeLapse CLI
 RUN npm install -g codelapse-cli
@@ -1802,7 +1807,7 @@ Help us make CodeLapse more accessible by improving documentation:
 - **README improvements**: Clarify installation steps, add examples
 - **Code examples**: Add real-world usage scenarios
 - **User guides**: Expand the [User Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/USER_GUIDE.md)
-- **API documentation**: Improve [API Reference](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/API_REFERENCE.md)
+- **API documentation**: Improve the [API Reference](https://github.com/YukioTheSage/code-snapshots/blob/main/cli/API.md)
 - **Troubleshooting**: Add solutions for common issues
 - **Integration guides**: Document CI/CD and automation setups
 
@@ -1862,7 +1867,7 @@ Need assistance with CodeLapse? Here are the best ways to get support:
 
 #### Documentation Resources
 - **📖 [User Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/USER_GUIDE.md)**: Complete user documentation and tutorials
-- **🔧 [API Reference](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/API_REFERENCE.md)**: Detailed API documentation for developers
+- **🔧 [API Reference](https://github.com/YukioTheSage/code-snapshots/blob/main/cli/API.md)**: Detailed API documentation for developers
 - **🚀 [Developer Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/DEVELOPER_GUIDE.md)**: Development setup and contribution guidelines
 - **❓ [Troubleshooting Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/TROUBLESHOOTING.md)**: Common issues and solutions
 
@@ -1887,7 +1892,7 @@ Need assistance with CodeLapse? Here are the best ways to get support:
 #### Documentation
 - **📚 [Documentation Hub](https://github.com/YukioTheSage/code-snapshots/tree/main/docs)**: All project documentation
 - **📖 [User Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/USER_GUIDE.md)**: Getting started and usage instructions
-- **🔧 [API Reference](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/API_REFERENCE.md)**: Complete API documentation
+- **🔧 [API Reference](https://github.com/YukioTheSage/code-snapshots/blob/main/cli/API.md)**: Complete API documentation
 - **🚀 [Developer Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/DEVELOPER_GUIDE.md)**: Development and contribution guide
 
 #### Package Distribution
