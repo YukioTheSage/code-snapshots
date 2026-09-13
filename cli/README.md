@@ -833,7 +833,9 @@ takes the snapshot itself — no `git` binary is needed, because the operation i
 label for the snapshot description — and returns the same payload the extension
 returns: `{ snapshot: { id, description } }`, tagged `['auto', 'git']`.
 - `-d, --description <desc>`: Snapshot description.
-- `-u, --include-untracked`: Include untracked files.
+- `-u, --include-untracked`: Recorded in the snapshot notes only; it does not
+  change which files are captured (the snapshot takes untracked files either
+  way).
 
 **Returns**
 ```json

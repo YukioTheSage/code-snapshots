@@ -309,7 +309,9 @@ A batch **API** payload (`batchSearch`, `batchAnalyze`, sent through
 `codelapse api` or a batch file) reports `success: false` when **every** item
 failed; a partial failure keeps `success: true` and discloses the count in
 `failedQueries`/`failedOperations`. Branching on `success` alone is therefore
-safe: it is never `true` for a batch in which nothing worked.
+safe: it is never `true` for a non-empty batch in which nothing worked. (An
+empty batch still reports `success: true`: nothing was attempted and nothing
+failed.)
 
 ## JSON Output Format
 

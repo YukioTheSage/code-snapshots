@@ -704,8 +704,8 @@ setting that makes it do so.
 
 2. **What to do instead**:
    - Press `Ctrl+Alt+S` before the Git operation.
-   - Or run `codelapse git auto-commit pull` from a terminal with the extension
-     running (this API method is not available in standalone mode).
+   - Or run `codelapse git auto-commit pull` from a terminal: it works in
+     either mode, with or without the extension running.
    - External `git` commands run from a terminal have never triggered CodeLapse;
      only the extension's own change detection does.
 

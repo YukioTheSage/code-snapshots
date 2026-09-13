@@ -171,8 +171,8 @@ Git operations performed from the VS Code Git UI or the command palette are
 invoked, and it has been removed. Take a snapshot first:
 
 1. Press `Ctrl+Alt+S` (or `Cmd+Alt+S` on Mac) before the operation, or
-2. Run `codelapse git auto-commit pull` from a terminal (requires the extension
-   to be running; it is unavailable in standalone mode).
+2. Run `codelapse git auto-commit pull` from a terminal — it works in either
+   mode, with or without the extension running.
 
 **Example Rules for Different Projects**:
 - **Web Development**: `src/**/*.{js,ts,jsx,tsx}` every 20 minutes

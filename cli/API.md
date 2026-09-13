@@ -601,7 +601,7 @@ codelapse git auto-commit rebase -d "Before rebase onto main"
 | Option | Description |
 |--------|-------------|
 | `-d, --description <desc>` | Snapshot description |
-| `-u, --include-untracked` | Include untracked files |
+| `-u, --include-untracked` | Recorded in the snapshot notes only. It does **not** change which files are captured — the snapshot takes untracked files either way. (Unlike `git commit --include-untracked`, which does stage untracked paths.) |
 
 #### `git info`
 
