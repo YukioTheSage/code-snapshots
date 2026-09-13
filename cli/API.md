@@ -1,5 +1,10 @@
 # CodeLapse CLI API Reference
 
+> **Driving this from an AI agent or a script?** Read [AI_GUIDE.md](AI_GUIDE.md)
+> first: it states the output-flag and exit-status contract and how to use these
+> commands safely. This file is the command surface and owns the mode matrix
+> ([Mode Availability](#mode-availability)); that file is how to drive it.
+
 Complete reference for all CodeLapse CLI commands, options, and usage patterns.
 
 **Binary**: `codelapse` (alias: `cl`)
@@ -1178,21 +1183,21 @@ running) and reading the resulting envelope.
 |---------|-----------|-----------------|
 | Snapshot CRUD | Yes | Yes |
 | File operations | Yes | Yes |
-| Filtering & metadata (`filter …`) | **No** | Yes |
+| Filtering & metadata (`filter …`) | Yes | Yes |
 | Configuration | Yes | Yes |
 | Git integration | Yes | Yes |
 | Workspace info (`workspace info`) | Yes | Yes |
 | Workspace state (`workspace state`/`files`) | No | Yes |
 | Utility tasks (`export`, `validate`) | No | Yes |
-| Diagnostics | No | Yes |
-| Rules management | No | Yes |
+| Diagnostics | Yes | Yes |
+| Rules management | Yes | Yes |
 | Semantic search | No | Yes |
 | Enhanced analysis | No | Yes |
 | Chunking | No | Yes |
 | Live features (`watch`) | No | Yes |
-| UI components | No | Yes |
+| UI components (extension UI; no CLI command) | n/a | n/a |
 
-*Note: Commands that are not supported in Standalone mode require the CodeLapse VS Code Extension to be running and connected. They fail with `{"success": false, "error": "Method <name> not supported in standalone mode"}` and exit 1 — they do not return invented data.*
+*Note: Commands that are not supported in Standalone mode require the CodeLapse VS Code Extension to be running and connected, and they do not return invented data. The method-based ones fail with `{"success": false, "error": "Method <name> is not available in standalone mode and no CodeLapse extension answered over IPC (<connection error>). Start VS Code with the CodeLapse extension enabled, or use one of: <methods>"}` and exit 1. `watch` is not method-based: it fails with `{"success": false, "error": "Watching events requires the CodeLapse extension over IPC; standalone mode has no event source."}` and also exits 1.*
 
 ---
 

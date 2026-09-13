@@ -23,8 +23,10 @@ A comprehensive command-line interface for the CodeLapse VSCode extension with *
 - [Quick Start](#quick-start)
 - [User Guides](#user-guides)
   - [For Developers](#for-developers)
-  - [For AI Agents](#for-ai-agents)
+  - [AI agents](#ai-agents)
   - [For DevOps/Automation](#for-devopsautomation)
+- [AI Agent Guide](AI_GUIDE.md)
+- [AI-Friendly Features](#ai-friendly-features)
 - [Command Reference](#command-reference)
 - [Integration Examples](#integration-examples)
 - [Error Handling](#error-handling)
@@ -205,52 +207,23 @@ codelapse utility validate snapshot-123
 codelapse snapshot show snapshot-123 --files --content src/auth.ts
 ```
 
-### For AI Agents
+### AI agents
 
-#### Safety-First Automation
-AI agents must follow strict safety protocols:
+`codelapse` is built to be driven by an agent, and the contract is short:
 
-```bash
-# 1. ALWAYS create backup before any operation
-codelapse snapshot create "Backup before AI operation" --tags "backup,ai" --json --silent
+1. `--json` and **not** `--silent`: `--silent` suppresses the JSON envelope for
+   every command routed through the shared result printer (`status`,
+   `snapshot show` and `api` are the exceptions - they write their JSON
+   directly).
+2. Branch on the exit code: 0 when the payload's `success` is `true`, 1 when it
+   is `false` - for every command, `api` and `batch` included.
+3. After a fan-out call, check `failedQueries` / `failedOperations` (and a
+   batch's `failed` count): `success: true` alone is not proof that every item
+   worked.
+4. Back up before changes: create a snapshot first, and restore it instead of
+   improvising when a step fails.
 
-# 2. Execute operations with proper error handling
-if codelapse snapshot restore snapshot-123 --backup --json --silent; then
-  echo "Operation successful"
-else
-  echo "Operation failed, restoring backup"
-  codelapse snapshot restore backup-snapshot-id --json --silent
-fi
-
-# 3. Document completed work
-codelapse snapshot create "AI: Completed refactoring task" --tags "complete,ai" --favorite --json --silent
-```
-
-#### Batch Processing Workflow
-```bash
-# Create batch operations file
-cat > ai-workflow.json << EOF
-[
-  { "method": "takeSnapshot", "data": { "description": "Pre-operation backup", "tags": ["backup"] } },
-  { "method": "getSnapshots", "data": { "tags": ["feature"], "limit": 5 } },
-  { "method": "takeSnapshot", "data": { "description": "Post-operation state", "tags": ["complete"] } }
-]
-EOF
-
-# Execute batch operations
-codelapse batch ai-workflow.json --json --silent
-```
-
-#### Real-time Monitoring
-```bash
-# Monitor workspace changes for reactive workflows.
-# Requires a running extension: events are pushed over IPC, and in standalone
-# mode there is no event source, so this prints nothing and exits immediately.
-codelapse watch --events snapshots,workspace --json | while read -r event; do
-  echo "Processing event: $event"
-  # Add your AI logic here
-done
-```
+**Full guide: [AI_GUIDE.md](AI_GUIDE.md)**
 
 ### For DevOps/Automation
 
@@ -360,16 +333,9 @@ The `codelapse api` command provides a direct, low-level interface to the CodeLa
 codelapse api takeSnapshot --data '''{"description": "Test", "tags": ["auto"]}'''
 ```
 
-## AI Agent Guidelines
-
-For AI agents interacting with `codelapse-cli`, adhere to these critical rules for safe and effective operation:
-
-1.  **ALWAYS** use `--json --silent` flags on every command for structured, machine-readable output and to suppress interactive prompts.
-2.  **ALWAYS** check `success: true` in JSON responses before proceeding to ensure command execution was successful.
-3.  **NEVER** make changes without creating a backup snapshot first. Use `codelapse snapshot create "Backup before [your operation]" --tags "backup" --json --silent` and save the `snapshot.id`.
-4.  **ALWAYS** parse JSON output; never assume success. Implement robust error handling.
-5.  **ALWAYS** restore a backup if operations fail using `codelapse snapshot restore [snapshot-id] --backup --json --silent`.
-6.  **ALWAYS** create a final snapshot documenting completed changes: `codelapse snapshot create "Completed: [description of changes]" --tags "complete" --favorite --json --silent`.
+> **Agent guidance lives in one place.** The operating contract is in
+> [AI agents](#ai-agents); the full rules, loop and recipes are in
+> [AI_GUIDE.md](AI_GUIDE.md). They are not repeated here.
 
 ## Command Reference
 
@@ -1063,31 +1029,9 @@ else
 fi
 ```
 
-#### For AI Agents
-```bash
-# Robust error handling with backup restoration
-create_snapshot_safely() {
-  local description="$1"
-  local backup_id="$2"
-  
-  local result=$(codelapse snapshot create "$description" --json --silent)
-  
-  if echo "$result" | jq -e '.success' > /dev/null; then
-    echo "$result" | jq -r '.snapshot.id'
-    return 0
-  else
-    local error=$(echo "$result" | jq -r '.error')
-    echo "Snapshot creation failed: $error" >&2
-    
-    if [ -n "$backup_id" ]; then
-      echo "Restoring backup: $backup_id" >&2
-      codelapse snapshot restore "$backup_id" --backup --json --silent
-    fi
-    
-    return 1
-  fi
-}
-```
+> **For agent scripts.** The backup-and-restore error handler and the fan-out
+> result checks are documented in [AI agents](#ai-agents) and
+> [AI_GUIDE.md](AI_GUIDE.md).
 
 #### For CI/CD Systems
 ```bash

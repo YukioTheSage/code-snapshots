@@ -1,5 +1,10 @@
 # CodeLapse CLI Help
 
+> **Driving this from an AI agent or a script?** Read [AI_GUIDE.md](AI_GUIDE.md)
+> first: it states the output-flag and exit-status contract and how to use these
+> commands safely. This file is the command surface; the mode matrix is in
+> [API.md](API.md#mode-availability), summarised under Command Groups below.
+
 CodeLapse CLI is a comprehensive command-line interface for managing code snapshots. It can run independently in **Standalone Mode** or connect to the CodeLapse VSCode extension for enhanced features.
 
 ## Quick Start
@@ -27,9 +32,10 @@ codelapse <command> --help
 - `--silent` - Silent mode - no spinners, banners or progress output. It
   suppresses the JSON envelope as well: `--json --silent` prints no JSON
   payload for every command routed through the shared result printer (verified
-  for `snapshot list`, `snapshot create` and `config get`). `status` is the
-  exception - it writes its JSON directly and ignores `--silent`. Storage
-  notices can still reach stdout; they are described under JSON Output Format.
+  for `snapshot list`, `snapshot create` and `config get`). Three commands are
+  the exception - `status`, `snapshot show <id>` and `api <method>` each write
+  their JSON directly and ignore `--silent`. Storage notices can still reach
+  stdout; they are described under JSON Output Format.
 
   **In automation, use `--json` alone.** Progress and warnings go to stderr, and
   stdout carries the payload plus any notice the storage layer writes (storage
@@ -61,11 +67,15 @@ codelapse <command> --help
 > CodeLapse extension over IPC. With no extension running the CLI falls back to
 > **standalone mode**, which implements snapshot operations (create, list with
 > `--tags`/`--favorites`/`--limit`/`--since`, show, restore, delete, compare,
-> navigate), config, file-level operations, `workspace info`, and the `git`
-> operations that need only a repository — against `.snapshots/` directly.
-> It does *not* implement `workspace state` / `workspace files`, the
-> `analyze`, `chunk`, `search index`, `rules`, `filter` and `diagnostics` API
-> methods. Those fail with an explicit "not supported in standalone mode" error
+> navigate), config, file-level operations, `filter`, `rules`, `diagnostics`,
+> `workspace info`, and the `git` operations that need only a repository —
+> against `.snapshots/` directly.
+> It does *not* implement `workspace state` / `workspace files`,
+> `utility validate` / `utility export`, the `search` commands, `analyze`, or
+> `chunk`. Those fail with
+> `Method <name> is not available in standalone mode and no CodeLapse extension
+> answered over IPC (<connection error>). Start VS Code with the CodeLapse
+> extension enabled, or use one of: <methods>`
 > rather than returning anything invented. Start VS Code with the extension
 > active to use them.
 >
@@ -167,8 +177,8 @@ codelapse <command> --help
 - `codelapse batch <file>` - Execute batch commands from JSON file
 - `codelapse watch` - Watch for snapshot changes (real-time events). **Requires a
   running extension**: events are pushed over IPC, and in standalone mode there
-  is no event source, so the command returns immediately without printing
-  anything.
+  is no event source, so the command fails with "Watching events requires the
+  CodeLapse extension over IPC; standalone mode has no event source." and exits 1.
 - `codelapse api <method>` - Direct API call (AI-friendly)
 
 ## Examples
