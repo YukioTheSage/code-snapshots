@@ -277,7 +277,7 @@ export function buildProgram(): Command {
     .description('Restore a snapshot')
     .option('--backup', 'Create backup snapshot before restore')
     .option('--files <files>', 'Restore only specific files (comma-separated)')
-    .option('-y, --yes', 'Skip confirmation')
+    .option('-y, --yes', 'Restore even when editors have unsaved changes')
     .action(snapshotCommands.restore.bind(snapshotCommands));
 
   snapshotCmd

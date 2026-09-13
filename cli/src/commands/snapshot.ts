@@ -186,6 +186,12 @@ export class SnapshotCommands {
         ? options.files.split(',').map((f: string) => f.trim())
         : undefined,
       silent: true,
+      // `-y/--yes` promises, in `--help`, to skip the confirmation. The
+      // extension refuses to discard unsaved editor changes unless
+      // `options.skipConfirm` is true (`terminalApiService.restoreSnapshot`),
+      // so the flag has to travel in the payload. Commander parsed
+      // `options.yes` and this method dropped it, leaving the guard armed.
+      skipConfirm: options?.yes === true,
     };
 
     try {
