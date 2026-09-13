@@ -60,8 +60,7 @@
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
     "inquirer": "^8.2.0",
-    "ws": "^8.14.0",
-    "uuid": "^9.0.0"
+    "ws": "^8.14.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

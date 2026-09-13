@@ -26,13 +26,11 @@
   },
   "dependencies": {
     "minimatch": "^10.0.1",
-    "diff": "^5.0.0",
-    "uuid": "^9.0.0"
+    "diff": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/diff": "^5.0.0",
-    "@types/uuid": "^9.0.0",
     "typescript": "^5.3.3",
     "rimraf": "^5.0.5"
   }
