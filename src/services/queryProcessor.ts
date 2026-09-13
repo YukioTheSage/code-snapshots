@@ -1092,21 +1092,25 @@ export class QueryProcessor {
   }
 
   /**
-   * Get the file patterns for a programming language, if we map that language.
+   * Get the file patterns for a programming language, if this map names it.
    *
-   * A language maps to every extension the chunker indexes as that language
-   * (`codeChunker.ts`'s extension map), so a typescript search keeps .tsx and a
-   * javascript search keeps .jsx: the store holds those chunks under those
-   * language names, and a single `*.ts` pattern dropped them silently.
+   * The keys are the labels the chunker produces for these files
+   * (`codeChunker.ts`'s extension map: `csharp` and `cpp`, not the display
+   * forms `c#`/`c++`), and each language lists every extension the chunker
+   * indexes under it, so a javascript search keeps .jsx, .mjs and .cjs and a
+   * typescript search keeps .tsx. The store holds those chunks under those
+   * language names, and a narrower pattern dropped them silently. A language
+   * this map does not name gets no include filter: it is the set of languages a
+   * `--languages` search is expected to name, not the chunker's full list.
    */
   private getFilePatternsForLanguage(language: string): string[] {
     const extensions: Record<string, string[]> = {
-      javascript: ['js', 'jsx'],
+      javascript: ['js', 'jsx', 'mjs', 'cjs'],
       typescript: ['ts', 'tsx'],
       python: ['py'],
       java: ['java'],
-      'c#': ['cs'],
-      'c++': ['cpp'],
+      csharp: ['cs'],
+      cpp: ['cpp', 'hpp', 'cxx'],
       go: ['go'],
       rust: ['rs'],
       php: ['php'],

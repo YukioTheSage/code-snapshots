@@ -368,3 +368,47 @@ describe('a search for several languages', () => {
     ]);
   });
 });
+
+describe('the language pattern map', () => {
+  it('covers the extensions the chunker indexes for the language', async () => {
+    const processed = await new QueryProcessor().processQuery(
+      'find authentication code',
+      { language: 'javascript' },
+    );
+
+    // The chunker indexes .mjs and .cjs as javascript too (codeChunker.ts), so
+    // a `--languages javascript` search has to keep them.
+    expect(processed.filters.includeFilePatterns).toEqual([
+      '*.js',
+      '*.jsx',
+      '*.mjs',
+      '*.cjs',
+    ]);
+  });
+
+  it('keys on the language labels the chunker produces, not display aliases', async () => {
+    const csharp = await new QueryProcessor().processQuery(
+      'find authentication code',
+      { language: 'csharp' },
+    );
+    expect(csharp.filters.includeFilePatterns).toEqual(['*.cs']);
+
+    const cpp = await new QueryProcessor().processQuery(
+      'find authentication code',
+      { language: 'cpp' },
+    );
+    expect(cpp.filters.includeFilePatterns).toEqual([
+      '*.cpp',
+      '*.hpp',
+      '*.cxx',
+    ]);
+
+    // `c#` and `c++` are display names the chunker never emits, so they cannot
+    // match a produced language and must not read as supported keys.
+    const alias = await new QueryProcessor().processQuery(
+      'find authentication code',
+      { language: 'c#' },
+    );
+    expect(alias.filters.includeFilePatterns).toBeUndefined();
+  });
+});

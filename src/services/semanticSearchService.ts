@@ -926,9 +926,10 @@ export class SemanticSearchService implements vscode.Disposable {
     // batch (Task 11), so continuing past a file failure would delete the old
     // vectors, write only the files that worked, and this method would still
     // return -- which marks the snapshot indexed at the call site. Collect the
-    // failures and refuse the whole snapshot instead: the purge then never
-    // runs, the previous vectors stay intact, and the snapshot stays unindexed
-    // so a later run retries it without `--force`.
+    // failures and refuse the whole snapshot instead: the upsert, and the purge
+    // inside it, never run, and the snapshot stays unindexed so a later run
+    // retries it. A `--purge` re-index deletes the previous vectors before this
+    // method is called, so their survival is not promised here.
     const failedFiles: Array<{ filePath: string; error: string }> = [];
 
     // Process each file
@@ -953,7 +954,18 @@ export class SemanticSearchService implements vscode.Disposable {
           true, // Set forIndexing to true to prevent VS Code from showing the file
         );
 
-        if (!content) {
+        if (content === null) {
+          // `snapshotStorage` answers null for its own error states --
+          // resolution depth or a cycle, a missing base, a failed patch, an
+          // unexpected state -- so a null here is "could not reconstruct", not
+          // "empty". Skipping it would let the upsert's purge run and the
+          // snapshot be marked indexed while one of its files was never
+          // embedded.
+          throw new Error('content could not be reconstructed');
+        }
+
+        if (content === '') {
+          // An empty file is legitimate and has nothing to embed.
           logVerbose(`No content for ${filePath} in snapshot ${snapshotId}`);
           continue;
         }
@@ -983,7 +995,7 @@ export class SemanticSearchService implements vscode.Disposable {
           allFiles.length
         } file(s) failed to read or chunk (${detail}${
           failedFiles.length > 3 ? '; ...' : ''
-        }). The vector store was not written, so this snapshot's previous vectors are intact.`,
+        }). Nothing was written to the vector store by this run, and the snapshot stays unmarked so a later run retries it. A purge-first re-index (--purge) deletes this snapshot's previous vectors before the files are read, so those may already be gone; a plain re-index leaves them untouched.`,
       );
     }
 
