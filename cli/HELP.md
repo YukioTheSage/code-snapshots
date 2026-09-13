@@ -24,9 +24,24 @@ codelapse <command> --help
 ## Global Options
 
 - `--json` - Output in JSON format (AI-friendly)
-- `--silent` - Silent mode - no user prompts or status messages. It suppresses
-  *all* non-JSON stdout, including listings, so pair it with `--json` in
-  automation: a silent `snapshot list` prints nothing at all.
+- `--silent` - Silent mode - no spinners, banners or progress output. It
+  suppresses the JSON envelope as well: `--json --silent` prints no JSON
+  payload for every command routed through the shared result printer (verified
+  for `snapshot list`, `snapshot create` and `config get`). `status` is the
+  exception - it writes its JSON directly and ignores `--silent`. Storage
+  notices can still reach stdout; they are described under JSON Output Format.
+
+  **In automation, use `--json` alone.** Progress and warnings go to stderr, and
+  stdout carries the payload plus any notice the storage layer writes (storage
+  notices are described under JSON Output Format). The exit code tells you
+  whether the payload said `success: true`. Reach for `--silent` only when
+  nobody reads the output and the exit code is the whole result. `--silent` is
+  **not** a way to skip a confirmation prompt: a prompt is skipped only by the
+  flag that command's own `--help` documents as skipping it, which not every
+  command has. Do not carry a flag from one command to another - `--force` on
+  `snapshot delete` means "delete even when a later snapshot cannot be
+  rebuilt", not "skip the prompt"; `-f, --force` on `git delete-branch` is a
+  git force-delete, and `search index --force` re-indexes.
 - `--verbose` - Verbose output for debugging, including which mode was selected
 - `--timeout <ms>` - Connection timeout in milliseconds (default: 5000)
 
@@ -323,9 +338,24 @@ codelapse search query "authentication" --json
 codelapse filter favorites --json
 ```
 
-Progress and warnings are written to stderr, so stdout stays parseable. The
-process exit code is 0 when the JSON payload's `success` is `true` and 1 when it
-is `false` (verified for 30 command/argument combinations).
+Progress and warnings are written to stderr, so stdout stays parseable - with a
+known exception, noted below. The process exit code is 0 when the JSON
+payload's `success` is `true` and 1 when it is `false` (verified for 30
+command/argument combinations), including `api` and `batch`.
+
+A known exception: in standalone mode, a workspace whose snapshot store does not
+exist yet gets a plain-text notice on **stdout** ("Snapshot index file not
+found. Starting with empty state."). With `--json` the notice precedes the
+payload; with `--json --silent` it is the only output for any command whose
+payload `--silent` suppresses - `status` prints its JSON either way, so there
+the notice joins the payload. It stops once a snapshot-writing command has
+created the store - running `status` does not create it, and neither does
+`snapshot list`, so `status` first is not a workaround. A parser that assumes
+the first line is JSON fails on its first call against a new project: select
+the JSON line instead.
+
+Do not add `--silent` to a command whose JSON you intend to parse: it suppresses
+the payload. See the `--silent` entry under Global Options.
 
 ## Placeholder data
 
