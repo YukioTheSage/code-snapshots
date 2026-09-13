@@ -220,7 +220,7 @@ codelapse snapshot show snapshot-123 --files --content src/auth.ts
 **Safety-First AI Operations**
 ```bash
 # 1. ALWAYS create backup before AI operations
-BACKUP_ID=$(codelapse snapshot create "AI: Pre-operation backup" --tags "backup,ai" --json --silent | jq -r '.snapshot.id')
+BACKUP_ID=$(codelapse snapshot create "AI: Pre-operation backup" --tags "backup,ai" --json | tail -n 1 | jq -r '.snapshot.id')
 
 # 2. Execute AI operations with error handling
 if codelapse snapshot restore snapshot-123 --backup --json --silent; then
@@ -265,8 +265,8 @@ done
 codelapse snapshot create "Pre-deployment: $(git rev-parse --short HEAD)" \
   --tags "deployment,$(git branch --show-current)" --json --silent
 
-# Validate workspace state before deployment
-codelapse workspace state --json --silent
+# Validate the workspace the CLI sees before deployment
+codelapse workspace info --json
 
 # Create release snapshot with version tagging
 codelapse snapshot create "Release v$(cat package.json | jq -r .version)" \
@@ -320,9 +320,9 @@ codelapse search index                              # Build search index
 
 # Git Integration & Workspace
 codelapse git commit snapshot-123 -m "My commit"    # Create Git commit
-codelapse git compare snapshot-123                  # Compare vs Git
+codelapse git compare snapshot-123 <commit-hash>    # Compare snapshot vs Git commit
 codelapse workspace files --changed                 # Show changed files
-codelapse filter favorite                           # Show favorite snapshots
+codelapse filter favorites                          # List favorite snapshots
 
 # Configuration & Utilities
 codelapse config set maxSnapshots 100               # Set configuration
@@ -459,7 +459,7 @@ RUN codelapse snapshot create "Docker: Post-build snapshot" --tags "docker,compl
 <details>
 <summary><strong>🔬 Semantic Search Settings (Experimental)</strong></summary>
 
-> ⚠️ **EXPERIMENTAL FEATURE - SECURITY RISKS**: See the [experimental feature warning](#-why-codelapse) above - network exposure and API quota costs apply, and it is **not recommended** for proprietary, sensitive, or confidential codebases.
+> ⚠️ **EXPERIMENTAL FEATURE - SECURITY RISKS**: See the [experimental feature warning](#-why-codelapse) above.
 
 **Basic Settings:**
 
