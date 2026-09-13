@@ -702,14 +702,21 @@ export class ResultManager {
   private createDiversificationOptions(
     options: EnhancedSemanticSearchOptions,
   ): DiversificationOptions {
+    // One flag, every diversification device. `enableDiversification: false`
+    // previously flipped only the three `preferDifferent*` options while
+    // `enableTemporalDiversification` stayed true in the defaults, so the
+    // quarterly re-rank still ran and still dropped results: on seven results
+    // from one quarter plus one from another it returned five of the eight.
+    const enabled = options.enableDiversification !== false;
     return {
       ...this.defaultDiversificationOptions,
       maxResultsPerFile:
         options.maxResultsPerFile ||
         this.defaultDiversificationOptions.maxResultsPerFile,
-      preferDifferentPatterns: options.enableDiversification !== false,
-      preferDifferentComplexity: options.enableDiversification !== false,
-      preferDifferentLayers: options.enableDiversification !== false,
+      preferDifferentPatterns: enabled,
+      preferDifferentComplexity: enabled,
+      preferDifferentLayers: enabled,
+      enableTemporalDiversification: enabled,
     };
   }
 
