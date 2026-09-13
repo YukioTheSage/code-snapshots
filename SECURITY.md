@@ -9,7 +9,8 @@ We actively support the following versions with security updates:
 | `vscode-snapshots` (VS Code extension) | 0.9.x | Yes |
 | `vscode-snapshots` (VS Code extension) | 0.8.x | Limited support |
 | `vscode-snapshots` (VS Code extension) | < 0.8 | No |
-| `codelapse-cli` (npm package) | 2.0.x | Yes |
+| `codelapse-cli` (npm package) | 2.0.x | Yes - declared in this repository; not yet published to npm |
+| `codelapse-cli` (npm package) | 1.0.1 | Yes - the latest version published to npm |
 | `codelapse-core` | ships with the extension | Yes |
 
 ## Reporting a vulnerability
