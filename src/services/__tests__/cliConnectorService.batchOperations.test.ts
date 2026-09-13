@@ -155,6 +155,27 @@ function analyzeFileOperation(id = 'op1'): {
   };
 }
 
+/** What the batch-analyze envelope is read for, without an `any` cast. */
+interface BatchAnalyzeEnvelope {
+  success: boolean;
+  results: Array<{ success: boolean }>;
+}
+
+/**
+ * The private `handleBatchAnalyze`, reached through a typed seam. The rest of
+ * this file calls the handler through an `any` cast, and the lint ceiling is
+ * exact, so this test — the newest — adds no warning of its own.
+ */
+function batchAnalyzeHandler(
+  service: CliConnectorService,
+): (data: unknown) => Promise<BatchAnalyzeEnvelope> {
+  return (
+    service as unknown as {
+      handleBatchAnalyze: (data: unknown) => Promise<BatchAnalyzeEnvelope>;
+    }
+  ).handleBatchAnalyze.bind(service);
+}
+
 describe('CliConnectorService - Batch Operations', () => {
   let cliConnectorService: CliConnectorService;
   let mockTerminalApiService: jest.Mocked<TerminalApiService>;
@@ -682,6 +703,52 @@ describe('CliConnectorService - Batch Operations', () => {
       expect(result.totalOperations).toBe(2);
       expect(result.results).toHaveLength(1); // Should stop after first failure
       expect(result.results[0].success).toBe(false);
+    });
+
+    it('should stop on a handler-level failure when continueOnError=false in the parallel path', async () => {
+      // The parallel twin of the test above. These operations reject at the
+      // handler, but the parallel branch wraps each one in a try/catch and
+      // answers a fulfilled `{ success: false }` instead — so the failure lives
+      // in the settled *value*, not in the settlement. Tracking failures through
+      // `Promise.allSettled`'s rejected branch alone therefore misses every
+      // handler-level failure, and `continueOnError: false` must stop on it
+      // exactly as the sequential branch does.
+      mockTerminalApiService.getSnapshotFileContent
+        .mockRejectedValueOnce(new Error('File not found'))
+        .mockResolvedValue('test content');
+
+      const data = {
+        operations: [
+          {
+            id: 'op1',
+            type: 'analyzeFile',
+            data: { filePath: 'test1.ts', snapshotId: 'snap1' },
+          },
+          {
+            id: 'op2',
+            type: 'analyzeFile',
+            data: { filePath: 'test2.ts', snapshotId: 'snap1' },
+          },
+          {
+            id: 'op3',
+            type: 'analyzeFile',
+            data: { filePath: 'test3.ts', snapshotId: 'snap1' },
+          },
+        ],
+        continueOnError: false,
+        parallel: true,
+        // One operation per chunk: the flag is honoured between chunks, so a
+        // single chunk would run every operation regardless of this change.
+        maxConcurrency: 1,
+      };
+
+      const result = await batchAnalyzeHandler(cliConnectorService)(data);
+
+      // Stopped after the first failure, and the batch reads as a failure:
+      // "1 of 1 failed" must not be dressed up with the successes it never ran.
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].success).toBe(false);
+      expect(result.success).toBe(false);
     });
 
     it('should include performance metrics', async () => {

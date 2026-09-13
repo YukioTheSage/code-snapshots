@@ -2725,12 +2725,10 @@ export class CliConnectorService implements vscode.Disposable {
 
           const chunkResults = await Promise.allSettled(chunkPromises);
 
-          let hasFailures = false;
           chunkResults.forEach((result, index) => {
             if (result.status === 'fulfilled') {
               results.push(result.value);
             } else {
-              hasFailures = true;
               results.push({
                 operationId: chunk[index].id || `op-${results.length}`,
                 operationType: chunk[index].type,
@@ -2749,8 +2747,15 @@ export class CliConnectorService implements vscode.Disposable {
             updateProgress();
           });
 
-          // Stop processing if continueOnError is false and we have failures
-          if (!continueOnError && hasFailures) {
+          // Stop processing if continueOnError is false and we have failures.
+          // The predicate reads the results that were recorded rather than the
+          // settlements: `allSettled` reports a rejected promise, but a handler
+          // that answers `{ success: false }` fulfils its promise, so a
+          // settlement-only check missed every handler-level failure and the
+          // flag was inert in this path. The sequential branch treats that
+          // answer as the failure it is; so does the search handler's parallel
+          // branch, which uses this same predicate.
+          if (!continueOnError && results.some((r) => !r.success)) {
             break;
           }
         }
