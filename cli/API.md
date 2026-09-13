@@ -1189,7 +1189,7 @@ running) and reading the resulting envelope.
 | Workspace info (`workspace info`) | Yes | Yes |
 | Workspace state (`workspace state`/`files`) | No | Yes |
 | Utility tasks (`export`, `validate`) | No | Yes |
-| Diagnostics | Yes | Yes |
+| Diagnostics (except `logs --follow`) | Yes | Yes |
 | Rules management | Yes | Yes |
 | Semantic search | No | Yes |
 | Enhanced analysis | No | Yes |
@@ -1197,7 +1197,7 @@ running) and reading the resulting envelope.
 | Live features (`watch`) | No | Yes |
 | UI components (extension UI; no CLI command) | n/a | n/a |
 
-*Note: Commands that are not supported in Standalone mode require the CodeLapse VS Code Extension to be running and connected, and they do not return invented data. The method-based ones fail with `{"success": false, "error": "Method <name> is not available in standalone mode and no CodeLapse extension answered over IPC (<connection error>). Start VS Code with the CodeLapse extension enabled, or use one of: <methods>"}` and exit 1. `watch` is not method-based: it fails with `{"success": false, "error": "Watching events requires the CodeLapse extension over IPC; standalone mode has no event source."}` and also exits 1.*
+*Note: Commands that are not supported in Standalone mode require the CodeLapse VS Code Extension to be running and connected, and they do not return invented data. The method-based ones fail with `{"success": false, "error": "Method <name> is not available in standalone mode and no CodeLapse extension answered over IPC (<connection error>). Start VS Code with the CodeLapse extension enabled, or use one of: <methods>"}` and exit 1. `watch` is not method-based: it fails with `{"success": false, "error": "Watching events requires the CodeLapse extension over IPC; standalone mode has no event source."}` and also exits 1. `diagnostics logs --follow` is the exception inside `diagnostics`: streaming needs the extension, so it fails standalone with `{"success": false, "error": "Streaming logs requires the CodeLapse extension over IPC; standalone mode has no log source."}` and also exits 1.*
 
 ---
 
