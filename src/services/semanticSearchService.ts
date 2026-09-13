@@ -142,6 +142,12 @@ export class SemanticSearchService implements vscode.Disposable {
   // Background processing
   private processingQueue: string[] = []; // Queue of snapshot IDs to process
   private isProcessing = false;
+  /**
+   * The id taken off the queue for the pass in progress. It is neither in the
+   * queue nor in `indexedSnapshots` yet, so the dedupe in
+   * `handleSnapshotChanges` has to know about it.
+   */
+  private inFlightSnapshotId: string | undefined;
   /** Set by `dispose()`. Checked before any further work or state write. */
   private disposed = false;
   /** The snapshot-change subscription, released by `dispose()`. */
@@ -640,6 +646,12 @@ export class SemanticSearchService implements vscode.Disposable {
    * Process snapshot changes
    */
   private handleSnapshotChanges(): void {
+    // Fully inert once disposed: a listener that outlived the subscription, or
+    // a direct call, must not repopulate the queue of a dead service.
+    if (this.disposed) {
+      return;
+    }
+
     // Check auto-index config and skip if disabled
     const autoIndexEnabled = vscode.workspace
       .getConfiguration('vscode-snapshots')
@@ -664,8 +676,13 @@ export class SemanticSearchService implements vscode.Disposable {
 
       // Deduplicate: every change event re-lists the snapshots that are not
       // indexed yet, so an undeduplicated push queued the same id once per
-      // saved file and indexed it that many times.
+      // saved file and indexed it that many times. The in-flight id is part of
+      // that set: it has left the queue but is not indexed yet, so a save
+      // landing mid-index would otherwise queue a second copy.
       const alreadyQueued = new Set(this.processingQueue);
+      if (this.inFlightSnapshotId !== undefined) {
+        alreadyQueued.add(this.inFlightSnapshotId);
+      }
       for (const snapshotId of pendingSnapshots) {
         if (alreadyQueued.has(snapshotId)) {
           continue;
@@ -767,6 +784,10 @@ export class SemanticSearchService implements vscode.Disposable {
       return;
     }
 
+    // Off the queue but not indexed yet: record it for the duration of the
+    // pass so a change event cannot queue a second copy of it.
+    this.inFlightSnapshotId = snapshotId;
+
     try {
       log(`Processing snapshot ${snapshotId} for indexing`);
 
@@ -796,6 +817,10 @@ export class SemanticSearchService implements vscode.Disposable {
       log(`Completed indexing snapshot ${snapshotId}`);
     } catch (error) {
       log(`Error processing snapshot ${snapshotId}: ${error}`);
+    } finally {
+      // Every exit from the pass -- including the missing-credentials return --
+      // releases the in-flight id.
+      this.inFlightSnapshotId = undefined;
     }
 
     if (this.disposed) {

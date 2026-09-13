@@ -71,6 +71,30 @@ describe('SemanticSearchService indexing queue', () => {
     expect((service as any).processingQueue).toEqual(['snap-a']);
   });
 
+  it('does not enqueue a snapshot that is already being indexed', async () => {
+    const { service } = buildService({ hasCredentials: true });
+    const releaseIndex: Array<() => void> = [];
+    const indexSnapshot = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseIndex.push(resolve);
+        }),
+    );
+    (service as any).indexSnapshot = indexSnapshot;
+
+    (service as any).handleSnapshotChanges();
+    await flush();
+
+    // A save lands while the snapshot is mid-index: it has left the queue but
+    // is not in indexedSnapshots yet, so the dedupe must still know about it.
+    (service as any).handleSnapshotChanges();
+    releaseIndex.shift()?.();
+    await flush();
+
+    expect(indexSnapshot).toHaveBeenCalledTimes(1);
+    expect((service as any).processingQueue).toEqual([]);
+  });
+
   it('stops the chain and releases the subscription after dispose', async () => {
     const { service, workspaceState, snapshotChangeDispose } = buildService({
       hasCredentials: true,
@@ -86,6 +110,16 @@ describe('SemanticSearchService indexing queue', () => {
     expect(indexSnapshot).not.toHaveBeenCalled();
     expect(workspaceState.update).not.toHaveBeenCalled();
     expect(snapshotChangeDispose).toHaveBeenCalled();
+  });
+
+  it('ignores snapshot changes after dispose', async () => {
+    const { service } = buildService({ hasCredentials: true });
+    await flush();
+
+    service.dispose();
+    (service as any).handleSnapshotChanges();
+
+    expect((service as any).processingQueue).toEqual([]);
   });
 
   it('does not write workspace state from a delete after dispose', async () => {
