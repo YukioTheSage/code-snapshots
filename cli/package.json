@@ -1,7 +1,7 @@
 {
   "name": "codelapse-cli",
   "version": "2.0.0",
-  "description": "Command-line interface for CodeLapse snapshots: snapshot CRUD, files, filter, rules, diagnostics, config, git and workspace info run standalone; search, analyze, chunk and watch need VS Code",
+  "description": "Command-line interface for CodeLapse snapshots. Standalone: snapshot CRUD, file operations (files), filtering, rules, diagnostics, config, git, workspace info. Requires the VS Code extension over IPC: search, search-enhanced, analyze, chunk, watch, workspace state/workspace files, utility.",
   "main": "dist/cli.js",
   "bin": {
     "codelapse": "dist/cli.js",

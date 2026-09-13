@@ -35,7 +35,7 @@ Describe your goal or use case.
 
 **Environment:**
 - CodeLapse Version: [e.g. 0.9.6]
-- VS Code Version: [e.g. 1.75.0]
+- VS Code Version: [e.g. 1.85.0]
 - Operating System: [e.g. Windows 11, macOS 13.0, Ubuntu 22.04]
 
 **Configuration:**

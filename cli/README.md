@@ -387,12 +387,15 @@ codelapse api takeSnapshot --data '''{"description": "Test", "tags": ["auto"]}''
 - `--verbose`: Enable verbose output for debugging.
 - `--timeout <ms>`: Connection timeout in milliseconds (default: 5000).
 
-> **There is no `--mode` flag.** Mode selection is automatic — standalone if a
-> snapshot store is present, IPC otherwise. It cannot be exposed as `--mode`
-> because a program-level option shadows the same-named subcommand option, and
-> `search query` / `search-enhanced query` declare `-m, --mode` for search
-> strategy; adding it silently reset that to its default. Any future selector
-> needs a non-colliding name such as `--client-mode`.
+> **There is no `--mode` flag.** The client always runs in `auto`: it uses the
+> standalone snapshot store when one is available and falls back to IPC when it
+> is not, so what answers decides the mode, not a flag. `status --json` reports
+> which one served the run in its `mode` field (`"standalone"` or `"ipc"`). The
+> flag cannot be exposed as `--mode` because a program-level option shadows the
+> same-named subcommand option, and `search query` / `search-enhanced query`
+> declare `-m, --mode` for search strategy; adding it silently reset that to its
+> default. Any future selector needs a non-colliding name such as
+> `--client-mode`.
 
 ### Connection & Status
 
@@ -405,6 +408,7 @@ is required: standalone mode answers with `"mode": "standalone"`.
 {
   "success": true,
   "connected": true,
+  "mode": "standalone",
   "workspace": "/path/to/project",
   "totalSnapshots": 42,
   "currentSnapshot": "snap-1"
@@ -1561,7 +1565,7 @@ pipeline {
                                 --tags "jenkins,pre-deploy,${env.BRANCH_NAME}" \
                                 --task-ref "${env.BUILD_NUMBER}" \
                                 --json)
-                            echo "\$SNAPSHOT_JSON" | tail -n 1
+                            printf '%s\\n' "\$SNAPSHOT_JSON" | tail -n 1
                         """,
                         returnStdout: true
                     ).trim()

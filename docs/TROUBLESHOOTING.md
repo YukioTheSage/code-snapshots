@@ -51,7 +51,7 @@ codelapse --version
    - Try running "Snapshots: Getting Started"
 
 4. **Compatibility Check**:
-   - Verify VS Code version ≥ 1.60.0
+   - Verify VS Code version ≥ 1.85.0 (the floor declared in `engines.vscode`)
    - Check system requirements (Windows/macOS/Linux)
 
 #### Problem: Extension installed but not working

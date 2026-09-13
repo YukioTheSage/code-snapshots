@@ -36,7 +36,7 @@ If applicable, add screenshots to help explain your problem.
 - Installation Source: [VS Code Marketplace / Manual Install]
 
 **VS Code Information:**
-- VS Code Version: [e.g. 1.75.0]
+- VS Code Version: [e.g. 1.85.0]
 - Operating System: [e.g. Windows 11, macOS 13.0, Ubuntu 22.04]
 - Architecture: [e.g. x64, arm64]
 
