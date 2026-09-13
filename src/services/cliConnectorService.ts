@@ -142,12 +142,26 @@ function assertValidTimeout(value: unknown): string | null {
  * previous inline form armed a timer per operation and dropped the handle, so
  * every batch left up to `maxConcurrency` timers pending and the unit suite's
  * worker never exited cleanly.
+ *
+ * The delay is re-checked here rather than trusted from the caller. Every
+ * caller validates before it calls this, but this is the value `setTimeout`
+ * actually reads, and Node clamps an out-of-range or non-finite delay to 1ms --
+ * an immediate, fabricated timeout. Exported so the sink is unit-testable
+ * without standing up the whole service.
  */
-async function withTimeout<T>(
+export async function withTimeout<T>(
   work: Promise<T>,
   ms: number,
   message: string,
 ): Promise<T> {
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_TIMER_DELAY_MS) {
+    throw new Error(
+      `Invalid timeout: ${String(
+        ms,
+      )}. Expected a positive number of milliseconds no greater than ${MAX_TIMER_DELAY_MS}.`,
+    );
+  }
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
