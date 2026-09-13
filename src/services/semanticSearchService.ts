@@ -273,17 +273,18 @@ export class SemanticSearchService implements vscode.Disposable {
       languages?.length === 1 ? languages[0] : undefined,
     );
 
-    // Determine which snapshots to search (use all if none specified)
-    const allIds = this.snapshotManager.getSnapshots().map((s) => s.id);
-    const snapshotIdsToSearch =
-      snapshotIds && snapshotIds.length > 0 ? snapshotIds : allIds;
-
-    // Search for similar code with improved parameters
+    // Search for similar code with improved parameters. The caller selection is
+    // passed through as given: when it is absent the query is not narrowed to an
+    // explicit id list, because every query already carries the workspace scope,
+    // so "every snapshot in this workspace" is the same set without a
+    // hundred-element `$in`. A vector whose snapshot no longer exists can now
+    // occupy an oversampling slot; the enrichment pass drops it when the
+    // snapshot lookup finds nothing.
     const searchResults = await this.vectorDatabaseService.searchSimilarCode(
       queryEmbedding,
       {
         limit: Math.min(100, limit * 2), // Request more results to allow for diverse filtering
-        snapshotIds: snapshotIdsToSearch,
+        snapshotIds,
         languages,
         scoreThreshold: resolveScoreThreshold(scoreThreshold),
       },
