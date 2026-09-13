@@ -89,6 +89,43 @@ export function resolveScoreThreshold(requested: number): number {
   return Math.max(0, Math.min(1, requested));
 }
 
+/**
+ * Identity of a result inside one workspace: the same tuple the chunker uses to
+ * name a chunk.
+ */
+function resultIdentity(result: SemanticSearchResult): string {
+  return `${result.snapshotId}:${result.filePath}:${result.startLine}`;
+}
+
+/**
+ * Total order over search results: score descending, timestamp descending, then
+ * identity ascending.
+ *
+ * The previous comparator gave any pair of scores within 5% a timestamp
+ * tie-break and compared scores otherwise. That relation is not transitive, so
+ * it is not an order at all: with scores 1.00 / 0.96 / 0.92 and timestamps
+ * 1 / 3 / 2 it ranked 0.96 first, and it left exact ties to `Array#sort`'s input
+ * order, so the same result set could come back in two different orders. The
+ * identity tie-break is what makes the output independent of the input order.
+ */
+export function compareSearchResults(
+  a: SemanticSearchResult,
+  b: SemanticSearchResult,
+): number {
+  if (a.score !== b.score) {
+    return b.score - a.score;
+  }
+  if (a.timestamp !== b.timestamp) {
+    return b.timestamp - a.timestamp;
+  }
+  const aIdentity = resultIdentity(a);
+  const bIdentity = resultIdentity(b);
+  if (aIdentity === bIdentity) {
+    return 0;
+  }
+  return aIdentity < bIdentity ? -1 : 1;
+}
+
 export class SemanticSearchService implements vscode.Disposable {
   private snapshotManager: SnapshotManager;
   private credentialsManager: CredentialsManager;
@@ -304,8 +341,10 @@ export class SemanticSearchService implements vscode.Disposable {
       }
     }
 
-    // Sort all processed results by score for the initial ranking
-    processedResults.sort((a, b) => b.score - a.score);
+    // Sort all processed results for the initial ranking. The same total order
+    // as the final sort: which result is "first per file" in the diversity pass
+    // must not depend on the order the vector store happened to return.
+    processedResults.sort(compareSearchResults);
 
     // Second pass: apply diversity while maintaining quality
     // First take top results with diversity consideration (1 per file for top half)
@@ -347,14 +386,8 @@ export class SemanticSearchService implements vscode.Disposable {
       }
     }
 
-    // Final sort by score with timestamp as tiebreaker
-    enhancedResults.sort((a, b) => {
-      // If scores are very close (within 5%), sort by timestamp
-      if (Math.abs(a.score - b.score) < 0.05) {
-        return b.timestamp - a.timestamp;
-      }
-      return b.score - a.score;
-    });
+    // Final sort: a total order, so the output does not depend on the input.
+    enhancedResults.sort(compareSearchResults);
 
     // Remove the fileKey property that was used internally
     const finalResults = enhancedResults.map((result) => {
