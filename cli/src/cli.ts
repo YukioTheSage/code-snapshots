@@ -433,7 +433,13 @@ export function buildProgram(): Command {
   searchCmd
     .command('index')
     .description('Index snapshots for semantic search')
-    .option('--all', 'Index all snapshots')
+    .option('--all', 'Index every snapshot (the default)')
+    .option(
+      '--snapshots <ids>',
+      'Index specific snapshots (comma-separated IDs)',
+    )
+    .option('--force', 'Re-index snapshots that are already indexed')
+    .option('--purge', "Delete a snapshot's vectors before re-indexing it")
     .action(searchCommands.index.bind(searchCommands));
 
   // Workspace commands

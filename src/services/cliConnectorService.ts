@@ -529,9 +529,13 @@ export class CliConnectorService implements vscode.Disposable {
           );
           break;
         case 'indexSnapshots':
-          result = await this.terminalApiService.indexSnapshots(
-            data.snapshotIds,
-          );
+          result = await this.terminalApiService.indexSnapshots({
+            snapshotIds: data.snapshotIds,
+            // Strict booleans: a re-index and a purge are explicit acts, so
+            // only a real true performs them.
+            force: data.force === true,
+            purgeFirst: data.purgeFirst === true,
+          });
           break;
         case 'getWorkspaceInfo':
           result = await this.terminalApiService.getWorkspaceInfo();

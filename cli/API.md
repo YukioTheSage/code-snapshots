@@ -256,16 +256,24 @@ codelapse search batch queries.json --concurrency 5
 
 #### `search index`
 
-Index snapshots for semantic search.
+Index snapshots for semantic search. With no options it indexes every snapshot
+that is not already indexed.
 
 ```bash
 codelapse search index
-codelapse search index --all
+codelapse search index --snapshots snapshot-1,snapshot-2
+codelapse search index --force
+codelapse search index --snapshots snapshot-1 --purge
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--all` | Index all snapshots |
+| `--all` | Index every snapshot (the default) |
+| `--snapshots <ids>` | Index specific snapshots (comma-separated IDs) |
+| `--force` | Re-index snapshots that are already indexed |
+| `--purge` | Delete a snapshot's vectors before re-indexing it |
+
+`--all` together with `--snapshots` is refused before the extension is called.
 
 ---
 

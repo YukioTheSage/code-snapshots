@@ -289,10 +289,43 @@ export class SearchCommands {
   }
 
   async index(options: any): Promise<void> {
+    const snapshotIds: string[] =
+      typeof options?.snapshots === 'string' && options.snapshots.length > 0
+        ? options.snapshots
+            .split(',')
+            .map((id: string) => id.trim())
+            .filter((id: string) => id.length > 0)
+        : [];
+
+    // --all is the explicit spelling of the default. Naming a list and asking
+    // for all of them at once is a contradiction, not a preference.
+    if (options?.all === true && snapshotIds.length > 0) {
+      printResult(
+        {
+          success: false,
+          error: 'Pass either --all or --snapshots, not both.',
+        },
+        options,
+      );
+      return;
+    }
+
+    const payload: Record<string, unknown> = {
+      force: options?.force === true,
+      purgeFirst: options?.purge === true,
+    };
+    // No snapshotIds key at all when none were named: an empty id list is what
+    // made the default invocation fail. Absent and empty both mean "every
+    // snapshot" now, and sending nothing says that without relying on the empty
+    // case.
+    if (snapshotIds.length > 0) {
+      payload.snapshotIds = snapshotIds;
+    }
+
     try {
-      const result = (await this.client.callApi('indexSnapshots', {
-        snapshotIds: options.all ? undefined : [],
-      })) as { success?: boolean; error?: string } | undefined;
+      const result = (await this.client.callApi('indexSnapshots', payload)) as
+        | { success?: boolean; error?: string }
+        | undefined;
 
       // Propagate the extension's own verdict. Hardcoding success here meant a
       // run that failed to index anything still printed "Snapshots indexed

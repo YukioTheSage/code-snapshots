@@ -64,4 +64,58 @@ describe('SearchCommands.index reporting', () => {
     expect(payload.indexing.snapshotsIndexed).toBe(3);
     expect(getFailure()).toBe(false);
   });
+
+  it('sends no id list for a default run, so the handler indexes everything', async () => {
+    mockClient.callApi = jest.fn().mockResolvedValue({
+      success: true,
+      snapshotsIndexed: 3,
+      filesIndexed: 0,
+      timeElapsed: 12,
+    });
+
+    await searchCommands.index({ json: true });
+
+    // The default invocation used to send snapshotIds: [], which is truthy:
+    // the handler took the explicit-ids branch and answered "Individual
+    // snapshot indexing not supported".
+    expect(mockClient.callApi).toHaveBeenCalledWith('indexSnapshots', {
+      force: false,
+      purgeFirst: false,
+    });
+    expect(printedPayload().success).toBe(true);
+  });
+
+  it('sends the ids, force and purge options it was given', async () => {
+    mockClient.callApi = jest.fn().mockResolvedValue({
+      success: true,
+      snapshotsIndexed: 2,
+      filesIndexed: 0,
+      timeElapsed: 12,
+    });
+
+    await searchCommands.index({
+      snapshots: 'a, b',
+      force: true,
+      purge: true,
+      json: true,
+    });
+
+    expect(mockClient.callApi).toHaveBeenCalledWith('indexSnapshots', {
+      snapshotIds: ['a', 'b'],
+      force: true,
+      purgeFirst: true,
+    });
+  });
+
+  it('refuses --all combined with --snapshots instead of picking one silently', async () => {
+    mockClient.callApi = jest.fn();
+
+    await searchCommands.index({ all: true, snapshots: 'a', json: true });
+
+    expect(mockClient.callApi).not.toHaveBeenCalled();
+    const payload = printedPayload();
+    expect(payload.success).toBe(false);
+    expect(payload.error).toMatch(/--all.*--snapshots|--snapshots.*--all/);
+    expect(getFailure()).toBe(true);
+  });
 });

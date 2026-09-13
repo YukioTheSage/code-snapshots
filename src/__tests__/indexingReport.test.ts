@@ -137,6 +137,84 @@ describe('indexAllSnapshots reporting', () => {
       (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot,
     ).not.toHaveBeenCalled();
   });
+
+  it('indexes every snapshot when the id list is empty', async () => {
+    const { service } = buildService([{ id: 'a' }, { id: 'b' }], []);
+
+    const outcome = await service.indexAllSnapshots({ snapshotIds: [] });
+
+    // The CLI's default invocation sent [], which is truthy, so the handler
+    // answered "Individual snapshot indexing not supported" and the command
+    // could never succeed.
+    expect(outcome.attempted).toBe(2);
+    expect(outcome.succeeded).toBe(2);
+    expect(
+      (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot,
+    ).toHaveBeenCalledTimes(2);
+  });
+
+  it('indexes exactly the requested ids', async () => {
+    const { service } = buildService([{ id: 'a' }, { id: 'b' }], []);
+
+    const outcome = await service.indexAllSnapshots({ snapshotIds: ['b'] });
+
+    expect(outcome.attempted).toBe(1);
+    expect(outcome.succeeded).toBe(1);
+    expect(
+      (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot,
+    ).toHaveBeenCalledWith('b');
+  });
+
+  it('reports a requested id that does not exist instead of indexing nothing silently', async () => {
+    const { service } = buildService([{ id: 'a' }], []);
+
+    const outcome = await service.indexAllSnapshots({
+      snapshotIds: ['missing'],
+    });
+
+    expect(outcome.succeeded).toBe(0);
+    expect(outcome.failed).toEqual([
+      {
+        snapshotId: 'missing',
+        error: expect.stringMatching(/not found/i),
+      },
+    ]);
+  });
+
+  it('re-indexes an already indexed snapshot when force is set', async () => {
+    const { service } = buildService([{ id: 'a' }], []);
+    (
+      service as unknown as { indexedSnapshots: Set<string> }
+    ).indexedSnapshots.add('a');
+
+    const outcome = await service.indexAllSnapshots({ force: true });
+
+    expect(outcome.succeeded).toBe(1);
+    expect(
+      (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot,
+    ).toHaveBeenCalledWith('a');
+  });
+
+  it('purges a snapshot before re-indexing it when purgeFirst is set', async () => {
+    const { service } = buildService([{ id: 'a' }], []);
+    const order: string[] = [];
+    const deleteSnapshotVectors = jest.fn(async () => {
+      order.push('purge');
+    });
+    (
+      service as unknown as { vectorDatabaseService: unknown }
+    ).vectorDatabaseService = { deleteSnapshotVectors };
+    (service as unknown as { indexSnapshot: jest.Mock }).indexSnapshot =
+      jest.fn(async () => {
+        order.push('index');
+      });
+
+    await service.indexAllSnapshots({ purgeFirst: true });
+
+    // A re-index without the purge mixes the old and the new chunk id sets.
+    expect(order).toEqual(['purge', 'index']);
+    expect(deleteSnapshotVectors).toHaveBeenCalledWith('a');
+  });
 });
 
 describe('TerminalApiService.indexSnapshots reporting', () => {
@@ -180,5 +258,57 @@ describe('TerminalApiService.indexSnapshots reporting', () => {
     expect(result.success).toBe(true);
     expect(result.snapshotsIndexed).toBe(3);
     expect(result.error).toBeUndefined();
+  });
+
+  it('treats an empty id list as every snapshot', async () => {
+    const api = new TerminalApiService({
+      getSnapshots: () => [{ id: 'a' }, { id: 'b' }],
+    } as never);
+    const indexAllSnapshots = jest.fn().mockResolvedValue({
+      attempted: 2,
+      succeeded: 2,
+      failed: [],
+    });
+    (
+      api as unknown as { semanticSearchService: unknown }
+    ).semanticSearchService = { indexAllSnapshots };
+
+    const result = await api.indexSnapshots({ snapshotIds: [] });
+
+    // The regression: [] used to take the explicit-ids branch and answer
+    // "Individual snapshot indexing not supported".
+    expect(indexAllSnapshots).toHaveBeenCalledWith({
+      snapshotIds: [],
+      force: false,
+      purgeFirst: false,
+    });
+    expect(result.success).toBe(true);
+    expect(result.snapshotsIndexed).toBe(2);
+  });
+
+  it('forwards explicit ids, force and purgeFirst', async () => {
+    const api = new TerminalApiService({
+      getSnapshots: () => [{ id: 'a' }, { id: 'b' }],
+    } as never);
+    const indexAllSnapshots = jest.fn().mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      failed: [],
+    });
+    (
+      api as unknown as { semanticSearchService: unknown }
+    ).semanticSearchService = { indexAllSnapshots };
+
+    await api.indexSnapshots({
+      snapshotIds: ['a'],
+      force: true,
+      purgeFirst: true,
+    });
+
+    expect(indexAllSnapshots).toHaveBeenCalledWith({
+      snapshotIds: ['a'],
+      force: true,
+      purgeFirst: true,
+    });
   });
 });

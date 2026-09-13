@@ -2,6 +2,22 @@ import * as vscode from 'vscode';
 import { Snapshot } from '../snapshotManager';
 
 /**
+ * What an indexSnapshots request selects.
+ *
+ * Absent **or empty** snapshotIds means every snapshot. An empty list used to
+ * be truthy, so the default CLI invocation took the explicit-ids branch and
+ * answered "Individual snapshot indexing not supported" -- a command that could
+ * never succeed.
+ */
+export interface IndexSnapshotsOptions {
+  snapshotIds?: string[];
+  /** Re-index snapshots recorded in the persisted indexed set. */
+  force?: boolean;
+  /** Delete each snapshot's vectors before indexing it. */
+  purgeFirst?: boolean;
+}
+
+/**
  * Comprehensive API interface for terminal and external tool integration
  */
 export interface TerminalApiInterface {
@@ -35,7 +51,7 @@ export interface TerminalApiInterface {
     query: string,
     options?: SearchOptions,
   ): Promise<SearchResult[]>;
-  indexSnapshots(snapshotIds?: string[]): Promise<IndexingResult>;
+  indexSnapshots(options?: IndexSnapshotsOptions): Promise<IndexingResult>;
 
   // Workspace operations
   getWorkspaceInfo(): Promise<WorkspaceInfo>;

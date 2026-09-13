@@ -850,17 +850,27 @@ export class SemanticSearchService implements vscode.Disposable {
   }
 
   /**
-   * Indexes all existing snapshots
+   * Index snapshots.
    *
-   * Returns a count of what actually happened. Previously this reported
-   * `Successfully indexed ${current} snapshots`, where `current` counted
-   * *attempts*: every per-snapshot error was caught and logged, so the user was
-   * told everything had been indexed when an unknown subset had failed.
+   * With no options this means every snapshot that is not already recorded in
+   * indexedSnapshots -- the behaviour every existing caller relies on. An
+   * explicit snapshotIds list selects exactly those; force includes ones already
+   * indexed; purgeFirst clears a snapshot's vectors before upserting so a retry
+   * cannot mix old and new chunk ids.
    */
-  async indexAllSnapshots(): Promise<IndexingOutcome> {
+  async indexAllSnapshots(
+    options: {
+      snapshotIds?: string[];
+      force?: boolean;
+      purgeFirst?: boolean;
+    } = {},
+  ): Promise<IndexingOutcome> {
     const snapshots = this.snapshotManager.getSnapshots();
+    const requested = (options.snapshotIds ?? []).filter(
+      (id): id is string => typeof id === 'string' && id.length > 0,
+    );
 
-    if (snapshots.length === 0) {
+    if (snapshots.length === 0 && requested.length === 0) {
       return { attempted: 0, succeeded: 0, failed: [] };
     }
 
@@ -881,37 +891,63 @@ export class SemanticSearchService implements vscode.Disposable {
         cancellable: true,
       },
       async (progress, token) => {
-        // Filter to non-indexed snapshots
-        const unindexedSnapshots = snapshots
-          .filter((snapshot) => !this.indexedSnapshots.has(snapshot.id))
-          .map((snapshot) => snapshot.id);
+        const failed: Array<{ snapshotId: string; error: string }> = [];
+        const known = new Set(snapshots.map((snapshot) => snapshot.id));
 
-        if (unindexedSnapshots.length === 0) {
+        // Absent or empty ids mean every snapshot; explicit ids mean exactly
+        // those. An id that does not exist is reported, never dropped.
+        const selected =
+          requested.length > 0 ? requested : snapshots.map((s) => s.id);
+        const targets: string[] = [];
+        for (const snapshotId of selected) {
+          if (!known.has(snapshotId)) {
+            failed.push({
+              snapshotId,
+              error: 'Snapshot ' + snapshotId + ' not found',
+            });
+            continue;
+          }
+          if (options.force !== true && this.indexedSnapshots.has(snapshotId)) {
+            continue;
+          }
+          targets.push(snapshotId);
+        }
+
+        if (targets.length === 0 && failed.length === 0) {
           vscode.window.showInformationMessage(
-            'All snapshots are already indexed.',
+            requested.length > 0
+              ? 'The requested snapshots are already indexed.'
+              : 'All snapshots are already indexed.',
           );
           return { attempted: 0, succeeded: 0, failed: [] };
         }
 
-        const total = unindexedSnapshots.length;
-        let attempted = 0;
+        const total = targets.length;
+        let attempted = failed.length;
         let succeeded = 0;
-        const failed: Array<{ snapshotId: string; error: string }> = [];
 
         // Process snapshots sequentially, checking cancellation at each
         // boundary. The previous implementation registered a listener that
         // showed a toast but could not stop the loop, so a cancelled run still
         // ran to completion.
-        for (const snapshotId of unindexedSnapshots) {
+        for (const snapshotId of targets) {
           throwIfCancelled(token);
 
           progress.report({
-            message: `Processing snapshot ${attempted + 1} of ${total}`,
+            message: 'Processing snapshot ' + (attempted + 1) + ' of ' + total,
             increment: 100 / total,
           });
           attempted++;
 
           try {
+            if (options.purgeFirst === true) {
+              // A re-index without this mixes the old and the new chunk id sets
+              // for the same snapshot. Plan 11 also makes the upsert itself
+              // idempotent; this call stays correct either way.
+              await this.vectorDatabaseService.deleteSnapshotVectors(
+                snapshotId,
+              );
+            }
             await this.indexSnapshot(snapshotId);
             this.indexedSnapshots.add(snapshotId);
             // Persist updated indexed snapshots

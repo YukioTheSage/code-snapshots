@@ -79,7 +79,7 @@ codelapse <command> --help
 - `codelapse search query <query>` - Semantic search across snapshots
 - `codelapse search behavioral <description>` - Search by behavioral description
 - `codelapse search pattern <pattern-type>` - Search for design patterns
-- `codelapse search index --all` - Index snapshots for search. **`--all` is required**: the extension can index every snapshot but not individual ones, so the unflagged form fails with "Individual snapshot indexing not supported".
+- `codelapse search index` - Index snapshots for search. Indexes every snapshot that is not already indexed; `--snapshots <ids>` names specific ones, `--force` re-indexes ones already indexed, and `--purge` deletes a snapshot's vectors before re-indexing it.
 - `codelapse analyze chunk <chunk-id>` - Analyze a specific code chunk ⚠️ **placeholder data** (see below)
 - `codelapse analyze file <file-path>` - Analyze a complete file (derived from the snapshot's real content)
 - `codelapse analyze quality <target>` - Analyze code quality metrics ⚠️ **placeholder data**
