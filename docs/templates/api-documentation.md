@@ -118,7 +118,7 @@ This API method is also available through the CLI:
 codelapse method-name "parameter-value"
 
 # With options
-codelapse method-name "parameter-value" --option value --json --silent
+codelapse method-name "parameter-value" --option value --json
 
 # Expected JSON output
 {

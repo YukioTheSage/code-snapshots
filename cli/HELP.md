@@ -38,13 +38,12 @@ codelapse <command> --help
   two route through the shared printer and go quiet. `watch` and
   `diagnostics logs --follow` stream, so their events reach stdout whatever
   `--silent` says. The `uncaughtException` and top-level fatal handlers print
-  their JSON error even under `--silent`. Storage notices can still reach
-  stdout;
-  they are described under JSON Output Format.
+  their JSON error even under `--silent`. Storage notices go to stderr like the
+  other diagnostics; they are described under JSON Output Format.
 
-  **In automation, use `--json` alone.** Progress and warnings go to stderr, and
-  stdout carries the payload plus any notice the storage layer writes (storage
-  notices are described under JSON Output Format). The exit code tells you
+  **In automation, use `--json` alone.** Progress, warnings and the storage
+  layer's notices go to stderr, so stdout carries the payload and nothing else.
+  The exit code tells you
   whether the payload said `success: true`. Reach for `--silent` only when
   nobody reads the output and the exit code is the whole result. `--silent` is
   **not** a way to skip a confirmation prompt: a prompt is skipped only by the
@@ -357,21 +356,21 @@ codelapse search query "authentication" --json
 codelapse filter favorites --json
 ```
 
-Progress and warnings are written to stderr, so stdout stays parseable - with a
-known exception, noted below. The process exit code is 0 when the JSON
+Progress, warnings and storage notices are written to stderr, so stdout carries
+the JSON payload and nothing else. The process exit code is 0 when the JSON
 payload's `success` is `true` and 1 when it is `false` (verified for 30
 command/argument combinations), including `api` and `batch`.
 
-A known exception: in standalone mode, a workspace whose snapshot store does not
-exist yet gets a plain-text notice on **stdout** ("Snapshot index file not
-found. Starting with empty state."). With `--json` the notice precedes the
-payload; with `--json --silent` it is the only output for any command whose
-payload `--silent` suppresses - `status` prints its JSON either way, so there
-the notice joins the payload. It stops once a snapshot-writing command has
-created the store - running `status` does not create it, and neither does
-`snapshot list`, so `status` first is not a workaround. A parser that assumes
-the first line is JSON fails on its first call against a new project: select
-the JSON line instead.
+**Storage notices.** In standalone mode, a workspace whose snapshot store does
+not exist yet gets a plain-text notice on **stderr** ("Snapshot index file not
+found. Starting with empty state."). It never precedes the payload - stdout
+carries the JSON alone, so a parser can read the first line. With
+`--json --silent` the payload is suppressed and stdout prints nothing, while
+the notice still goes to stderr; `status` prints its JSON either way, so there
+the notice and the payload ride different streams. The notice stops once a
+snapshot-writing command has created the store - running `status` does not
+create it, and neither does `snapshot list`, so `status` first is not a
+workaround.
 
 Do not add `--silent` to a command whose JSON you intend to parse: it suppresses
 the payload. See the `--silent` entry under Global Options.

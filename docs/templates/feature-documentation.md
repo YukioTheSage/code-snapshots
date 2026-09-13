@@ -57,7 +57,7 @@ codelapse feature-command --git-aware
 #### With Automation
 ```bash
 # Example showing automation usage
-codelapse feature-command --json --silent
+codelapse feature-command --json
 ```
 
 ## Use Cases

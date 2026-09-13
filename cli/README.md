@@ -145,7 +145,8 @@ codelapse --version
 codelapse status --json
 
 # Expected output (`mode` is `standalone` when no extension answered). A
-# brand-new workspace prints the store-absent notice first:
+# brand-new workspace writes the store-absent notice to stderr - it never
+# joins stdout:
 # Snapshot index file not found. Starting with empty state.
 # {
 #   "success": true,
@@ -248,37 +249,37 @@ Perfect for automated testing and deployment pipelines:
 
 ```bash
 # Pre-deployment snapshot
-codelapse snapshot create "Pre-deployment: $(git rev-parse --short HEAD)" --tags "deployment,$(git branch --show-current)" --json --silent
+codelapse snapshot create "Pre-deployment: $(git rev-parse --short HEAD)" --tags "deployment,$(git branch --show-current)" --silent
 
 # Validate the workspace the CLI sees
 codelapse workspace info --json
 
 # Create release snapshot
-codelapse snapshot create "Release v$(cat package.json | jq -r .version)" --tags "release,production" --favorite --json --silent
+codelapse snapshot create "Release v$(cat package.json | jq -r .version)" --tags "release,production" --favorite --silent
 ```
 
 #### Automated Testing Workflows
 ```bash
 # Create test checkpoint
-codelapse snapshot create "Before test run" --tags "test,checkpoint" --json --silent
+codelapse snapshot create "Before test run" --tags "test,checkpoint" --silent
 
 # Run tests and capture results
 if npm test; then
-  codelapse snapshot create "Tests passed: $(date)" --tags "test,success" --json --silent
+  codelapse snapshot create "Tests passed: $(date)" --tags "test,success" --silent
 else
-  codelapse snapshot create "Tests failed: $(date)" --tags "test,failure" --json --silent
+  codelapse snapshot create "Tests failed: $(date)" --tags "test,failure" --silent
   # Optionally restore to last known good state
-  codelapse snapshot restore last-good-snapshot --backup --json --silent
+  codelapse snapshot restore last-good-snapshot --backup --silent
 fi
 ```
 
 #### Environment Management
 ```bash
 # Capture environment state
-codelapse snapshot create "Environment: $(NODE_ENV)" --tags "environment,$(NODE_ENV)" --json --silent
+codelapse snapshot create "Environment: $(NODE_ENV)" --tags "environment,$(NODE_ENV)" --silent
 
 # Switch between environment configurations
-codelapse snapshot restore dev-config-snapshot --files "config/" --json --silent
+codelapse snapshot restore dev-config-snapshot --files "config/" --silent
 ```
 
 ## AI-Friendly Features
@@ -292,12 +293,11 @@ Verified against the built `dist/cli.js` for `status`, `snapshot list`,
 `diagnostics system/health/performance`, `files list/history/export`,
 `utility validate`, `analyze chunk/file/quality`, `search query`,
 `search index` and `api`: every one wrote a single JSON object to stdout and
-exit code 0 or 1 agreeing with its own `success` field. Human-readable progress
-and warnings go to **stderr**, so stdout stays parseable - with one exception:
-until a snapshot-writing command creates the store, standalone mode prints
-`Snapshot index file not found. Starting with empty state.` on **stdout** ahead
-of the payload. Select the JSON line (`codelapse snapshot list --json | tail -n 1`)
-rather than assuming line 1.
+exit code 0 or 1 agreeing with its own `success` field. Human-readable progress,
+warnings and storage notices go to **stderr**, so stdout carries the payload and
+nothing else: the store-absent notice (`Snapshot index file not found. Starting
+with empty state.`) that standalone mode writes until a snapshot-writing command
+creates the store is on stderr too. Parse the payload directly.
 
 ```bash
 # Success response
@@ -319,15 +319,15 @@ Use `--json`; add `--silent` only when you want no output at all. `--silent`
 suppresses banners, spinners and progress messages *and the JSON envelope with
 them*, so a command routed through the shared result printer prints no payload
 when both flags are set - the exit code is then the whole result. The
-store-absent notice described under [JSON Output Mode](#json-output-mode) can
-still reach stdout. `--silent` is
+store-absent notice described under [JSON Output Mode](#json-output-mode) goes
+to stderr, so it does not appear on the payload stream either. `--silent` is
 **not** a way to skip a confirmation prompt: only the flag a command's own
 `--help` documents as skipping it does that, and not every command has one. The
 full contract is in [HELP.md's Global Options](HELP.md#global-options).
 
 ```bash
 # No payload is printed; branch on the exit code
-codelapse snapshot create "Auto snapshot" --json --silent
+codelapse snapshot create "Auto snapshot" --silent
 
 # The payload is printed, for a script that reads it
 codelapse snapshot create "Auto snapshot" --json
@@ -509,7 +509,7 @@ Show detailed information for a single snapshot.
 Restore a snapshot, overwriting local files.
 - `--backup`: Create a new snapshot of the current state before restoring.
 - `--files <files>`: Restore only specific files from the snapshot.
-- `-y, --yes`: Skip the confirmation prompt.
+- `-y, --yes`: Accept discarding unsaved editor changes over IPC; a restore that would overwrite them is refused without it.
 
 **Returns**
 ```json
@@ -1062,7 +1062,7 @@ When a command fails, it returns a standardized JSON error object:
 #### For Developers
 ```bash
 # Always check command success
-if ! codelapse snapshot create "My changes" --json --silent; then
+if ! codelapse snapshot create "My changes" --silent; then
   echo "Snapshot creation failed"
   exit 1
 fi
@@ -1096,10 +1096,10 @@ BACKUP_ID=$(printf '%s\n' "$BACKUP_JSON" | tail -n 1 | jq -r '.snapshot.id')
 if ! npm test; then
   echo "Tests failed, creating failure snapshot"
   codelapse snapshot create "CI: Test failure $(date)" \
-    --tags "ci,failure" --json --silent
+    --tags "ci,failure" --silent
   
   echo "Restoring backup state"
-  codelapse snapshot restore "$BACKUP_ID" --backup --json --silent
+  codelapse snapshot restore "$BACKUP_ID" --backup --silent
   
   exit 1
 fi
@@ -1348,10 +1348,9 @@ else
   echo "Invalid JSON: $RESULT"
 fi
 
-# Handle mixed output - keep the command's own payload, failed or not
+# Keep the command's own payload, failed or not. stdout carries JSON alone, so
+# there is nothing to filter out
 RESULT=$(codelapse status --json 2>/dev/null)
-# select the JSON line: a fresh store prints a notice first
-RESULT=$(printf '%s\n' "$RESULT" | tail -n 1)
 ```
 
 ### Common Integration Issues
@@ -1362,7 +1361,7 @@ RESULT=$(printf '%s\n' "$RESULT" | tail -n 1)
 ```bash
 # Add retry logic
 for i in {1..3}; do
-  if codelapse snapshot create "CI attempt $i" --json --silent; then
+  if codelapse snapshot create "CI attempt $i" --silent; then
     break
   fi
   sleep 2
@@ -1510,7 +1509,7 @@ jobs:
           codelapse snapshot create "CI: Pre-test $(git rev-parse --short HEAD)" \
             --tags "ci,pre-test,$(git branch --show-current)" \
             --task-ref "${{ github.event.number }}" \
-            --json --silent
+            --silent
       
       # Run tests
       - name: Run tests
@@ -1523,10 +1522,10 @@ jobs:
         run: |
           if [ "${{ steps.tests.outcome }}" == "success" ]; then
             codelapse snapshot create "CI: Tests passed $(date)" \
-              --tags "ci,test-success" --favorite --json --silent
+              --tags "ci,test-success" --favorite --silent
           else
             codelapse snapshot create "CI: Tests failed $(date)" \
-              --tags "ci,test-failure" --json --silent
+              --tags "ci,test-failure" --silent
           fi
       
       # Export snapshots for artifacts
@@ -1557,7 +1556,7 @@ pipeline {
         stage('Setup') {
             steps {
                 sh 'npm install -g codelapse-cli'
-                sh 'codelapse status --json --silent'
+                sh 'codelapse status --silent'
             }
         }
         
@@ -1590,14 +1589,14 @@ pipeline {
                 success {
                     sh """
                         codelapse snapshot create "Jenkins: Deploy success ${env.BUILD_NUMBER}" \
-                            --tags "jenkins,deploy-success" --favorite --json --silent
+                            --tags "jenkins,deploy-success" --favorite --silent
                     """
                 }
                 failure {
                     sh """
                         codelapse snapshot create "Jenkins: Deploy failed ${env.BUILD_NUMBER}" \
-                            --tags "jenkins,deploy-failure" --json --silent
-                        codelapse snapshot restore ${env.PRE_DEPLOY_SNAPSHOT} --backup --json --silent
+                            --tags "jenkins,deploy-failure" --silent
+                        codelapse snapshot restore ${env.PRE_DEPLOY_SNAPSHOT} --backup --silent
                     """
                 }
             }
@@ -1622,14 +1621,14 @@ set -e
 
 echo "Creating development snapshot..."
 codelapse snapshot create "Docker: Development start \$(date)" \
-  --tags "docker,dev-start" --json --silent
+  --tags "docker,dev-start" --silent
 
 # Run development command
 "\$@"
 
 echo "Creating completion snapshot..."
 codelapse snapshot create "Docker: Development complete \$(date)" \
-  --tags "docker,dev-complete" --json --silent
+  --tags "docker,dev-complete" --silent
 EOF
 
 RUN chmod +x /usr/local/bin/dev-with-snapshots.sh
@@ -1663,7 +1662,7 @@ echo "Running test suite: $TEST_SUITE_NAME"
 if npm run test:$TEST_SUITE_NAME; then
   echo "Tests passed!"
   codelapse snapshot create "Test: $TEST_SUITE_NAME passed" \
-    --tags "test,success,$TEST_SUITE_NAME" --favorite --json --silent
+    --tags "test,success,$TEST_SUITE_NAME" --favorite --silent
   exit 0
 else
   echo "Tests failed!"
@@ -1678,7 +1677,7 @@ else
   # Rollback if requested
   if [ "$ROLLBACK_ON_FAILURE" = "true" ]; then
     echo "Rolling back to pre-test state..."
-    codelapse snapshot restore "$PRE_TEST_SNAPSHOT" --backup --json --silent
+    codelapse snapshot restore "$PRE_TEST_SNAPSHOT" --backup --silent
     echo "Rollback completed"
   fi
   
@@ -1894,6 +1893,7 @@ Need assistance with CodeLapse? Here are the best ways to get support:
 - **📖 [User Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/USER_GUIDE.md)**: Getting started and usage instructions
 - **🔧 [API Reference](https://github.com/YukioTheSage/code-snapshots/blob/main/cli/API.md)**: Complete API documentation
 - **🚀 [Developer Guide](https://github.com/YukioTheSage/code-snapshots/blob/main/docs/DEVELOPER_GUIDE.md)**: Development and contribution guide
+- **📄 [Changelog](https://github.com/YukioTheSage/code-snapshots/blob/main/CHANGELOG.md)**: Release history for the VS Code extension, `codelapse-core` and this CLI
 
 #### Package Distribution
 - **📦 [npm Package](https://www.npmjs.com/package/codelapse-cli)**: CLI tool on npm registry

@@ -132,7 +132,7 @@ codelapse snapshot create "Description"
 codelapse snapshot create "Description" \
   --tags "feature,wip" \
   --favorite \
-  --json --silent
+  --json
 
 # Multi-step workflow
 # Step 1: Create backup

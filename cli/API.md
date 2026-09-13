@@ -118,7 +118,7 @@ codelapse snapshot restore snapshot-123456 --files "src/a.ts,src/b.ts"
 |--------|-------------|
 | `--backup` | Create backup snapshot before restore |
 | `--files <files>` | Restore only specific files (comma-separated) |
-| `-y, --yes` | Skip confirmation |
+| `-y, --yes` | Restore even when editors have unsaved changes. Over IPC a restore that would discard them is refused without the flag, naming the files; standalone mode has no such guard. |
 
 #### `snapshot delete <id>` (alias: `rm`)
 
