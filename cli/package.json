@@ -20,7 +20,7 @@
     "test:ci": "jest --runInBand --forceExit --ci",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "prepublish": "npm run build"
+    "prepack": "npm run build"
   },
   "keywords": [
     "vscode",
