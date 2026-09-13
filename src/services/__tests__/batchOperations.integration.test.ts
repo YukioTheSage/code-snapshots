@@ -31,7 +31,6 @@ jest.mock('../enhancedCodeChunker', () => {
 jest.mock('../queryProcessor');
 jest.mock('../resultManager');
 jest.mock('../qualityMetricsCalculator');
-jest.mock('../relationshipAnalyzer');
 
 // Mock vscode workspace configuration
 const mockGetConfiguration = jest.fn().mockReturnValue({

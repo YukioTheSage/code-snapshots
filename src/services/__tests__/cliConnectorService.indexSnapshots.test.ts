@@ -11,7 +11,6 @@ jest.mock('../enhancedCodeChunker', () => ({
 jest.mock('../queryProcessor');
 jest.mock('../resultManager');
 jest.mock('../qualityMetricsCalculator');
-jest.mock('../relationshipAnalyzer');
 
 /**
  * The IPC dispatcher is the last place the CLI's index options can be lost on

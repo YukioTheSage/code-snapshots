@@ -31,7 +31,6 @@ jest.mock('../enhancedCodeChunker', () => {
 jest.mock('../queryProcessor');
 jest.mock('../resultManager');
 jest.mock('../qualityMetricsCalculator');
-jest.mock('../relationshipAnalyzer');
 
 /**
  * A stride of 0 or a negative value never advances the batch handlers' chunking

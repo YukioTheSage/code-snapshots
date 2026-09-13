@@ -26,7 +26,6 @@ jest.mock('../enhancedCodeChunker', () => ({
 jest.mock('../queryProcessor');
 jest.mock('../resultManager');
 jest.mock('../qualityMetricsCalculator');
-jest.mock('../relationshipAnalyzer');
 
 /** A temp-dir root keeps the connection file the service writes out of the repo. */
 const WORKSPACE_ROOT = path.join(os.tmpdir(), 'codelapse-cli-git-fixture');
