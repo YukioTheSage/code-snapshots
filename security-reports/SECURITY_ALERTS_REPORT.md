@@ -14,7 +14,7 @@ remediation were committed to `fix/security-alert-remediation`.
 | | |
 | --- | --- |
 | Repository | `YukioTheSage/code-snapshots` |
-| Branch under review | `fix/security-alert-remediation` @ `33022ec` |
+| Branch under review | `fix/security-alert-remediation` @ `fa9afb3` (gate results at `33022ec`) |
 | Merge base | `17b7586` (merge of PR #5) |
 | Default branch | `main` @ `b584bef` (merge of PR #6) |
 | Alerts closed by this document | **0** |
@@ -71,7 +71,7 @@ for all nine.
 | [#1](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/1) [#2](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/2) [#3](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/3) | medium | `actions/missing-workflow-permissions` | `.github/workflows/ci.yml:22`, `:44`, `:109` | `a8ed9c3` — workflow-level `permissions: contents: read` | Open at `refs/heads/main` |
 | [#6](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/6) | high | `js/bad-tag-filter` | `src/services/codeChunker.ts:1036` | `c067386` — `blockCommentEndRegex` is now `/--!?>/`, so it matches `-->` and `--!>` | Open at `refs/heads/main` |
 | [#4](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/4) | high | `js/polynomial-redos` | `shared/src/utils/gitignoreParser.ts:16` | `84dc7ba` — normaliser, no backtracking regex | Open at `refs/heads/main` |
-| [#5](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/5) | high | `js/resource-exhaustion` | `src/services/cliConnectorService.ts:156` | `1f75c8b` — `assertValidTimeout` rejects a delay above the 2^31-1 timer ceiling at the sink | Open at `refs/heads/main` |
+| [#5](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/5) | high | `js/resource-exhaustion` | `src/services/cliConnectorService.ts:156` | `1f75c8b` — the inline guard at `cliConnectorService.ts:157` rejects a delay above the 2^31-1 timer ceiling at the sink | Open at `refs/heads/main` |
 | [#7](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/7) [#8](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/8) [#9](https://github.com/YukioTheSage/code-snapshots/security/code-scanning/9) | medium | `js/prototype-pollution-utility`, `js/prototype-polluting-assignment` | `shared/src/config/configManager.ts:98`, `:103` | `c1dc541` — `assertSafeKeySegment` guard | Open at `refs/heads/main` |
 
 Reachability is recorded so that a hardening change is not mistaken for a live exploit:
@@ -97,6 +97,14 @@ offline: for each of the 78 open alerts, intersect the alert's
 `security_vulnerability.vulnerable_version_range` with the version actually installed in
 the lockfile the alert names (`dependency.manifest_path`). An alert whose range no longer
 matches any installed version has nothing left to fix.
+
+**Range syntax, and why it is normalised.** Dependabot's ranges use a comma form that npm
+`semver` silently rejects: `semver.validRange('>= 4.0.0, <= 4.17.23')` returns `null`, so
+`semver.satisfies('4.17.21', '>= 4.0.0, <= 4.17.23')` returns **false** rather than throwing —
+and a range that matches nothing reads as "patched". **38 of the 78 payload ranges use that
+form.** Every range was therefore normalised (`,` → space) before evaluation. A reader
+re-implementing this method must normalise the same way, or the residual set below is
+under-reported.
 
 **Bound on this method.** It is limited to the advisory snapshot already pinned in this
 data. It cannot see a newly published advisory, and it measures "is a vulnerable version
@@ -188,7 +196,7 @@ residual list silently contradicting the plan. The evidence behind the ruling:
 
 The lockfile refresh moved 32 entries that are not dev-only. Derivation: for each lockfile,
 compare `git show 1da0b28:<lockfile>` with `git show 33022ec:<lockfile>` and take every entry
-whose `version` changed and which the lockfile does not mark `dev: true`.
+added, removed, or whose `version` changed, and which the lockfile does not mark `dev: true`.
 
 - `package-lock.json` — 16: `zod` 3.24.3→3.25.76, `zod-to-json-schema` 3.24.5→3.25.2,
   `web-tree-sitter` 0.25.3→0.25.10, `@google/generative-ai` 0.24.0→0.24.1, `agent-base`
@@ -210,8 +218,14 @@ Each is the version npm resolved against the ranges its dependents declare. The 
 churn is dev-only and does not ship: a further 232 entries in `package-lock.json`, 55 in
 `cli/package-lock.json` and 8 in `shared/package-lock.json`.
 
-`zod`, `ws` and `web-tree-sitter` do reach the shipped bundle. `web-tree-sitter`'s only
-call site is a guarded stub that falls back to regex (`src/services/codeChunker.ts:131-141`).
+Of the entries above, `web-tree-sitter` is the only package this repository imports directly
+(`src/services/codeChunker.ts:4`), and its only call site is a guarded stub that falls back to
+regex (`src/services/codeChunker.ts:131-141`). No source file imports `zod`, `zod-to-json-schema`
+or `ws`; the remaining entries moved as transitive dependencies of packages the extension does
+import — `@google/genai` (`src/services/embeddingService.ts:1`), `@pinecone-database/pinecone`
+(`src/services/vectorDatabaseService.ts:1`), `java-parser` (`src/services/codeChunker.ts:3`),
+`diff` (`src/snapshotDiff.ts:1`) and `minimatch` (`src/utils/pathMatching.ts:1`). The derivation
+above enumerates lockfile entries, which is a wider set than the imported surface.
 
 **Limit of this evidence:** `npm run compile` cannot run in this sandbox (§5.3), so no
 bundle was emitted locally and the bundle's behaviour is verified in CI only. The local
@@ -318,10 +332,17 @@ gh api "repos/YukioTheSage/code-snapshots/dependabot/alerts?state=open&per_page=
 `per_page=100` is load-bearing on the Dependabot call: the default page is 30, so `length`
 would report `30` for any total above it and read as a pass.
 
-**Then re-run `pwsh -File security-reports/fetch-github-alerts.ps1 -State open`** and
-replace this report's §1 with the result. Expected after the merge and the next CodeQL run:
+**Then re-run `pwsh -File security-reports/fetch-github-alerts.ps1 -State open -OutDir <scratch>`**
+with `-OutDir` pointed at a scratch directory, and read the new §1 from the copy written there.
+Do not run it without `-OutDir`: the script rewrites the whole document, so a default run would
+replace this report with the generator's plain listing (§8). Expected after the merge and the next
+CodeQL run:
 
-- Code scanning: **0** open alerts.
+- Code scanning: **0** open alerts. Alert **#6** is the one with no documented fallback if it
+  survives that run anyway: #5 keeps both the caller-side `assertValidTimeout` check and the
+  inline guard at the sink (`cliConnectorService.ts:157`), while the `--!>` fix is a single
+  behavioural change with no second lever. Record a surviving #6 here with its alert number and
+  re-open the task — it is not a dismissal candidate.
 - Dependabot: the **10** accepted residual alerts of §3.
 - Any alert that survives a fix demonstrably on `main` is **not** to be dismissed as
   cleanup: record it here with its alert number and re-open the task. Dismissal is an owner
@@ -331,28 +352,43 @@ replace this report's §1 with the result. Expected after the merge and the next
 
 Recorded so they are not lost, not fixed here:
 
-1. **`shared/`'s 13 test suites never run in CI.** The `shared` job in
-   `.github/workflows/ci.yml` runs `npm ci`, `npx tsc --noEmit` and `npm run build`, with
+1. **`shared/`'s 13 test suites did not run in CI.** The `shared` job in
+   `.github/workflows/ci.yml` ran `npm ci`, `npx tsc --noEmit` and `npm run build`, with
    no jest step, and all three jest configs root at their own `src`
-   (`.github/workflows/ci.yml:29-45`; `jest.config.js`, `cli/jest.config.js`,
-   `shared/jest.config.js` all set `roots: ['<rootDir>/src']`). Three of this
-   remediation's regression tests are therefore local-only:
-   `shared/src/__tests__/noUnusedUuidDependency.test.ts`,
+   (`jest.config.js`, `cli/jest.config.js`, `shared/jest.config.js` all set
+   `roots: ['<rootDir>/src']`). Three of this remediation's regression tests were therefore
+   local-only: `shared/src/__tests__/noUnusedUuidDependency.test.ts`,
    `shared/src/config/__tests__/configManager.setNestedProtoGuard.test.ts`,
    `shared/src/utils/__tests__/gitignoreParser.snapshotLocation.test.ts`.
-2. **`@types/vscode` has drifted ahead of the declared engine.** It resolved to `1.137.0`
+   **Resolved in the final fix wave:** the job now installs the root toolchain, because jest
+   and ts-jest live in the root package, and runs `npx jest --runInBand --ci` — so all three
+   are gates from this branch onward.
+2. **`@types/vscode` had drifted ahead of the declared engine.** It resolved to `1.137.0`
    from the declared `^1.85.0`, while `engines.vscode` stays `^1.85.0` (root
-   `package.json:28`; `package-lock.json` → `node_modules/@types/vscode` `1.137.0`).
-   `vsce`'s compatibility check reads the declared range, so nothing catches the extension
-   being type-checked against a newer API surface than it claims to support. Fix: pin
-   `@types/vscode` exactly.
-3. **`shared/README.md` still lists `uuid` under its Dependencies heading**
-   (`shared/README.md:375-379`), although Task 6 removed the dependency.
+   `package.json:28`). `vsce`'s compatibility check reads the declared range, so nothing
+   caught the extension being type-checked against a newer API surface than it claims to
+   support. **Resolved in the final fix wave:** `@types/vscode` is pinned to `1.85.0` exactly
+   and the root lockfile resolves that version again, so `tsc` rejects an API newer than the
+   declared floor.
+3. **`shared/README.md` listed `uuid` under its Dependencies heading**, although Task 6
+   removed the dependency. **Resolved in the final fix wave:** the line is gone, leaving
+   `minimatch` and `diff`, which is what `shared/package.json` declares.
 4. **`ConfigManager.getNested` validates nothing.** `shared/src/config/configManager.ts:150`
    guards only empty or non-string input and then walks `current[key]`, so
    `getNested('__proto__')` returns `Object.prototype`. It is a read, it is outside the
    alerts fixed here (those were about assignment), and it is recorded so reads can be
    considered separately.
+5. **`ws` and `@google/generative-ai` are declared but imported nowhere.** `ws` is declared at
+   `cli/package.json:63` (with `@types/ws` at `:67`) and `@google/generative-ai` at
+   `package.json:667`; no `.ts` or `.js` file outside `node_modules` imports either, and the
+   code uses `@google/genai` instead (`src/services/embeddingService.ts:1`). This is the same
+   class of declaration Task 6 removed for `uuid`. It was left in place deliberately: deleting
+   them closes no alert (#15 and #12 already close through the 8.21.3 `ws` bump) and would
+   rewrite lockfiles that have already been verified, so the finding is recorded rather than
+   acted on in this branch.
+6. **Alert #6 has no documented fallback if it survives on `main`.** §6 records the
+   post-merge expectation and the reason: unlike #5, the `--!>` fix is a single change with no
+   contingency behind it, so a survivor needs its own task rather than a dismissal.
 
 ## 8. Data files and regeneration
 
@@ -362,7 +398,8 @@ Committed alongside this report:
 
 Generated by that script and deliberately **not** committed, because this report already
 carries every row and the raw JSON is ~580 KB of regenerable snapshot
-(`.gitignore`: `security-reports/*-open.json`, `security-reports/*-open.csv`):
+(`.gitignore`: `security-reports/*.json`, `security-reports/*.csv` — every `-State` value,
+not only `open`):
 
 - `security-reports/dependabot-open.json` / `.csv` — 78 alerts
 - `security-reports/code-scanning-open.json` / `.csv` — 9 alerts
