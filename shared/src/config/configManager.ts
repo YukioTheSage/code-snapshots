@@ -15,6 +15,53 @@ import {
 import { assertNoSymlinkPath } from '../utils/pathSecurity';
 
 /**
+ * Key segments that reach an object's prototype chain rather than a value of
+ * its own.
+ *
+ * `setNested` already refuses any path the schema does not list, so none of
+ * these can arrive through it today -- but that guarantee lives in a different
+ * check, and CodeQL cannot follow it to this assignment. `current['__proto__']
+ * = value` would otherwise mutate `Object.prototype` process-wide
+ * (js/prototype-polluting-assignment), so the writer refuses them itself.
+ */
+const UNSAFE_KEY_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export function assertSafeKeySegment(segment: string): void {
+  if (UNSAFE_KEY_SEGMENTS.has(segment)) {
+    throw new Error(
+      `Refusing to write configuration key segment "${segment}": it can reach the prototype chain.`,
+    );
+  }
+}
+
+/**
+ * Assigns `value` at the dot-separated `keyPath` of `target`, creating
+ * intermediate objects as needed, and refuses any segment that could reach the
+ * prototype chain. Exported so the guard is testable directly: a schema entry
+ * that reached it would have to be one the allow-list rejects.
+ */
+export function assignNestedValue(
+  target: Record<string, any>,
+  keyPath: string,
+  value: unknown,
+): void {
+  const keys = keyPath.split('.');
+  let current: any = target;
+
+  for (let i = 0; i < keys.length - 1; i++) {
+    assertSafeKeySegment(keys[i]);
+    if (!current[keys[i]]) {
+      current[keys[i]] = {};
+    }
+    current = current[keys[i]];
+  }
+
+  const lastKey = keys[keys.length - 1];
+  assertSafeKeySegment(lastKey);
+  current[lastKey] = value;
+}
+
+/**
  * Configuration manager that supports multiple sources:
  * 1. .vscode/codelapse.json (shared by CLI and extension)
  * 2. Environment variables
@@ -90,17 +137,7 @@ export class ConfigManager {
     this.assertValueMatchesSchema(keyPath, value);
 
     const config = this.getConfig();
-    const keys = keyPath.split('.');
-    let current: any = config;
-
-    for (let i = 0; i < keys.length - 1; i++) {
-      if (!current[keys[i]]) {
-        current[keys[i]] = {};
-      }
-      current = current[keys[i]];
-    }
-
-    current[keys[keys.length - 1]] = value;
+    assignNestedValue(config as Record<string, any>, keyPath, value);
     await this.saveConfigFile(config);
     this.configCache = config;
   }

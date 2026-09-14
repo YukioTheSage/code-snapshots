@@ -21,3 +21,11 @@ GEMINI.md
 .claude
 # CLI black-box test sandbox: its own git repository and snapshot store.
 cli-test-sandbox/
+
+# Generated alert payloads, for every -State value: the script writes
+# dependabot-fixed.json, code-scanning-auto_dismissed.csv and the like the same
+# way, so match the whole directory rather than only the -open pair. Regenerate
+# with:
+#   pwsh -File security-reports/fetch-github-alerts.ps1 -State open
+security-reports/*.json
+security-reports/*.csv

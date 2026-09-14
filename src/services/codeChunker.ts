@@ -1033,7 +1033,7 @@ export class CodeChunker {
       case 'html':
         return {
           blockCommentStartRegex: /<!--/,
-          blockCommentEndRegex: /-->/,
+          blockCommentEndRegex: /--!?>/,
         };
       case 'css':
       case 'scss':

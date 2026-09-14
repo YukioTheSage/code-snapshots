@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [ main ]
 
+# Least privilege for GITHUB_TOKEN. Every job only reads the repository --
+# checkout, install, build, type-check, test, package -- so the workflow-level
+# default is narrowed here rather than repeated per job. Without this block the
+# token carries the repository default, which is broader than any step needs
+# (CodeQL actions/missing-workflow-permissions, alerts 1-3).
+permissions:
+  contents: read
+
 jobs:
   # `codelapse-core` is declared as `file:shared` in the root package and as
   # `file:../shared` in cli/, so `npm ci` does not install a published copy: npm
@@ -29,12 +37,36 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '20'
+      # The Test step below runs shared/jest.config.js, but shared/ declares
+      # neither jest nor ts-jest: they live in the root package. Locally that
+      # works because npm puts every ancestor node_modules/.bin on PATH -- in CI
+      # that ancestor has to exist, so install the root toolchain here as well as
+      # shared's own dependencies. Without this the Test step fails with "jest:
+      # not found" (exit 127) rather than running the suites, and a `not found`
+      # exit is exactly what a `| tee` would swallow if one were added here.
+      - name: Install root toolchain
+        run: npm ci
+        # A step-level `working-directory` replaces this job's
+        # `defaults.run.working-directory: shared`, but an absolute path says so
+        # unambiguously: `${{ github.workspace }}` resolves against the
+        # checkout, so this installs the repository root's tools, not shared's.
+        working-directory: ${{ github.workspace }}
       - name: Install dependencies
         run: npm ci
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build
         run: npm run build
+      - name: Test
+        # Added with the remediation: all three jest configs root at their own
+        # `src`, so the extension and cli jobs never reached shared/'s 13 suites
+        # and three of this branch's five regression tests were documents rather
+        # than gates. `npx` finds jest through the root toolchain installed
+        # above, because shared/ has none of its own.
+        # --runInBand: the forked-worker pool fails with EPERM in restricted
+        # environments. --ci: fail on a missing snapshot instead of writing one,
+        # matching the extension and cli test steps.
+        run: npx jest --runInBand --ci
       # No lint or format:check step here, deliberately. shared/ has neither
       # script, and 8 of its files do not currently satisfy prettier. Add both
       # once those are formatted, rather than gating on a check that would fail

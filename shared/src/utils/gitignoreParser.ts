@@ -11,16 +11,31 @@ const DEFAULT_SNAPSHOT_LOCATION = '.snapshots';
  *
  * `snapshotLocation` is a user setting, so `.snapshots`, `.snapshots/` and
  * `.\.snapshots\` all name the same directory and must all be excluded.
+ *
+ * Written by slicing rather than with the previous `/^(?:\.\/)+/`, `/^\/+/`,
+ * `/\/+$/` chain. The last of those is quadratic on a run of slashes -- for
+ * each start position it consumed the whole run, failed `$` and gave every
+ * slash back -- and the setting it runs on is user input (CodeQL
+ * js/polynomial-redos). Each bookend is now one linear pass.
  */
 function normalizeSnapshotLocation(snapshotLocation: string): string {
-  const normalized = (snapshotLocation ?? '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^(?:\.\/)+/, '')
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '');
+  let normalized = (snapshotLocation ?? '').trim().replace(/\\/g, '/');
 
-  return normalized || DEFAULT_SNAPSHOT_LOCATION;
+  while (normalized.startsWith('./')) {
+    normalized = normalized.slice(2);
+  }
+
+  let start = 0;
+  while (start < normalized.length && normalized[start] === '/') {
+    start += 1;
+  }
+
+  let end = normalized.length;
+  while (end > start && normalized[end - 1] === '/') {
+    end -= 1;
+  }
+
+  return normalized.slice(start, end) || DEFAULT_SNAPSHOT_LOCATION;
 }
 
 /**
