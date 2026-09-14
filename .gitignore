@@ -21,3 +21,8 @@ GEMINI.md
 .claude
 # CLI black-box test sandbox: its own git repository and snapshot store.
 cli-test-sandbox/
+
+# Generated alert payloads. Regenerate with:
+#   pwsh -File security-reports/fetch-github-alerts.ps1 -State open
+security-reports/*-open.json
+security-reports/*-open.csv
