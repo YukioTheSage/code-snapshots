@@ -15,17 +15,19 @@ permissions:
   contents: read
 
 jobs:
-  # `codelapse-core` is declared as `file:shared` in the root package and as
-  # `file:../shared` in cli/, so `npm ci` does not install a published copy: npm
-  # links node_modules/codelapse-core to this checkout's shared/ directory. The link
-  # resolves through shared/package.json's `main`, which is dist/index.js, and
-  # dist/ is gitignored -- so a fresh checkout has no build output and every job
-  # that imports the core has to build it first. See the "Build the linked core"
-  # step in each of the jobs below. Two consequences worth knowing:
-  #   1. A change under shared/src *is* exercised by the jobs below, because they
-  #      run against this checkout rather than against a release.
-  #   2. This job type-checks and builds shared/ on its own, which is what catches a
-  #      compile error there before the other jobs hit it.
+  # `codelapse-core` is declared as a semver range (`^0.9.6`) in the root package
+  # and in cli/, so `npm ci` installs the published core from the registry and
+  # nothing links this checkout's shared/ directory any more. Consequence worth
+  # knowing: the extension and cli jobs below now run against a release rather
+  # than against shared/src. The `shared` job is therefore the only place a
+  # change under shared/src is built and tested before it is published, and a
+  # change there that never gets published will not be exercised by the other
+  # two jobs -- they will keep testing the last release.
+  #
+  # These were `file:` links until 0.9.6. npm does not rewrite a `file:`
+  # specifier when it packs, so the published manifest points at a directory
+  # that does not exist beside it and no consumer can install the package. Do
+  # not reintroduce one: src/__tests__/publishedCoreDependency.test.ts guards it.
   shared:
     runs-on: ubuntu-latest
     defaults:
@@ -82,23 +84,11 @@ jobs:
           node-version: '20'
       - name: Install dependencies
         run: npm ci
-      - name: Build the linked core
-        # `codelapse-core` is a `file:shared` link, so `npm ci` above linked it into
-        # node_modules without installing anything from the registry. That link
-        # resolves through shared/package.json's `main` -- dist/index.js -- and
-        # dist/ is gitignored, so a fresh checkout has none and the type-check
-        # below fails with "Cannot find module 'codelapse-core'". Build it here
-        # first. A `prepare` script in shared/package.json would also run (npm does
-        # run it for file: links), but it needs shared's own node_modules for tsc and
-        # rimraf, and a failure there fails the install instead of one visible step.
-        working-directory: shared
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
       - name: Report which core the steps below load
-        # Informational, not a gate: Compile and Test below fail loudly if the link
-        # or the build is missing. Printing the resolved entry point makes "which
-        # core did this run test?" answerable from the log alone.
+        # Informational, not a gate: Compile and Test below fail loudly if the
+        # install is missing. Printing the resolved entry point makes "which core
+        # did this run test?" answerable from the log alone -- it must be the
+        # registry copy under node_modules, never this checkout's shared/.
         run: node -e "console.log('codelapse-core ->', require.resolve('codelapse-core'))"
       - name: Lint
         # `set -o pipefail` is load-bearing. The default shell for `run:` is
@@ -165,23 +155,11 @@ jobs:
         working-directory: ${{ github.workspace }}
       - name: Install dependencies
         run: npm ci
-      - name: Build the linked core
-        # `codelapse-core` is a `file:shared` link, so `npm ci` above linked it into
-        # node_modules without installing anything from the registry. That link
-        # resolves through shared/package.json's `main` -- dist/index.js -- and
-        # dist/ is gitignored, so a fresh checkout has none and the type-check
-        # below fails with "Cannot find module 'codelapse-core'". Build it here
-        # first. A `prepare` script in shared/package.json would also run (npm does
-        # run it for file: links), but it needs shared's own node_modules for tsc and
-        # rimraf, and a failure there fails the install instead of one visible step.
-        working-directory: shared
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
       - name: Report which core the steps below load
-        # Informational, not a gate: Compile and Test below fail loudly if the link
-        # or the build is missing. Printing the resolved entry point makes "which
-        # core did this run test?" answerable from the log alone.
+        # Informational, not a gate: Compile and Test below fail loudly if the
+        # install is missing. Printing the resolved entry point makes "which core
+        # did this run test?" answerable from the log alone -- it must be the
+        # registry copy under node_modules, never this checkout's shared/.
         run: node -e "console.log('codelapse-core ->', require.resolve('codelapse-core'))"
       - name: Lint
         # Added alongside the formatting fix: cli/ had 43 eslint errors that no

@@ -60,7 +60,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "codelapse-core": "file:../shared",
+    "codelapse-core": "^0.9.6",
     "commander": "^11.0.0",
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
