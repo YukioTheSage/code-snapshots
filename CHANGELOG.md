@@ -5,11 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.6] - 2026-09-14
 
-Not published yet. The VS Code extension and `codelapse-core` declare 0.9.6,
-and `codelapse-cli` declares 2.0.0. The three artifacts are versioned and
-released independently, so the notes below are grouped by artifact.
+The VS Code extension and `codelapse-core` 0.9.6, with `codelapse-cli` 2.0.0.
+The three artifacts are versioned and released independently, so the notes
+below are grouped by artifact.
+
+`codelapse-cli` 2.0.0 reaches `codelapse-core` through a semver range, so the
+core is published first. npm does not rewrite `file:` specifiers when it packs,
+so a `file:` link that reached the registry would produce a package no consumer
+could install.
 
 ### VS Code extension and codelapse-core (0.9.6)
 
@@ -31,14 +36,18 @@ released independently, so the notes below are grouped by artifact.
   fresh-store notice, the uninitialized-storage notice and the retention-trim
   report go to stderr, so a first run no longer corrupts `--json` output with
   a prose line.
+- The packaged extension no longer ships the repository's internal planning
+  documents, agent review diffs and local editor settings, all of which the
+  0.9.5 VSIX included and the Marketplace served for download.
 
 #### Changed
 
 - The `git.autoSnapshotBeforeOperation` setting was removed. Nothing ever
   invoked the interception it configured, so no setting takes a snapshot before
   a Git operation; take the snapshot explicitly.
-- `codelapse-core` is built from the linked `shared/` directory: `npm ci`
-  links the checkout but does not compile it.
+- `codelapse-core` moves from a `file:` link to a semver range, so the
+  published manifests resolve the core from the registry. After that change
+  `npm ci` installs the published core instead of linking `shared/`.
 
 ### codelapse-cli (2.0.0)
 
@@ -60,12 +69,28 @@ released independently, so the notes below are grouped by artifact.
 - `snapshot restore -y/--yes` now has an effect: a restore that would discard
   unsaved editor changes is refused with the file list unless the flag is
   passed; previously the flag was accepted and ignored.
+- Test-only helpers no longer ship in the package. `cli/tsconfig.json` excluded
+  `**/*.test.ts` but not `src/**/__tests__/**`, so `setup.ts` and `realFs.ts`
+  were compiled into `dist/__tests__/` and published; `setup.js` calls
+  `jest.mock` and `beforeEach` at module scope and throws when loaded.
+- `minimatch` is a declared dependency. The standalone rules handler imported
+  it without declaring it, so the version it received depended on the
+  consumer's hoisting: the development tree resolved an unrelated major
+  through jest rather than the one the core uses.
 
 #### Changed
 
 - The CLI build hook is `prepack` rather than `prepublish`: npm runs
   `prepublish` on a local install, which broke `npm ci` before the linked core
   existed, and no longer runs it on publish.
+- `codelapse-core` moves from a `file:` link to a semver range. npm does not
+  rewrite `file:` specifiers at publish time, so the previous form would have
+  shipped a manifest that no consumer could install.
+- The CLI build removes `dist/` before compiling, so a removed or renamed
+  source file can no longer keep shipping in the package.
+- The unused `inquirer` and `ws` dependencies were removed. The IPC transport
+  is a plain `net` socket, and neither package was imported anywhere in the
+  CLI's shipped output.
 
 ## [0.9.5] - 2025-08-07
 

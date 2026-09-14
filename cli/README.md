@@ -107,7 +107,7 @@ code .
 
 # Check status (CLI will auto-detect extension)
 codelapse status
-# Output: ✓ Connected to CodeLapse extension (mode: ipc)
+# Output: ✓ Connected to CodeLapse extension
 ```
 
 ### Troubleshooting Setup

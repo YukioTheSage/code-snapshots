@@ -42,11 +42,11 @@ const snapshot = await manager.takeSnapshot({
 });
 
 // List snapshots
-const snapshots = manager.getSnapshots();
+const snapshots = await manager.getSnapshots();
 
 // Filter snapshots
-const favorites = manager.getSnapshots({ favorite: true });
-const tagged = manager.getSnapshots({ tag: 'feature' });
+const favorites = await manager.getSnapshots({ favorite: true });
+const tagged = await manager.getSnapshots({ tag: 'feature' });
 
 // Restore a snapshot
 await manager.restoreSnapshot(snapshot.id, {
@@ -73,7 +73,7 @@ class SnapshotManager {
 
   // Snapshot operations
   takeSnapshot(options: SnapshotOptions): Promise<Snapshot>;
-  getSnapshots(filter?: SnapshotFilter): Snapshot[];
+  getSnapshots(filter?: SnapshotFilter): Promise<Snapshot[]>;
   getSnapshot(snapshotId: string): Promise<Snapshot | null>;
   restoreSnapshot(snapshotId: string, options?: RestoreOptions): Promise<void>;
   deleteSnapshot(snapshotId: string): Promise<void>;
@@ -86,7 +86,12 @@ class SnapshotManager {
   getSnapshotFileContent(snapshotId: string, filePath: string): Promise<string | null>;
 
   // Utility
-  getStorageStats(): Promise<StorageStats>;
+  getStorageStats(): Promise<{
+    snapshotCount: number;
+    totalSize: number;
+    oldestSnapshot?: { id: string; timestamp: number };
+    newestSnapshot?: { id: string; timestamp: number };
+  }>;
   reload(): Promise<void>;
 }
 ```
@@ -119,12 +124,15 @@ class ConfigManager {
 
 ### GitIntegration
 
-Read-only Git operations.
+Git operations, read **and write**. The read methods are safe to call anywhere;
+the write methods below stage files, create commits and branches, switch
+branches and delete branches, so they change the user's repository.
 
 ```typescript
 class GitIntegration {
   constructor(workspaceRoot: string);
 
+  // Read-only
   isGitRepository(): boolean;
   getGitInfo(): GitInfo | null;
   getCurrentBranch(): string | undefined;
@@ -132,7 +140,21 @@ class GitIntegration {
   hasUncommittedChanges(): boolean;
   getRemoteUrl(): string | undefined;
   getChangedFiles(): string[];
-  getCommitHistory(limit?: number): Array<CommitInfo>;
+  getCommitHistory(limit?: number): Array<{
+    hash: string;
+    message: string;
+    author: string;
+    date: string;
+  }>;
+  getFileAtCommit(commitHash: string, filePath: string): string | null;
+
+  // Mutating: these change the working tree or the branch graph
+  stageFiles(files: string[]): void;
+  stageAll(): void;
+  createCommit(message: string): GitCommitResult;
+  createBranch(name: string, checkout?: boolean): void;
+  switchBranch(name: string): void;
+  deleteBranch(name: string, force?: boolean): void;
 }
 ```
 
@@ -301,14 +323,17 @@ export GEMINI_API_KEY="your-api-key"
 
 ## Storage
 
-Snapshots are stored in the `.snapshots/` directory (configurable):
+Snapshots are stored in the `.snapshots/` directory (configurable). Each
+snapshot gets its own directory holding a `snapshot.json`:
 
 ```
 .snapshots/
 ├── index.json                    # Snapshot index
-├── snapshot-123-abc.json        # Snapshot metadata + files
-├── snapshot-456-def.json        # Another snapshot
-└── ...
+├── snapshot-123-abc/
+│   └── snapshot.json             # Snapshot metadata + files
+├── snapshot-456-def/
+│   └── snapshot.json             # Another snapshot
+└── quarantine/                   # Snapshots that failed validation
 ```
 
 ### Index Format
@@ -328,7 +353,7 @@ Snapshots are stored in the `.snapshots/` directory (configurable):
 
 ### Snapshot Format
 
-Each snapshot file contains:
+Each `snapshot.json` contains:
 - Metadata (id, timestamp, description, tags, etc.)
 - File data (content or diff from base snapshot)
 - Git information (branch, commit)
