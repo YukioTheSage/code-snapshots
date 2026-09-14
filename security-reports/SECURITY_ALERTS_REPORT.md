@@ -18,7 +18,7 @@ remediation were committed to `fix/security-alert-remediation`.
 | Merge base | `17b7586` (merge of PR #5) |
 | Default branch | `main` @ `b584bef` (merge of PR #6) |
 | Alerts closed by this document | **0** |
-| Fixes committed, awaiting merge | 9 code-scanning (§2); 66 of 78 Dependabot by offline evaluation (§3) |
+| Fixes committed, awaiting merge | 9 code-scanning (§2); 68 of 78 Dependabot (66 by the Task 7 refresh + 2 by the Task 6 `uuid` removal); 10 accepted residual (§3) |
 
 ## 1. What the API returns today
 
@@ -45,18 +45,26 @@ This is the single most easily misread result in the document, so it is stated s
 - The seven commits on this branch are not ancestors of `main` —
   `git merge-base --is-ancestor a8ed9c3 main` exits 1 — so `main` still contains the
   vulnerable code the alerts point at.
-- The four re-fetched payloads are **byte-identical** to the fetch taken before this
-  remediation started (SHA-256 compared for `dependabot-open.json`,
-  `code-scanning-open.json` and both CSVs). The API's answer did not move by a single
-  byte, because nothing it evaluates against moved.
+- The alert set is unchanged from the payload archived before the remediation commits were
+  written. Three of the four files (`dependabot-open.json`, `dependabot-open.csv`,
+  `code-scanning-open.csv`) are byte-identical to that capture. The fourth,
+  `code-scanning-open.json`, differs in exactly one field: every alert's
+  `most_recent_instance.commit_sha` now reads `b584bef` — the current tip of `main` — where
+  the archived capture recorded `c2c717c`, the previous tip, because CodeQL re-analysed
+  `main` after PR #6 landed. No alert number, `state`, `ref`, `location`, `message` or
+  severity changed: the analysis that produced the alert set moved, the set itself did not.
+  Current SHA-256 (first 8 bytes): `CD1BDB5F2179EE9A` (`dependabot-open.json`),
+  `CEFB77D37EE6505F` (`code-scanning-open.json`), `5D7CA19139B5C853`
+  (`dependabot-open.csv`), `D3D00C841DE7F62A` (`code-scanning-open.csv`).
 
 An unchanged count here means "not merged yet", never "not fixed".
 
 ## 2. Code scanning — 9 of 9 have committed fixes, closure needs the merge
 
-All nine findings have a fix committed on this branch. GitHub will close them on the next
-CodeQL run against `main` after the merge. The right-hand column is the current GitHub
-state, which is `open` for all nine.
+All nine findings have a fix committed on this branch. GitHub is expected to close them on
+the next CodeQL run against `main` after the merge — §6 is where that gets confirmed, and
+nothing closes before it. The right-hand column is the current GitHub state, which is `open`
+for all nine.
 
 | Alert(s) | Severity | Rule | Location | Fix commit | Status |
 | ---: | --- | --- | --- | --- | --- |
@@ -178,11 +186,29 @@ residual list silently contradicting the plan. The evidence behind the ruling:
 
 ### 4.2 Shipped-surface moves in the refresh — a stated limit
 
-The lockfile refresh moved 14 entries that are not dev-only. In the root lockfile: `zod`
-3.24.3→3.25.76, `zod-to-json-schema` 3.24.5→3.25.2, `web-tree-sitter` 0.25.3→0.25.10,
-`@google/generative-ai` 0.24.0→0.24.1, `agent-base`, `bignumber.js`, `debug`; in `cli/`:
-`chardet` 0.7.0→2.2.0, `iconv-lite` 0.4.24→0.7.3, `lodash` 4.17.21→4.18.1. Every one is
-in-range for its declared range.
+The lockfile refresh moved 32 entries that are not dev-only. Derivation: for each lockfile,
+compare `git show 1da0b28:<lockfile>` with `git show 33022ec:<lockfile>` and take every entry
+whose `version` changed and which the lockfile does not mark `dev: true`.
+
+- `package-lock.json` — 16: `zod` 3.24.3→3.25.76, `zod-to-json-schema` 3.24.5→3.25.2,
+  `web-tree-sitter` 0.25.3→0.25.10, `@google/generative-ai` 0.24.0→0.24.1, `agent-base`
+  7.1.3→7.1.4, `bignumber.js` 9.3.0→9.3.1, `debug` 4.4.0→4.4.3, `balanced-match`
+  1.0.2→4.0.4, `brace-expansion` 1.1.11→5.0.9, `diff` 5.2.0→5.2.2, `java-parser`
+  2.3.3→2.3.4, `jwa` 2.0.0→2.0.1, `jws` 4.0.0→4.0.1, `ws` 8.18.1→8.21.3, plus two
+  nested duplicates removed when the same hoist moved them to the root
+  (`minimatch/node_modules/balanced-match` 4.0.4 and
+  `minimatch/node_modules/brace-expansion` 5.0.9).
+- `cli/package-lock.json` — 10: `chardet` 0.7.0→2.2.0, `iconv-lite` 0.4.24→0.7.3,
+  `lodash` 4.17.21→4.18.1, `ws` 8.18.3→8.21.3, `inquirer` 8.2.6→8.2.7, `@types/node`
+  20.19.7→20.19.43, `@inquirer/external-editor` added at 1.0.3, and three removals:
+  `external-editor` 3.1.0, `os-tmpdir` 1.0.2, `tmp` 0.0.33.
+- `shared/package-lock.json` — 6: `minimatch` 10.1.1→10.2.6, `balanced-match` 1.0.2→4.0.4,
+  `brace-expansion` 2.0.2→5.0.9, `diff` 5.2.0→5.2.2, and two removals:
+  `@isaacs/balanced-match` 4.0.1, `@isaacs/brace-expansion` 5.0.0.
+
+Each is the version npm resolved against the ranges its dependents declare. The rest of the
+churn is dev-only and does not ship: a further 232 entries in `package-lock.json`, 55 in
+`cli/package-lock.json` and 8 in `shared/package-lock.json`.
 
 `zod`, `ws` and `web-tree-sitter` do reach the shipped bundle. `web-tree-sitter`'s only
 call site is a guarded stub that falls back to regex (`src/services/codeChunker.ts:131-141`).
