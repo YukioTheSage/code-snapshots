@@ -54,8 +54,6 @@ run, on a pre-existing test: `pathSecurityRoots.test.ts` built its root as
 passed for years because the suite never executed in CI. The fixtures are now built per
 platform, and CI is green.
 
-
-
 ## 1. What the API returns today
 
 ```powershell
@@ -254,14 +252,23 @@ Each is the version npm resolved against the ranges its dependents declare. The 
 churn is dev-only and does not ship: a further 232 entries in `package-lock.json`, 55 in
 `cli/package-lock.json` and 8 in `shared/package-lock.json`.
 
-Of the entries above, `web-tree-sitter` is the only package this repository imports directly
-(`src/services/codeChunker.ts:4`), and its only call site is a guarded stub that falls back to
-regex (`src/services/codeChunker.ts:131-141`). No source file imports `zod`, `zod-to-json-schema`
-or `ws`; the remaining entries moved as transitive dependencies of packages the extension does
-import — `@google/genai` (`src/services/embeddingService.ts:1`), `@pinecone-database/pinecone`
-(`src/services/vectorDatabaseService.ts:1`), `java-parser` (`src/services/codeChunker.ts:3`),
-`diff` (`src/snapshotDiff.ts:1`) and `minimatch` (`src/utils/pathMatching.ts:1`). The derivation
-above enumerates lockfile entries, which is a wider set than the imported surface.
+Of the entries above, four are packages this repository imports directly: `java-parser`
+(`src/services/codeChunker.ts:3`), `web-tree-sitter` (`src/services/codeChunker.ts:4`), `diff`
+(`src/snapshotDiff.ts:1`) and `minimatch` (`src/utils/pathMatching.ts:1`). The only
+`web-tree-sitter` call site is a guarded stub that falls back to regex
+(`src/services/codeChunker.ts:131-141`).
+
+No source file imports `zod`, `zod-to-json-schema` or `ws` — but that does **not** keep them out
+of the shipped artifact, and an earlier revision of this section wrongly concluded that it did.
+The extension is bundled (`esbuild.js:9`, `bundle: true`, with `vscode` the only `external`), so
+every dependency of an imported package is inlined. `src/extension.ts:18` reaches `@google/genai`
+through `src/services/semanticSearchService.ts:7` → `src/services/embeddingService.ts:1`, and
+`@google/genai@0.10.0` declares `zod ^3.22.4`, `zod-to-json-schema ^3.22.4` and `ws ^8.18.0`.
+Those three ship inside the bundle, so the advisories that moved them had to be cleared in
+shipped code, not in tooling. The remaining entries moved as transitive dependencies of packages
+the extension does import — `@google/genai`, `@pinecone-database/pinecone`
+(`src/services/vectorDatabaseService.ts:1`), `java-parser`, `diff` and `minimatch`. The
+derivation above enumerates lockfile entries, which is a wider set than the imported surface.
 
 **Limit of this evidence:** `npm run compile` cannot run in this sandbox (§5.3), so no
 bundle was emitted locally and the bundle's behaviour is verified in CI only. The local
