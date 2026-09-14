@@ -8,7 +8,8 @@
     "cl": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run clean && tsc",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dev": "tsc --watch",
     "check-types": "tsc --noEmit",
     "check-types:test": "tsc -p tsconfig.test.json --noEmit",
@@ -54,18 +55,19 @@
   ],
   "author": "YukioTheSage",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "codelapse-core": "file:../shared",
     "commander": "^11.0.0",
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
-    "inquirer": "^8.2.0",
-    "ws": "^8.14.0"
+    "minimatch": "^10.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/ws": "^8.5.0",
-    "@types/inquirer": "^8.2.0",
     "typescript": "^5.0.0",
     "jest": "^29.0.0",
     "@types/jest": "^29.0.0"

@@ -23,9 +23,18 @@
   // what allowed four suites to fail to compile while `tsc --noEmit` still
   // exited 0, so do not "fix" this by deleting the exclude -- that would ship
   // test code and still not type-check it at build time.
+  //
+  // `src/**/__tests__/**` is load-bearing and was missing: `**/*.test.ts` alone
+  // does not match the helpers in that directory, which do not end in
+  // `.test.ts`. setup.ts and realFs.ts were therefore compiled into
+  // dist/__tests__/ and shipped to npm by `files: ["dist/**/*"]`, where
+  // setup.js calls jest.mock/beforeEach at module scope and throws a
+  // ReferenceError when loaded. shared/tsconfig.json excludes both patterns;
+  // this now matches it.
   "exclude": [
     "node_modules",
     "dist",
-    "**/*.test.ts"
+    "**/*.test.ts",
+    "src/**/__tests__/**"
   ]
 }
