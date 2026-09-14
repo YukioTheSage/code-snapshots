@@ -162,12 +162,20 @@ export async function withTimeout<T>(
     );
   }
 
+  // The delay handed to `setTimeout` is bounded here, not merely checked above.
+  // A rejection is invisible to the analysis that raised
+  // js/resource-exhaustion on the call below: it models a bounded range, not a
+  // refused one. For any value that already passed the guard the clamp is a
+  // no-op, so this changes nothing at runtime and makes the timer's duration
+  // provably no larger than the ceiling.
+  const delayMs = Math.min(ms, MAX_TIMER_DELAY_MS);
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), ms);
+        timer = setTimeout(() => reject(new Error(message)), delayMs);
       }),
     ]);
   } finally {

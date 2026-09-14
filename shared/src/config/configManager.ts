@@ -48,17 +48,31 @@ export function assignNestedValue(
   const keys = keyPath.split('.');
   let current: any = target;
 
-  for (let i = 0; i < keys.length - 1; i++) {
-    assertSafeKeySegment(keys[i]);
-    if (!current[keys[i]]) {
-      current[keys[i]] = {};
-    }
-    current = current[keys[i]];
-  }
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
 
-  const lastKey = keys[keys.length - 1];
-  assertSafeKeySegment(lastKey);
-  current[lastKey] = value;
+    // The three names are compared here rather than delegated to
+    // `assertSafeKeySegment`. The analysis that raised
+    // js/prototype-polluting-assignment on the assignments below does not follow
+    // a check into another function, so a helper call reads to it as no check at
+    // all -- the helper stays exported for the API and for direct testing. One
+    // guard covers both writes because the leaf case is handled inside the same
+    // loop iteration.
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      throw new Error(
+        `Refusing to write configuration key segment "${key}": it can reach the prototype chain.`,
+      );
+    }
+
+    if (i === keys.length - 1) {
+      current[key] = value;
+    } else {
+      if (!current[key]) {
+        current[key] = {};
+      }
+      current = current[key];
+    }
+  }
 }
 
 /**
