@@ -115,13 +115,13 @@ function assertValidMaxRetries(value: unknown): string | null {
 const MAX_TIMER_DELAY_MS = 2147483647;
 
 /**
- * `timeout` is handed to `withTimeout`. `setTimeout` coerces a null, NaN, zero
- * or negative delay to 0 — and overflows `Infinity` to 1ms — so an unvalidated
- * value makes the race report a timeout on operations that never timed out. The
- * same clamp catches a finite value above the timer ceiling, which is why the
- * ceiling is part of the check rather than a formality. The value comes straight
- * from the CLI request, so it is checked here and the caller gets an error
- * envelope instead of a fabricated failure.
+ * `timeout` is handed to `withTimeout`. `setTimeout` clamps a null, NaN, zero
+ * or negative delay to 1ms — as it does an `Infinity` overflow — so an
+ * unvalidated value makes the race report a timeout on operations that never
+ * timed out. The same clamp catches a finite value above the timer ceiling,
+ * which is why the ceiling is part of the check rather than a formality. The
+ * value comes straight from the CLI request, so it is checked here and the
+ * caller gets an error envelope instead of a fabricated failure.
  */
 function assertValidTimeout(value: unknown): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
