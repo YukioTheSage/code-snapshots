@@ -89,13 +89,31 @@ consequences:
   **January 2027**. Move to trusted publishing (OIDC) or staged publishing
   before then.
 
-### The repository root is deliberately not publishable
+### The repository root refuses to publish to npm
 
-The root `package.json` sets `"private": true`. Its name `vscode-snapshots` is
-unclaimed on npm, so without that flag an `npm publish` run from the wrong
-directory would quietly publish the extension to npm. The extension ships to
-the Marketplace only. `vsce` never reads the `private` field, so packaging is
-unaffected.
+The extension's name, `vscode-snapshots`, is unclaimed on npm, so an
+`npm publish` run from the repository root would quietly publish the extension
+to npm, where it was never meant to go. The extension ships to the Marketplace
+only.
+
+`"private": true` alone does **not** prevent that, which is worth knowing
+because it is the widely assumed guard. npm 11 enforces the private flag only
+when publishing a *workspace member*:
+
+```js
+// npm/lib/commands/publish.js
+if (workspace && manifest.private) { throw ... code: 'EPRIVATE' }
+```
+
+`workspace` is the workspace name passed by `execWorkspaces`, and this
+repository declares no `workspaces`, so the branch never runs. Verified against
+npm 11.17.0 with a throwaway private, non-workspace package: `npm publish
+--dry-run` exited 0 and reported the tarball as publishable.
+
+What actually blocks it is a root `prepublishOnly` script that exits non-zero.
+`prepublishOnly` runs on `npm publish` only — not on `npm ci`, not on
+`npm install`, and not on `vsce package`, which uses the separate
+`vscode:prepublish` hook — so packaging and CI are unaffected.
 
 Guard the working directory anyway before any manual publish:
 

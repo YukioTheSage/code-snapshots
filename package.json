@@ -622,6 +622,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run esbuild-prod",
+    "prepublishOnly": "node -e \"console.error('BLOCKED: this is the CodeLapse VS Code extension. It ships to the VS Code Marketplace, not npm. Use: npx vsce publish --no-dependencies'); process.exit(1)\"",
     "compile": "npm run check-types && node esbuild.js",
     "check-types": "tsc --noEmit",
     "watch": "npm-run-all -p watch:*",
