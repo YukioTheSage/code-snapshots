@@ -8,7 +8,7 @@
     "build": "npm run clean && tsc",
     "watch": "tsc --watch",
     "clean": "rimraf dist",
-    "prepublishOnly": "npm run build"
+    "prepack": "npm run build"
   },
   "keywords": [
     "snapshot",
@@ -19,8 +19,21 @@
     "dist",
     "README.md"
   ],
-  "author": "",
+  "author": "YukioTheSage",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "homepage": "https://github.com/YukioTheSage/code-snapshots",
+  "bugs": {
+    "url": "https://github.com/YukioTheSage/code-snapshots/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YukioTheSage/code-snapshots.git",
+    "directory": "shared"
+  },
   "engines": {
     "node": ">=18.15.0"
   },
