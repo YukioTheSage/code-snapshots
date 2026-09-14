@@ -627,7 +627,7 @@
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "esbuild-prod": "npm run check-types && node esbuild.js --production",
-    "package": "npm run esbuild-prod && vsce package",
+    "package": "npm run esbuild-prod && vsce package --no-dependencies",
     "lint": "eslint \"src/**/*.ts\"",
     "lint:budget": "jest --runInBand src/__tests__/deadCodeBudget.test.ts",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",

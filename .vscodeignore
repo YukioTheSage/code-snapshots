@@ -26,3 +26,29 @@ cli/**
 .cursor/**
 GEMINI.md
 .kiro
+
+# Internal process artifacts. These shipped in the 0.9.5 VSIX and are still
+# downloadable from the Marketplace, because .vscodeignore decides packaging
+# while .git/info/exclude only hides files on one machine. Keep the two in
+# sync: anything hidden locally for being internal must be listed here too.
+.superpowers/**
+.claude/**
+docs/**
+AUDIT_REPORT.md
+PLAN_AUDIT.md
+FIX_PROGRESS.md
+test/**
+test-out/**
+jest.config.js
+tsconfig.test.json
+tsconfig.integration.json
+.prettierrc
+package-lock.json
+security-reports/**
+.worktrees/**
+# Local npm cache, used when the default cache directory is not writable. It
+# lives in the repository root, and vsce never reads .gitignore, so without
+# this line the cache ships inside the VSIX.
+.npm-cache/**
+out/**
+test-out/**

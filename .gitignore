@@ -29,3 +29,13 @@ cli-test-sandbox/
 #   pwsh -File security-reports/fetch-github-alerts.ps1 -State open
 security-reports/*.json
 security-reports/*.csv
+
+# Local npm cache, used when the default cache directory is not writable. It
+# sits in the repository root, so it is ignored here and in .vscodeignore both:
+# git never reads .vscodeignore, and vsce never reads .gitignore, so a path
+# hidden from only one of them still gets published.
+.npm-cache/
+# Internal agent and planning material. Hidden on this machine by
+# .git/info/exclude and a nested .gitignore, neither of which is versioned, so
+# a fresh clone would otherwise see the whole tree as untracked.
+.superpowers/
