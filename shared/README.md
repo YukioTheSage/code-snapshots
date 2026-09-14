@@ -376,7 +376,6 @@ npm run clean
 
 - `minimatch` - Glob pattern matching
 - `diff` - Diff generation and application
-- `uuid` - Unique ID generation
 
 ## License
 
