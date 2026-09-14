@@ -4,21 +4,57 @@
 API on **2026-09-14 00:21 UTC** (`state=open`) after Tasks 1–7 of the security-alert
 remediation were committed to `fix/security-alert-remediation`.
 
-> **No alert in this document is closed.** Dependabot and code scanning both re-evaluate
-> alerts only against the **default branch**, `main`. Every fix described here is committed
-> on `fix/security-alert-remediation`, which is not merged yet, so GitHub still reports all
-> 78 Dependabot alerts and all 9 code-scanning alerts as `open`. That is the expected
-> consequence of the evaluation model, **not** a sign that a fix failed. §6 states exactly
-> what closes them and how to confirm it.
+> **Post-merge result: code scanning is 0, Dependabot is 10, and CI on `main` is green.**
+> Everything below was written *before* the merge, when both surfaces still reported their
+> pre-merge state; it is kept as the analysis of record. The outcome, and the one prediction
+> this document got wrong, are recorded under "Post-merge result" immediately below.
 
 | | |
 | --- | --- |
 | Repository | `YukioTheSage/code-snapshots` |
-| Branch under review | `fix/security-alert-remediation` @ `fa9afb3` (gate results at `33022ec`) |
+| Analysis branch | `fix/security-alert-remediation` @ `fa9afb3` (gate results at `33022ec`) |
 | Merge base | `17b7586` (merge of PR #5) |
-| Default branch | `main` @ `b584bef` (merge of PR #6) |
-| Alerts closed by this document | **0** |
-| Fixes committed, awaiting merge | 9 code-scanning (§2); 68 of 78 Dependabot (66 by the Task 7 refresh + 2 by the Task 6 `uuid` removal); 10 accepted residual (§3) |
+| Merged and pushed | `6b722ca`, follow-up `ee5233b` |
+| **Code scanning, open now** | **0** (was 9) |
+| **Dependabot, open now** | **10** (was 78) — the accepted residual of §3 |
+
+## Post-merge result
+
+Numbers taken from the API after the push, not from the predictions below.
+
+| Surface | Before | After | How it closed |
+| --- | ---: | ---: | --- |
+| Code scanning | 9 open | **0 open** | `#1`–`#3` permissions, `#4` ReDoS, `#6` comment terminator, `#7`–`#9` prototype, and `#5` plus the re-raised `#10`–`#12` by the follow-up commit |
+| Dependabot | 78 open | **10 open** | 66 by the Task 7 lockfile refresh, 2 by the Task 6 `uuid` removal, 0 introduced |
+| CI on `main` | — | green | all three jobs: `extension`, `shared`, `cli` |
+
+### The prediction this document got wrong
+
+Two of the four findings it called *hardening* did **not** close on the first merge, and the
+reason is the same for both: the analyser does not follow a check into another function, and it
+models a **bounded** value rather than a **rejected** one.
+
+- `js/resource-exhaustion` (`#5`) survived the `throw`-guard added at the sink in `withTimeout`.
+  It closed only once the delay handed to `setTimeout` was also clamped with `Math.min`.
+- `js/prototype-polluting-assignment` (`#10`–`#12`) survived the `assertSafeKeySegment` calls,
+  and were re-raised at the new line numbers. They closed once the three names were compared
+  inline ahead of the writes.
+
+So "move the guard to the sink" was necessary but not sufficient: the guard must be in the same
+function **and** in a form the query models. `#5` satisfied the first condition and not the
+second. Both were fixed in `ee5233b`, whose verification is why this section exists rather than
+an assumption that they had closed.
+
+### A test that had never run caught a real defect
+
+Adding the `shared` Test step to CI — the gap §7.1 proposes closing — failed on its **first**
+run, on a pre-existing test: `pathSecurityRoots.test.ts` built its root as
+`` `C:${path.sep}proj` ``, which is absolute on Windows and a *relative* path on POSIX, so
+`path.resolve` anchored it to the working directory and containment correctly refused. It had
+passed for years because the suite never executed in CI. The fixtures are now built per
+platform, and CI is green.
+
+
 
 ## 1. What the API returns today
 
