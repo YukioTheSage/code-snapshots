@@ -67,6 +67,44 @@ npm whoami                     # must print the maintainer name
 npx vsce verify-pat YukioTheSage
 ```
 
+### This account requires 2FA for writes, so a script cannot publish
+
+`npm profile get` reports `tfa.mode = auth-and-writes`. A `npm publish` from a
+non-interactive shell therefore fails:
+
+```
+npm error code EOTP
+npm error This operation requires a one-time password.
+npm error Open this URL in your browser to authenticate:
+```
+
+npm prints a browser URL to authenticate and waits only when it has a TTY. Two
+consequences:
+
+- An agent or CI job cannot complete a publish. A human runs `npm publish` from
+  a terminal, or supplies `--otp=<code>` with a fresh code. TOTP codes are
+  single-use and expire in about 30 seconds, so they cannot be passed around.
+- A 2FA-bypass Granular Access Token still publishes directly today, but GitHub
+  has announced that bypass tokens lose the ability to publish directly around
+  **January 2027**. Move to trusted publishing (OIDC) or staged publishing
+  before then.
+
+### The repository root is deliberately not publishable
+
+The root `package.json` sets `"private": true`. Its name `vscode-snapshots` is
+unclaimed on npm, so without that flag an `npm publish` run from the wrong
+directory would quietly publish the extension to npm. The extension ships to
+the Marketplace only. `vsce` never reads the `private` field, so packaging is
+unaffected.
+
+Guard the working directory anyway before any manual publish:
+
+```bash
+node -e "const p=require('./package.json'); \
+  if (p.name!=='codelapse-core') { console.error('WRONG PACKAGE: '+p.name); process.exit(1); } \
+  console.log('OK: '+p.name+'@'+p.version);"
+```
+
 ## Gates
 
 All of these must pass before any push.

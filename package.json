@@ -3,6 +3,7 @@
   "displayName": "CodeLapse",
   "description": "Simple Git-like code snapshots with easy navigation and improved user experience",
   "version": "0.9.6",
+  "private": true,
   "publisher": "YukioTheSage",
   "icon": "images/snapshot.png",
   "license": "MIT",
